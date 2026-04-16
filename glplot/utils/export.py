@@ -81,6 +81,7 @@ class ExportManager:
             mode=mode or self.engine.policy.runtime.current_mode,
             global_alpha=alpha,
             lod_keep_prob=prob,
+            is_density=self.engine.display_density,
             time=time.perf_counter()
         )
 

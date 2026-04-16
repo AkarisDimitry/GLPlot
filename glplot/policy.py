@@ -81,9 +81,13 @@ class RenderPolicyManager:
 
         # 1. Line Families (Approx coverage: Count * ViewportWidth * Width)
         if scene.lines.ab is not None:
+            from .options import RenderMode
+            # Relax budget for density mode as overdraw is the goal
+            mode_multiplier = 100.0 if ctx.is_density else 1.0
+            
             width = self.options.global_line_width * overrides.line_width_multiplier
             est = float(len(scene.lines.ab)) * ctx.fb_width * max(1.0, width)
-            total_est_px2 += est
+            total_est_px2 += est / mode_multiplier
 
         # 2. Polylines (Approx coverage: Length * Width)
         for layer in scene.layers:

@@ -161,7 +161,11 @@ class HudManager:
             imgui.text(f"Mouse: ({self.plot.mouse_world[0]:.4f}, {self.plot.mouse_world[1]:.4f}) | ")
             imgui.same_line()
         
-        imgui.text(f"Alpha: {self.options.default_global_alpha:.3f}")
+        imgui.text(f"Alpha: {self.options.default_global_alpha:.3f} | ")
+        imgui.same_line()
+        
+        mode = self.plot.interaction.drag_mode
+        imgui.text_colored(f"Drag: {mode.upper()}", 1.0, 1.0, 0.4)
         
         imgui.end()
 
@@ -327,6 +331,12 @@ class HudManager:
                 self.options.blend_mode = list(BlendMode)[clicked]
                 self.plot.frame.dirty_scene = True
             imgui.pop_item_width()
+            
+            # Antialiasing Toggle
+            changed, aa_en = imgui.checkbox("Antialiasing (SDF)", self.options.enable_antialiasing)
+            if changed:
+                self.options.enable_antialiasing = aa_en
+                self.plot.frame.dirty_scene = True
         
         if imgui.collapsing_header("Density Engine", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
             from ..utils.shaders import DENSITY_SCHEMES

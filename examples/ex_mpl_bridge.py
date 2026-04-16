@@ -54,7 +54,7 @@ def run_bridge_example():
     ax2.plot(x_mark, np.cos(x_mark), 'ro--', label="MPL Overlay")
     
     # Transfer the same view to the second subplot as a background
-    plot.to_matplotlib(ax=ax2, scale=1.0, alpha=0.5) # Semi-transparent background
+    plot.to_matplotlib(ax=ax2, scale=1.0, )#alpha=0.5) # Semi-transparent background
     ax2.set_title("With Matplotlib Overlays")
     ax2.legend()
 

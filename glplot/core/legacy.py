@@ -51,9 +51,25 @@ class SceneData:
 class CameraState:
     cx: float = 0.0
     cy: float = 0.0
-    zoom: float = 1.0
-    zoom_min: float = 0.02
-    zoom_max: float = 500.0
+    zoom_x: float = 1.0
+    zoom_y: float = 1.0
+    zoom_min: float = 1e-12
+    zoom_max: float = 1e12
+
+    @property
+    def zoom(self) -> float:
+        """Legacy property: returns the vertical zoom."""
+        return self.zoom_y
+
+    @zoom.setter
+    def zoom(self, value: float) -> None:
+        """Legacy setter: scales both axes proportionally to preserve anisotropy."""
+        if self.zoom_y == 0:
+            self.zoom_x = self.zoom_y = float(value)
+        else:
+            factor = float(value) / self.zoom_y
+            self.zoom_x *= factor
+            self.zoom_y *= factor
 
 @dataclass
 class InteractionState:
@@ -67,10 +83,12 @@ class InteractionState:
     ctrl_down: bool = False
     alt_down: bool = False
 
-    drag_mode: str = "pan"            # "pan", "move"
+    drag_mode: str = "pan"            # "pan", "move", "ratio"
     selected_layer_id: Optional[int] = None
     drag_start_world: Tuple[float, float] = (0.0, 0.0)
     drag_start_translation: Optional[Tuple[float, float]] = None
+    drag_start_zoom_x: float = 1.0
+    drag_start_zoom_y: float = 1.0
     explicit_pick_requested: bool = False  # Set on Shift+Click; bypasses the shift_down gate
 
     hover_idx: int = -1

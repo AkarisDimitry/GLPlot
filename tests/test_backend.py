@@ -53,14 +53,14 @@ def test_world_window():
     plot.height = 600
     plot.camera.cx = 0.0
     plot.camera.cy = 0.0
-    plot.camera.zoom = 1.0
+    plot.camera.zoom_x = 1.0
+    plot.camera.zoom_y = 1.0
     l, r, b, t = plot.camera_controller.world_window(800, 600)
-    # aspect = 800/600 = 1.333
-    # half_h = 1/1 = 1.0
-    # half_w = 1.0 * 1.333 = 1.333
+    # With anisotropic camera, 1.0 scaling with padding 1.0 yields bounds exactly -1.0 to 1.0.
     assert b == -1.0
     assert t == 1.0
-    assert np.allclose(l, -1.333, atol=0.01)
+    assert l == -1.0
+    assert r == 1.0
 
 def test_lod_logic():
     plot = backend.GPULinePlot()
@@ -104,7 +104,8 @@ def test_public_api():
     plot.set_view(xlim=(-10, 10), ylim=(-5, 5))
     assert plot.camera.cx == 0.0
     assert plot.camera.cy == 0.0
-    assert plot.camera.zoom == 1.0 / 5.0 # based on ylim
+    assert plot.camera.zoom_x == 1.0 / 10.0 # based on xlim half-width
+    assert plot.camera.zoom_y == 1.0 / 5.0 # based on ylim half-height
 
 def test_autoscale():
     plot = backend.GPULinePlot()

@@ -82,6 +82,7 @@ class DensityRenderer:
         # DENSITY ALWAYS NEEDS ADDITIVE BLENDING for accumulation
         glEnable(GL_BLEND)
         glBlendFunc(GL_ONE, GL_ONE)
+        glDisable(GL_DEPTH_TEST)
 
         # Handle clipping state if enabled globally
         if self.options.enable_clipping_optimization:

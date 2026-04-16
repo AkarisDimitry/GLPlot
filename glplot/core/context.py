@@ -21,6 +21,7 @@ class RenderContext:
     fb_height: int # Framebuffer height
     
     mode: RenderMode # EXACT, INTERACTIVE, or PICKING
+    is_density: bool = False # Flag for density/heatmap accumulation mode
     
     # Passing global settings
     global_alpha: float = 1.0

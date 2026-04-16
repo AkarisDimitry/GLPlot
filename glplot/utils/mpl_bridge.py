@@ -22,7 +22,7 @@ def snapshot_to_matplotlib(
     snapshot: GLPlotSnapshot, 
     ax=None, 
     interpolation: str = "nearest",
-    preserve_aspect: bool = True,
+    preserve_aspect: bool = False,
     set_limits: bool = True,
     zorder: float = 0.0
 ):
@@ -39,12 +39,11 @@ def snapshot_to_matplotlib(
 
     xmin, xmax, ymin, ymax = snapshot.extent
 
-    # Matplotlib's imshow with extent handles the coordinate mapping.
-    # We use origin="lower" because OpenGL starts at bottom-left.
+    # aspect 'auto' as default
     artist = ax.imshow(
         snapshot.rgba,
         extent=(xmin, xmax, ymin, ymax),
-        origin="lower",
+        aspect='auto',
         interpolation=interpolation,
         zorder=zorder
     )

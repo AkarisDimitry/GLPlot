@@ -13,9 +13,13 @@ class CameraController:
         self.options = options
 
     def world_window(self, width: int, height: int, padding: float = 1.0) -> Tuple[float, float, float, float]:
-        aspect = max(width, 1) / max(height, 1)
-        half_h = padding / self.camera.zoom
-        half_w = half_h * aspect
+        """
+        Returns the world-space bounds (l, r, b, t) of the view, 
+        potentially expanded by padding for cache utility.
+        """
+        half_w = padding / max(self.camera.zoom_x, 1e-12)
+        half_h = padding / max(self.camera.zoom_y, 1e-12)
+        
         l = self.camera.cx - half_w
         r = self.camera.cx + half_w
         b = self.camera.cy - half_h
@@ -33,37 +37,50 @@ class CameraController:
         return x, y
 
     def apply_zoom_at_cursor(self, factor: float, mx: float, my: float, width: int, height: int) -> None:
+        """Isotropic zoom centered at cursor position."""
         wx0, wy0 = self.screen_to_world(mx, my, width, height)
-        self.camera.zoom = float(np.clip(self.camera.zoom * factor, self.camera.zoom_min, self.camera.zoom_max))
+        
+        self.camera.zoom_x = float(np.clip(self.camera.zoom_x * factor, self.camera.zoom_min, self.camera.zoom_max))
+        self.camera.zoom_y = float(np.clip(self.camera.zoom_y * factor, self.camera.zoom_min, self.camera.zoom_max))
+        
         wx1, wy1 = self.screen_to_world(mx, my, width, height)
         self.camera.cx += (wx0 - wx1)
         self.camera.cy += (wy0 - wy1)
 
-    def fit_bounds(self, xmin: float, xmax: float, ymin: float, ymax: float, width: int, height: int) -> None:
-        """Calculate best cx, cy, and zoom to fit the given bounds into the current viewport."""
-        self.camera.cx = 0.5 * (xmin + xmax)
-        self.camera.cy = 0.5 * (ymin + ymax)
+    def fit_bounds(
+        self, 
+        xmin: float, xmax: float, 
+        ymin: float, ymax: float, 
+        width: int, height: int,
+        axes: str = "both"
+    ) -> None:
+        """
+        Calculates independent zoom_x and zoom_y to fit the requested bounds.
+        Handles zero-span degenerate cases by providing a sane default unit span.
+        """
+        # Handle degenerate spans
+        if abs(xmax - xmin) < 1e-9:
+            xmin -= 0.5
+            xmax += 0.5
+        if abs(ymax - ymin) < 1e-9:
+            ymin -= 0.5
+            ymax += 0.5
+
+        cx = 0.5 * (xmin + xmax)
+        cy = 0.5 * (ymin + ymax)
+        span_x = xmax - xmin
+        span_y = ymax - ymin
         
-        span_x = max(1e-9, xmax - xmin)
-        span_y = max(1e-9, ymax - ymin)
-        
-        aspect = max(width, 1) / max(height, 1)
-        
-        # Calculate zooms required for each axis
-        # Zoom = 1.0 / half_h
-        # half_h_required = span_y / 2.0
-        # half_w_required = span_x / 2.0
-        
-        # In our world_window logic: half_w = (1.0 / zoom) * aspect
-        # So zoom_x = aspect / half_w_req = (2.0 * aspect) / span_x
-        # zoom_y = 1.0 / half_h_req = 2.0 / span_y
-        
-        zx = (2.0 * aspect) / span_x
-        zy = 2.0 / span_y
-        
-        self.camera.zoom = float(np.clip(min(zx, zy), self.camera.zoom_min, self.camera.zoom_max))
+        if "x" in axes or axes == "both":
+            self.camera.cx = float(cx)
+            self.camera.zoom_x = float(np.clip(2.0 / span_x, self.camera.zoom_min, self.camera.zoom_max))
+            
+        if "y" in axes or axes == "both":
+            self.camera.cy = float(cy)
+            self.camera.zoom_y = float(np.clip(2.0 / span_y, self.camera.zoom_min, self.camera.zoom_max))
 
     def reset_view(self) -> None:
         self.camera.cx = 0.0
         self.camera.cy = 0.0
-        self.camera.zoom = 1.0
+        self.camera.zoom_x = 1.0
+        self.camera.zoom_y = 1.0

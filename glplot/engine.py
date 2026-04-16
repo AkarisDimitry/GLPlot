@@ -175,46 +175,33 @@ class GPULinePlot:
     def set_view(self, xlim: Optional[Tuple[float, float]] = None, ylim: Optional[Tuple[float, float]] = None) -> None:
         """
         Sets the world-space view limits, mimicking Matplotlib's xlim/ylim.
-        Calculates required center and zoom while maintaining the window aspect ratio.
+        Allows independent scaling of X and Y axes (unforcing 1:1 data aspect).
         """
         if xlim is None and ylim is None:
             return
 
-        # 1. Resolve requested bounds
-        cur_xlim = self.get_xlim()
-        cur_ylim = self.get_ylim()
+        tx = xlim if xlim is not None else self.get_xlim()
+        ty = ylim if ylim is not None else self.get_ylim()
         
-        target_x = xlim if xlim is not None else cur_xlim
-        target_y = ylim if ylim is not None else cur_ylim
+        self.camera_controller.fit_bounds(
+            tx[0], tx[1], 
+            ty[0], ty[1], 
+            self.width, self.height
+        )
         
-        # 2. Calculate world center and required span
-        cx = (target_x[0] + target_x[1]) * 0.5
-        cy = (target_y[0] + target_y[1]) * 0.5
-        span_x = abs(target_x[1] - target_x[0])
-        span_y = abs(target_y[1] - target_y[0])
-        
-        # 3. Fit to aspect ratio
-        aspect = self.width / max(self.height, 1)
-        required_zoom_y = 2.0 / max(span_y, 1e-12)
-        required_zoom_x = (2.0 * aspect) / max(span_x, 1e-12)
-        
-        # Use the most restrictive zoom to fit both ranges
-        new_zoom = min(required_zoom_x, required_zoom_y)
-        
-        self.camera.cx = float(cx)
-        self.camera.cy = float(cy)
-        self.camera.zoom = float(np.clip(new_zoom, self.camera.zoom_min, self.camera.zoom_max))
-        
+        # Flush interaction cache on manual view changes
+        self.cache.active = False
+        self.cache.capture_window = None
         self.frame.dirty_scene = True
         self.cache.refresh_requested = True
 
     def get_xlim(self) -> Tuple[float, float]:
-        l, r, _, _ = self.camera_controller.world_window(self.width, self.height)
-        return float(l), float(r)
+        l, r, b, t = self.camera_controller.world_window(self.width, self.height)
+        return (float(l), float(r))
 
     def get_ylim(self) -> Tuple[float, float]:
-        _, _, b, t = self.camera_controller.world_window(self.width, self.height)
-        return float(b), float(t)
+        l, r, b, t = self.camera_controller.world_window(self.width, self.height)
+        return (float(b), float(t))
 
     def set_hud_enabled(self, enabled: bool) -> None:
         self.options.enable_hud = bool(enabled)
@@ -282,31 +269,6 @@ class GPULinePlot:
             self.options.enable_cache_interaction_path = False
         self.frame.dirty_scene = True
 
-    def set_view(self, xlim: Optional[Tuple[float, float]] = None, ylim: Optional[Tuple[float, float]] = None) -> None:
-        """Set the view limits. If both are provided, finds a zoom that fits both."""
-        if xlim is None and ylim is None:
-            return
-            
-        cur_xlim = xlim or self.get_xlim()
-        cur_ylim = ylim or self.get_ylim()
-        
-        self.camera_controller.fit_bounds(
-            cur_xlim[0], cur_xlim[1], 
-            cur_ylim[0], cur_ylim[1], 
-            self.width, self.height
-        )
-        # Flush interaction cache on manual view changes
-        self.cache.active = False
-        self.cache.capture_window = None
-        self.frame.dirty_scene = True
-
-    def get_xlim(self) -> Tuple[float, float]:
-        l, r, b, t = self.camera_controller.world_window(self.width, self.height)
-        return (l, r)
-
-    def get_ylim(self) -> Tuple[float, float]:
-        l, r, b, t = self.camera_controller.world_window(self.width, self.height)
-        return (b, t)
 
     def _get_all_layers(self) -> List[BaseLayer]:
         """
@@ -316,26 +278,38 @@ class GPULinePlot:
         """
         return list(self.scene.layers)
 
-    def autoscale(self) -> None:
-        """Autoscale view to fit all (legacy and layer) data."""
+    def autoscale(self, axes: str = "both", padding: float = 0.05) -> None:
+        """
+        Autoscale view to fit all (legacy and layer) data.
+        Supports axes="x", "y", or "both".
+        """
         layers = self._get_all_layers()
         bounds = self.renderer_manager.get_bounds(layers)
         
         if bounds is None:
-             self.camera_controller.reset_view()
+             if axes == "both":
+                 self.camera_controller.reset_view()
              return
 
         xmin, xmax, ymin, ymax = bounds
-        dx = (xmax - xmin) * 0.05
-        if dx == 0: dx = 1.0 
-        dy = (ymax - ymin) * 0.05
-        if dy == 0: dy = 1.0 
+        
+        # Apply fractional padding
+        dx = (xmax - xmin) * padding
+        dy = (ymax - ymin) * padding
+        
+        # Sane defaults: only apply a fixed buffer if the original data span is zero
+        # to prevent division by zero in camera projection.
+        if (xmax - xmin) < 1e-9: dx = 0.5
+        if (ymax - ymin) < 1e-9: dy = 0.5
         
         self.camera_controller.fit_bounds(
             xmin - dx, xmax + dx, 
             ymin - dy, ymax + dy, 
-            self.width, self.height
+            self.width, self.height,
+            axes=axes
         )
+        
+        self.cache.active = False
         self.frame.dirty_scene = True
 
     def reset_view(self) -> None:
@@ -490,6 +464,7 @@ class GPULinePlot:
             mode=self.policy.runtime.current_mode,
             global_alpha=self.options.default_global_alpha,
             lod_keep_prob=1.0,
+            is_density=self.display_density,
             time=time.perf_counter()
         )
         
@@ -555,6 +530,7 @@ class GPULinePlot:
             mode=self.policy.runtime.current_mode,
             global_alpha=base_alpha,
             lod_keep_prob=prob,
+            is_density=self.display_density,
             time=time.perf_counter()
         )
 
@@ -634,6 +610,7 @@ class GPULinePlot:
             mode=RenderMode.INTERACTIVE,
             global_alpha=base_alpha,
             lod_keep_prob=prob,
+            is_density=self.display_density,
             time=time.perf_counter()
         )
 
@@ -881,7 +858,21 @@ class GPULinePlot:
                 self.interaction.drag_start_world = self.camera_controller.screen_to_world(mx, my, self.width, self.height)
                 
                 # 3. Determine Drag Mode
-                if (mods & glfw.MOD_CONTROL) or (mods & glfw.MOD_SHIFT):
+                if (mods & glfw.MOD_CONTROL):
+                    # For professional UX, resolve the mode ONCE at the start of the drag
+                    self._run_picking_pass()
+                    
+                    if self.interaction.selected_layer_id is not None:
+                        self.interaction.drag_mode = "move"
+                        layer = next((l for l in self.scene.layers if l.layer_id == self.interaction.selected_layer_id), None)
+                        if layer:
+                            self.interaction.drag_start_translation = layer.translation
+                    else:
+                        # Scientific ratio scaling mode
+                        self.interaction.drag_mode = "ratio"
+                        self.interaction.drag_start_zoom_x = self.camera.zoom_x
+                        self.interaction.drag_start_zoom_y = self.camera.zoom_y
+                elif (mods & glfw.MOD_SHIFT):
                     self.interaction.drag_mode = "move"
                     if self.interaction.selected_layer_id is not None:
                         layer = next((l for l in self.scene.layers if l.layer_id == self.interaction.selected_layer_id), None)
@@ -933,10 +924,7 @@ class GPULinePlot:
                 # MOVE MODE: Translate the layer
                 layer = next((l for l in self.scene.layers if l.layer_id == self.interaction.selected_layer_id), None)
                 if layer:
-                    # Late capture of start translation if it's the first frame for this layer
                     if self.interaction.drag_start_translation is None:
-                         # We adjust the start world to the current world to prevent a "jump" 
-                         # when selection is delayed by one frame
                          self.interaction.drag_start_translation = layer.translation
                          self.interaction.drag_start_world = self.camera_controller.screen_to_world(x, y, self.width, self.height)
 
@@ -947,9 +935,21 @@ class GPULinePlot:
                     dx = curr_world[0] - start_world[0]
                     dy = curr_world[1] - start_world[1]
                     layer.translation = (start_trans[0] + dx, start_trans[1] + dy)
-                    
-                    # Force cache to redraw so we see it moving
                     self.cache.refresh_requested = True
+            elif self.interaction.drag_mode == "ratio":
+                # RATIO MODE: Exponential Anisotropic Scaling
+                dx = x - px
+                dy = y - py
+                
+                # Base-2 Exponential Law (100px = factor of 2.0 change)
+                sensitivity = 0.01 
+                self.camera.zoom_x = self.interaction.drag_start_zoom_x * (2.0 ** (dx * sensitivity))
+                self.camera.zoom_y = self.interaction.drag_start_zoom_y * (2.0 ** (-dy * sensitivity)) 
+                
+                # Clamp to safe camera limits
+                self.camera.zoom_x = float(np.clip(self.camera.zoom_x, self.camera.zoom_min, self.camera.zoom_max))
+                self.camera.zoom_y = float(np.clip(self.camera.zoom_y, self.camera.zoom_min, self.camera.zoom_max))
+                self.cache.refresh_requested = True
             else:
                 # PAN MODE: Translate the camera
                 lx, ly = self.interaction.last_mouse
@@ -1101,6 +1101,7 @@ class GPULinePlot:
                 mode=self.policy.runtime.current_mode,
                 global_alpha=alpha,
                 lod_keep_prob=prob,
+                is_density=self.display_density,
                 time=time.perf_counter()
             )
 
@@ -1143,11 +1144,11 @@ class GPULinePlot:
             transparent=transparent
         )
 
-    def to_matplotlib(self, ax=None, **kwargs):
+    def to_matplotlib(self, ax: Optional[Axes] = None, mpl_kwargs: dict = {}, **kwargs):
         """Level 2 API: Render and embed directly into Matplotlib."""
         from .utils.mpl_bridge import snapshot_to_matplotlib
         snap = self.capture_snapshot(**kwargs)
-        return snapshot_to_matplotlib(snap, ax=ax)
+        return snapshot_to_matplotlib(snap, ax=ax, **mpl_kwargs)
 
     def set_matplotlib_transfer_target(self, ax=None, callback=None):
         """Level 3 API Setup: Redirect 'M' key transfers."""

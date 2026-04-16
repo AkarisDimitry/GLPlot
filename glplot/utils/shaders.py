@@ -173,6 +173,7 @@ uniform vec2  u_layer_offset;
 
 out vec4 v_col;
 flat out float v_id_norm;
+out float v_side;
 
 void main() {
     float x = mix(u_xrange.x, u_xrange.y, a_t);
@@ -213,6 +214,7 @@ void main() {
 
     v_col = (u_use_color == 1) ? a_col : vec4(0.0, 0.0, 0.0, 1.0);
     v_col.a *= u_alpha;
+    v_side = 0.0;
 }
 """
 
@@ -237,6 +239,7 @@ uniform vec2  u_layer_offset;
 
 out vec4 v_col;
 flat out float v_id_norm;
+out float v_side;
 
 void main() {
     uint id = uint(gl_InstanceID);
@@ -257,13 +260,22 @@ void main() {
     float xmin = u_xrange.x;
     float xmax = u_xrange.y;
 
+    float slope = a_ab.x;
+    float intercept = a_ab.y;
+
     float xA = max(l, xmin);
     float xB = min(r, xmax);
-    bool noOverlapX = (xA > xB);
+    bool noOverlapX = (xA >= xB);
 
-    float yA = a_ab.x * xA + a_ab.y;
-    float yB = a_ab.x * xB + a_ab.y;
-    bool outsideY = (yA > t && yB > t) || (yA < b && yB < b);
+    float yA = slope * xA + intercept;
+    float yB = slope * xB + intercept;
+
+    // Use a small adaptive epsilon to prevent precision-induced popping at edges
+    float eps = (t - b) * 0.1;
+    float ext_t = t + eps;
+    float ext_b = b - eps;
+    
+    bool outsideY = (yA > ext_t && yB > ext_t) || (yA < ext_b && yB < ext_b);
 
     if (drop || noOverlapX || outsideY) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -271,13 +283,22 @@ void main() {
         return;
     }
 
-    float x0 = xmin;
-    float x1 = xmax;
-    float y0 = a_ab.x * x0 + a_ab.y;
-    float y1 = a_ab.x * x1 + a_ab.y;
+    // Y clipping to prevent precision loss on very steep lines
+    if (abs(slope) > 1e-9) {
+        if (yA > ext_t) { xA = xA + (ext_t - yA) / slope; yA = ext_t; }
+        else if (yA < ext_b) { xA = xA + (ext_b - yA) / slope; yA = ext_b; }
 
-    vec2 ndc0 = (vec2(x0, y0) + u_layer_offset) * u_ndc_scale + u_ndc_offset;
-    vec2 ndc1 = (vec2(x1, y1) + u_layer_offset) * u_ndc_scale + u_ndc_offset;
+        if (yB > ext_t) { xB = xB + (ext_t - yB) / slope; yB = ext_t; }
+        else if (yB < ext_b) { xB = xB + (ext_b - yB) / slope; yB = ext_b; }
+    }
+
+    vec2 center = vec2(u_window.x + u_window.y, u_window.z + u_window.w) * 0.5;
+    vec2 p0_rel = vec2(xA, yA) - center + u_layer_offset;
+    vec2 p1_rel = vec2(xB, yB) - center + u_layer_offset;
+
+    // Use relative NDC projection (no u_ndc_offset needed if using center-relative)
+    vec2 ndc0 = p0_rel * u_ndc_scale;
+    vec2 ndc1 = p1_rel * u_ndc_scale;
 
     vec2 dir_px = (ndc1 - ndc0) * (0.5 * u_viewport_size);
     float len2 = dot(dir_px, dir_px);
@@ -290,6 +311,7 @@ void main() {
     p_ndc += n_px * ((u_width / u_viewport_size) * a_corner.y);
 
     gl_Position = vec4(p_ndc, 0.0, 1.0);
+    v_side = a_corner.y * 2.0; // Map [-0.5, 0.5] to [-1, 1]
 
     v_col = (u_use_color == 1) ? a_col : vec4(0.0, 0.0, 0.0, 1.0);
     v_col.a *= u_alpha;
@@ -300,19 +322,29 @@ EXACT_LINES_FS = r"""
 #version 330 core
 in vec4 v_col;
 flat in float v_id_norm;
+in float v_side;
 out vec4 FragColor;
 
 uniform int u_use_colormap;
 uniform int u_scheme;
+uniform int u_antialiasing;
 
 """ + HEATMAP_FUNCS + r"""
 
 void main() {
+    float alpha = v_col.a;
+    if (u_antialiasing == 1) {
+        float d = abs(v_side);
+        float w = fwidth(d);
+        alpha *= 1.0 - smoothstep(1.0 - w, 1.0, d);
+    }
+    if (alpha <= 0.0) discard;
+
     vec4 color = v_col;
     if (u_use_colormap == 1) {
         color.rgb = apply_heatmap(u_scheme, v_id_norm);
     }
-    FragColor = color;
+    FragColor = vec4(color.rgb, alpha);
 }
 """
 

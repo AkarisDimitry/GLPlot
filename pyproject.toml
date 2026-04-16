@@ -1,16 +1,32 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
 name = "glplot"
-version = "0.1.0"
-description = "High-performance OpenGL plotting library, similar to Matplotlib"
-authors = [
-    {name = "Dimitry", email = "dimitry@example.com"},
-]
+version = "0.1.1"
+description = "High-performance OpenGL plotting library for Python"
 readme = "README.md"
 requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Juan Manuel Lombardi", email = "lombardi@fhi-berlin.mpg.de" }
+]
+keywords = ["plotting", "opengl", "visualization", "gpu", "scientific plotting"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
 dependencies = [
     "numpy",
     "scipy",
@@ -22,11 +38,23 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = [
+    "build",
+    "twine",
+    "pytest",
+    "pytest-cov",
+    "pytest-mock"
+]
 test = [
     "pytest",
     "pytest-cov",
     "pytest-mock"
 ]
+
+[project.urls]
+Homepage = "https://github.com/AkarisDimitry/GLPlot"
+Repository = "https://github.com/AkarisDimitry/GLPlot"
+Issues = "https://github.com/AkarisDimitry/GLPlot/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["glplot"]
@@ -34,3 +62,4 @@ packages = ["glplot"]
 [tool.pytest.ini_options]
 addopts = "--cov=glplot --cov-report=term-missing"
 testpaths = ["tests"]
+

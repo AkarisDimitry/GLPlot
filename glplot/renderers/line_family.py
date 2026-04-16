@@ -37,6 +37,7 @@ class LineFamilyRenderer:
         self.u_offset = -1
         self.u_use_colormap = -1
         self.u_scheme = -1
+        self.u_antialiasing = -1
         
         # Accumulation uniforms
         self.accum_prog = 0
@@ -71,6 +72,7 @@ class LineFamilyRenderer:
         self.u_offset = glGetUniformLocation(self.prog, "u_layer_offset")
         self.u_use_colormap = glGetUniformLocation(self.prog, "u_use_colormap")
         self.u_scheme = glGetUniformLocation(self.prog, "u_scheme")
+        self.u_antialiasing = glGetUniformLocation(self.prog, "u_antialiasing")
 
         # Density Accumulation Program
         self.accum_prog = link_program(WIDE_LINES_INSTANCED_VS, DENSITY_ACCUM_FS)
@@ -195,7 +197,8 @@ class LineFamilyRenderer:
         # Colormap
         glUniform1i(self.u_use_colormap, 1 if self.options.line_colormap_enabled else 0)
         glUniform1i(self.u_scheme, self.options.density_scheme_index)
-
+        # Antialiasing
+        glUniform1i(self.u_antialiasing, 1 if self.options.enable_antialiasing else 0)
         # 3. Draw call (Instanced Quads)
         glBindVertexArray(layer._gl.vao)
         glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, len(layer.ab))

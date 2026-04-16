@@ -22,7 +22,8 @@ class ExactLineRenderer:
         self.u_use_color = -1
         self.u_alpha = -1
         self.u_enable_sub = -1
-        self.u_keep_prob = -1
+        self.u_total_count = -1
+        self.u_antialiasing = -1
         self.buffers = GLLineBuffers()
 
         self.scatter_prog = 0
@@ -50,6 +51,7 @@ class ExactLineRenderer:
         self.u_total_count = glGetUniformLocation(self.prog, "u_total_count")
         self.u_use_colormap = glGetUniformLocation(self.prog, "u_use_colormap")
         self.u_scheme = glGetUniformLocation(self.prog, "u_scheme")
+        self.u_antialiasing = glGetUniformLocation(self.prog, "u_antialiasing")
 
         self.scatter_prog = link_program(SCATTER_VS, SCATTER_FS)
         self.u_scat_mvp = glGetUniformLocation(self.scatter_prog, "u_mvp")
@@ -139,6 +141,7 @@ class ExactLineRenderer:
             glUniform1i(self.u_total_count, dataset.count)
             glUniform1i(self.u_use_colormap, 1 if self.options.line_colormap_enabled else 0)
             glUniform1i(self.u_scheme, self.options.density_scheme_index)
+            glUniform1i(self.u_antialiasing, 1 if self.options.enable_antialiasing else 0)
 
             if clipping_enabled:
                 glEnable(GL_CLIP_DISTANCE0)

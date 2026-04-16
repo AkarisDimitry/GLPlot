@@ -78,13 +78,20 @@ class RendererManager:
         sorted_layers = self.filter_layers(layers, LayerCapability.DENSITY)
         
         # 1. Prepare the density manager for accumulation
+        target = self.plot.density_renderer.accum_target
         self.plot.density_renderer.begin_accum()
         
-        # 2. Accumulate each layer
-        for layer in sorted_layers:
-            renderer = self.renderers.get(layer.layer_type)
-            if renderer and hasattr(renderer, "draw_density"):
-                renderer.draw_density(layer, context)
+        # 2. Accumulate each layer (with context override for the density surface size)
+        old_w, old_h = context.fb_width, context.fb_height
+        context.fb_width, context.fb_height = target.width, target.height
+        
+        try:
+            for layer in sorted_layers:
+                renderer = self.renderers.get(layer.layer_type)
+                if renderer and hasattr(renderer, "draw_density"):
+                    renderer.draw_density(layer, context)
+        finally:
+            context.fb_width, context.fb_height = old_w, old_h
                 
         # 3. Resolve to the target FBO
         self.plot.density_renderer.resolve(target_fbo=target_fbo, target_size=target_size)

@@ -86,6 +86,7 @@ class EngineOptions:
     enable_cache_interaction_path: bool = True
     enable_clipping_optimization: bool = True
     enable_multisample: bool = False
+    enable_antialiasing: bool = True
     always_lod: bool = False
 
     # Picking policy

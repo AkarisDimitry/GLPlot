@@ -521,6 +521,10 @@ def xlim(left: Optional[float] = None, right: Optional[float] = None) -> Optiona
     if left is None and right is None:
         return plot.get_xlim()
     
+    # Handle single tuple argument like matplotlib
+    if left is not None and right is None and isinstance(left, (tuple, list, np.ndarray)):
+        left, right = left[0], left[1]
+
     plot.set_view(xlim=(left, right))
     _set_dirty(plot)
     return (left, right)
@@ -534,6 +538,10 @@ def ylim(bottom: Optional[float] = None, top: Optional[float] = None) -> Optiona
     if bottom is None and top is None:
         return plot.get_ylim()
     
+    # Handle single tuple argument like matplotlib
+    if bottom is not None and top is None and isinstance(bottom, (tuple, list, np.ndarray)):
+        bottom, top = bottom[0], bottom[1]
+
     plot.set_view(ylim=(bottom, top))
     _set_dirty(plot)
     return (bottom, top)
@@ -572,11 +580,18 @@ def axis(mode: Union[str, Tuple[float, float, float, float]] = "auto") -> Option
     return (xmin, xmax, ymin, ymax)
 
 
-def autoscale() -> None:
+def autoscale(enable: bool = True, axis: str = "both", tight: Optional[bool] = None) -> None:
+    """
+    Autoscale the view to fit data.
+    """
     plot = _get_or_create_plot()
-    if _call_if_exists(plot, ("autoscale", "auto_view", "fit_view")) is None:
-        raise AttributeError("Backend does not expose autoscale()/fit_view()")
-    _set_dirty(plot)
+    
+    # Handle tight parameter
+    padding = 0.0 if tight else 0.05
+    
+    if enable:
+        plot.autoscale(axes=axis, padding=padding)
+        _set_dirty(plot)
 
 
 def reset_view() -> None:
