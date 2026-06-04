@@ -359,13 +359,43 @@ class HudManager:
                 self.plot.frame.dirty_scene = True
             imgui.pop_item_width()
             
+            # Light BG Mode
+            light_mode = getattr(self.options, "light_bg_mode", False)
+            changed_bg, val_bg = imgui.checkbox("Light BG Mode", light_mode)
+            if changed_bg:
+                self.options.light_bg_mode = val_bg
+                self.options.density_invert = val_bg
+                self.plot.frame.dirty_scene = True
+                self.plot.frame.dirty_ui = True
+
+            # Invert Colors
+            invert_mode = getattr(self.options, "density_invert", False)
+            changed_inv, val_inv = imgui.checkbox("Invert Colors", invert_mode)
+            if changed_inv:
+                self.options.density_invert = val_inv
+                self.plot.frame.dirty_scene = True
+                self.plot.frame.dirty_ui = True
+
+            # Light to Color Only option
+            is_inverted = getattr(self.options, "density_invert", False)
+            label = "Light to Color Only" if is_inverted else "Dark to Color Only"
+            light_to_color = getattr(self.options, "density_light_to_color", True)
+            changed_ltc, val_ltc = imgui.checkbox(label, light_to_color)
+            if changed_ltc:
+                self.options.density_light_to_color = val_ltc
+                self.plot.frame.dirty_scene = True
+                self.plot.frame.dirty_ui = True
+            
             # Gain and Scale
             imgui.push_item_width(180)
             changed, gain = imgui.drag_float("Gain (Intensity)", self.options.density_gain, 1.0, 0.1, 10000.0, "%.1f")
             if changed: self.options.density_gain = gain; self.plot.frame.dirty_scene = True
             
-            changed, lscale = imgui.drag_float("Log Scale (Contrast)", self.options.density_log_scale, 0.05, 0.1, 20.0, "%.2f")
-            if changed: self.options.density_log_scale = lscale; self.plot.frame.dirty_scene = True
+            is_log = getattr(self.options, "density_is_log", True)
+            changed_log, val_log = imgui.checkbox("Logarithmic Scale", is_log)
+            if changed_log:
+                self.options.density_is_log = val_log
+                self.plot.frame.dirty_scene = True
 
             changed, res = imgui.slider_float("Inner Resolution", self.options.density_resolution_scale, 0.1, 1.0, "%.2f")
             if changed: self.controller.set_density_resolution(res)
@@ -378,28 +408,25 @@ class HudManager:
             pos = imgui.get_cursor_screen_pos()
             w, h = 220, 18
             
-            def get_scheme_col(v):
-                scheme = self.options.density_scheme_index
-                if scheme == 1: # Viridis
-                    if v < 0.5: return (0.2+v*0.1, 0.1+v*0.8, 0.4+v*0.2)
-                    return (0.3+(v-0.5)*1.4, 0.5+(v-0.5)*0.8, 0.5-(v-0.5)*0.8)
-                if scheme == 2: # Plasma
-                    return (0.1+v*1.8, 0.0, 0.5+v*0.5) if v < 0.5 else (1.0, (v-0.5)*2.0, 1.0-v)
-                if scheme == 3: # Inferno
-                    return (v*0.5, 0.0, v*0.2) if v < 0.5 else (v, (v-0.5)*1.5, (v-0.5)*2.0)
-                if scheme == 4: # Turbo
-                    if v < 0.33: return (0.2, v*2.5, 0.8)
-                    if v < 0.66: return (v*1.5, 0.8, 0.2)
-                    return (0.9, 0.2, 0.1)
-                if scheme == 5: # Ink Fire (White BG)
-                    return (1.0, 1.0-(v*0.5), 1.0-(v*1.5)) if v < 0.5 else (1.0-(v-0.5)*2.0, 0.25-(v-0.5)*0.5, 0.0)
-                if scheme == 6: # Magma
-                    return (v*0.4, 0.1, 0.5) if v < 0.5 else (v, 0.5+(v-0.5), 0.8+(v-0.5)*0.4)
-                return (v, v, v)
-                
+            from ..utils.shaders import eval_colormap
+            is_inverted = getattr(self.options, "density_invert", False)
+            ltc = getattr(self.options, "density_light_to_color", True)
+            scheme_idx = self.options.density_scheme_index
+
             for i in range(20):
                 v = i / 19.0
-                c = get_scheme_col(v)
+                if is_inverted:
+                    if ltc:
+                        norm = 1.0 - 0.75 * v
+                    else:
+                        norm = 1.0 - v
+                else:
+                    if ltc:
+                        norm = 0.75 * v
+                    else:
+                        norm = v
+                
+                c = eval_colormap(scheme_idx, norm)
                 color = imgui.get_color_u32_rgba(max(0,min(1,c[0])), max(0,min(1,c[1])), max(0,min(1,c[2])), 1.0)
                 draw_list.add_rect_filled(pos.x + i*(w/20), pos.y, pos.x + (i+1)*(w/20), pos.y + h, color)
             
@@ -456,23 +483,49 @@ class HudManager:
         imgui.end()
 
     def _draw_profiler_panel(self):
-        imgui.set_next_window_size(300, 200, imgui.FIRST_USE_EVER)
-        imgui.begin("Profiler", True)
+        imgui.set_next_window_size(350, 420, imgui.FIRST_USE_EVER)
+        expanded, opened = imgui.begin("Profiler", True)
+        if not opened:
+            self.state.show_profiler = False
+            imgui.end()
+            return
         
-        if self.state.cpu_frame_times:
-            avg_ms = sum(self.state.cpu_frame_times) / len(self.state.cpu_frame_times) * 1000.0
-            imgui.text(f"Avg CPU Frame: {avg_ms:5.2f} ms")
+        if expanded:
+            # 1. Performance Overview
+            imgui.text_colored("PERFORMANCE OVERVIEW", 0.3, 0.8, 1.0)
+            if self.state.cpu_frame_times:
+                avg_ms = sum(self.state.cpu_frame_times) / len(self.state.cpu_frame_times) * 1000.0
+                imgui.text(f"Avg CPU Frame: {avg_ms:5.2f} ms ({1000.0/avg_ms:.1f} FPS)")
+                
+                # Sparkline
+                import numpy as np
+                history = np.array(self.state.cpu_frame_times, dtype=np.float32)
+                imgui.plot_lines("##FPSGraph", history, overlay_text="", 
+                                 scale_min=0, scale_max=0.033, graph_size=(0, 50))
             
-            # Sparkline
-            import numpy as np
-            history = np.array(self.state.cpu_frame_times, dtype=np.float32)
-            imgui.plot_lines("##FPSGraph", history, overlay_text=f"{1000.0/avg_ms:.1f} FPS", 
-                             scale_min=0, scale_max=0.033, graph_size=(0, 60))
-        
-        imgui.separator()
-        for k, v in self.state.gpu_timings.items():
-            imgui.text(f"{k}: {v*1000.0:5.2f} ms")
+            imgui.separator()
             
+            # 2. Rendering Pipelines Detailed Timings
+            imgui.text_colored("SUB-OPERATION TIMINGS", 0.3, 0.8, 1.0)
+            for k, v in sorted(self.state.gpu_timings.items()):
+                imgui.text(f" - {k}: {v*1000.0:5.2f} ms")
+            
+            imgui.separator()
+
+            # 3. Engine State & Statistics
+            imgui.text_colored("ENGINE STATISTICS", 0.3, 0.8, 1.0)
+            mode_str = self.plot.policy.runtime.current_mode.name
+            imgui.text(f"Render Mode: {mode_str}")
+            
+            sleep_str = "SLEEPING (Reactive)" if self.plot.options.reactive_rendering and not self.plot.hud.state.show_profiler else "ACTIVE Redrawing"
+            imgui.text(f"Gating Loop: {sleep_str}")
+            
+            imgui.text(f"Total Lines: {self.plot.scene.lines.count:,}")
+            
+            win = self.plot.camera_controller.world_window(self.plot.width, self.plot.height)
+            imgui.text(f"X range: [{win[0]:.2f}, {win[1]:.2f}]")
+            imgui.text(f"Y range: [{win[2]:.2f}, {win[3]:.2f}]")
+
         imgui.end()
 
     def _draw_selection_panel(self):

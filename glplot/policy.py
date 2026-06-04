@@ -21,7 +21,15 @@ class RenderPolicyManager:
     def update(self, scene: SceneData, interaction: InteractionState, cache: CacheState) -> None:
         n = scene.lines.count
 
-        if interaction.drag_active or cache.active:
+        is_hud_interacting = False
+        try:
+            import imgui
+            if imgui.get_current_context() is not None:
+                is_hud_interacting = imgui.is_any_item_active()
+        except Exception:
+            pass
+
+        if interaction.drag_active or cache.active or is_hud_interacting:
             self.runtime.current_mode = RenderMode.INTERACTIVE
         else:
             self.runtime.current_mode = RenderMode.EXACT
@@ -31,7 +39,7 @@ class RenderPolicyManager:
         else:
             self.runtime.picking_enabled_this_frame = not interaction.drag_active
 
-        if self.options.enable_hud and self.runtime.current_mode == RenderMode.EXACT:
+        if self.options.enable_hud and (self.runtime.current_mode == RenderMode.EXACT or is_hud_interacting):
             self.runtime.hud_enabled_this_frame = True
         else:
             self.runtime.hud_enabled_this_frame = False

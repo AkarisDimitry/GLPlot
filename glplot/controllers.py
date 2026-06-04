@@ -28,12 +28,71 @@ class CameraController:
 
     def mvp(self, width: int, height: int, window: Optional[Tuple[float, float, float, float]] = None) -> np.ndarray:
         l, r, b, t = window if window is not None else self.world_window(width, height)
-        return ortho(l, r, b, t)
+        
+        # Apply inset margins for axes and labels visibility
+        margin_l = 60.0
+        margin_r = 20.0
+        margin_b = 40.0
+        margin_t = 20.0
+        
+        rl, tb = (r - l), (t - b)
+        
+        # Calculate NDC scale and translation for margins
+        w_px = max(width, 1e-12)
+        h_px = max(height, 1e-12)
+        sx = (width - margin_l - margin_r) / w_px
+        tx = (margin_l - margin_r) / w_px
+        sy = (height - margin_t - margin_b) / h_px
+        ty = (margin_b - margin_t) / h_px
+        
+        # Standard ortho values
+        m00 = 2.0 / max(rl, 1e-12)
+        m03 = -(r + l) / max(rl, 1e-12)
+        m11 = 2.0 / max(tb, 1e-12)
+        m13 = -(t + b) / max(tb, 1e-12)
+        
+        # Apply transformation
+        r00 = sx * m00
+        r03 = sx * m03 + tx
+        r11 = sy * m11
+        r13 = sy * m13 + ty
+        
+        return np.array([
+            [r00, 0.0, 0.0, r03],
+            [0.0, r11, 0.0, r13],
+            [0.0, 0.0, -1.0, 0.0],
+            [0.0, 0.0, 0.0,  1.0]
+        ], dtype=np.float32)
 
     def screen_to_world(self, sx: float, sy: float, width: int, height: int) -> Tuple[float, float]:
         l, r, b, t = self.world_window(width, height)
-        x = l + (sx / width) * (r - l)
-        y = b + ((height - sy) / height) * (t - b)
+        
+        # Apply inset margins for axes and labels visibility
+        margin_l = 60.0
+        margin_r = 20.0
+        margin_b = 40.0
+        margin_t = 20.0
+        
+        w_px = max(width, 1e-12)
+        h_px = max(height, 1e-12)
+        
+        # Scale and translation in NDC space
+        scale_x = (width - margin_l - margin_r) / w_px
+        trans_x = (margin_l - margin_r) / w_px
+        scale_y = (height - margin_t - margin_b) / h_px
+        trans_y = (margin_b - margin_t) / h_px
+        
+        # Screen to NDC inset
+        ndc_x_inset = (sx / w_px) * 2.0 - 1.0
+        ndc_y_inset = ((height - sy) / h_px) * 2.0 - 1.0
+        
+        # NDC inset to standard NDC
+        ndc_x = (ndc_x_inset - trans_x) / max(scale_x, 1e-12)
+        ndc_y = (ndc_y_inset - trans_y) / max(scale_y, 1e-12)
+        
+        # Standard NDC to world
+        x = l + (ndc_x + 1.0) * 0.5 * (r - l)
+        y = b + (ndc_y + 1.0) * 0.5 * (t - b)
         return x, y
 
     def apply_zoom_at_cursor(self, factor: float, mx: float, my: float, width: int, height: int) -> None:

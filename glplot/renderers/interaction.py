@@ -60,8 +60,9 @@ class InteractionRenderer:
         self,
         capture_window: Tuple[float, float, float, float],
         current_window: Tuple[float, float, float, float],
+        target_fbo: int = 0,
     ) -> None:
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        glBindFramebuffer(GL_FRAMEBUFFER, target_fbo)
         glViewport(0, 0, self.plot.fb_width, self.plot.fb_height)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)

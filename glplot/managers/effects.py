@@ -74,6 +74,8 @@ class EffectManager:
     # ------------------------------------------------------------------
 
     def any_post_enabled(self) -> bool:
+        if self.options.reactive_rendering:
+            return True
         v = self.options.visual
         return v.glow.enabled
 
@@ -168,6 +170,18 @@ class EffectManager:
         """
         Draw the background into whichever framebuffer is currently bound.
         """
+        # Overwrite background color with the colormap's minimum color in density mode
+        if getattr(self.plot, "display_density", False):
+            scheme_idx = getattr(self.options, "density_scheme_index", 0)
+            invert = getattr(self.options, "density_invert", False)
+            ltc = getattr(self.options, "density_light_to_color", True)
+            
+            from ..utils.shaders import get_colormap_min_color
+            c = get_colormap_min_color(scheme_idx, invert, ltc)
+            glClearColor(c[0], c[1], c[2], 1.0)
+            glClear(GL_COLOR_BUFFER_BIT)
+            return
+
         v = self.options.visual.gradient_background
 
         if not v.enabled:

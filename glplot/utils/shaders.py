@@ -126,6 +126,35 @@ vec3 heatmap_grayscale(float x) {
     return vec3(clamp(x, 0.0, 1.0));
 }
 
+vec3 heatmap_ocean(float x) {
+    x = clamp(x, 0.0, 1.0);
+    vec3 c0 = vec3(0.0, 0.0, 0.1);
+    vec3 c1 = vec3(0.0, 0.2, 0.6);
+    vec3 c2 = vec3(0.0, 0.8, 1.0);
+    vec3 c3 = vec3(1.0, 1.0, 1.0);
+    if (x < 0.33) return mix(c0, c1, x / 0.33);
+    if (x < 0.66) return mix(c1, c2, (x - 0.33) / 0.33);
+    return mix(c2, c3, (x - 0.66) / 0.34);
+}
+
+vec3 heatmap_hot(float x) {
+    x = clamp(x, 0.0, 1.0);
+    vec3 c0 = vec3(0.0, 0.0, 0.0);
+    vec3 c1 = vec3(0.8, 0.0, 0.0);
+    vec3 c2 = vec3(1.0, 0.5, 0.0);
+    vec3 c3 = vec3(1.0, 1.0, 0.0);
+    vec3 c4 = vec3(1.0, 1.0, 1.0);
+    if (x < 0.25) return mix(c0, c1, x / 0.25);
+    if (x < 0.50) return mix(c1, c2, (x - 0.25) / 0.25);
+    if (x < 0.75) return mix(c2, c3, (x - 0.50) / 0.25);
+    return mix(c3, c4, (x - 0.75) / 0.25);
+}
+
+vec3 heatmap_cool(float x) {
+    x = clamp(x, 0.0, 1.0);
+    return mix(vec3(0.0, 1.0, 1.0), vec3(1.0, 0.0, 1.0), x);
+}
+
 vec3 apply_heatmap(int scheme, float x) {
     if (scheme == 1) return heatmap_viridis_like(x);
     if (scheme == 2) return heatmap_plasma_like(x);
@@ -134,6 +163,9 @@ vec3 apply_heatmap(int scheme, float x) {
     if (scheme == 5) return heatmap_ink_fire(x);
     if (scheme == 6) return heatmap_magma(x);
     if (scheme == 7) return heatmap_grayscale(x);
+    if (scheme == 8) return heatmap_ocean(x);
+    if (scheme == 9) return heatmap_hot(x);
+    if (scheme == 10) return heatmap_cool(x);
     return heatmap_classic(x);
 }
 """
@@ -146,8 +178,145 @@ DENSITY_SCHEMES = [
     "Turbo (Rainbow)", 
     "Ink Fire (White BG)", 
     "Magma",
-    "Grayscale"
+    "Grayscale",
+    "Ocean",
+    "Hot",
+    "Cool"
 ]
+
+def mix(c1, c2, x):
+    return (
+        c1[0] * (1.0 - x) + c2[0] * x,
+        c1[1] * (1.0 - x) + c2[1] * x,
+        c1[2] * (1.0 - x) + c2[2] * x,
+    )
+
+def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
+    """Evaluate colormap RGB color for a given normalized value [0.0, 1.0]."""
+    x = max(0.0, min(1.0, x))
+    if scheme_index == 1:    # Viridis
+        c0 = (0.267, 0.005, 0.329)
+        c1 = (0.283, 0.141, 0.458)
+        c2 = (0.254, 0.265, 0.530)
+        c3 = (0.207, 0.372, 0.553)
+        c4 = (0.164, 0.471, 0.558)
+        c5 = (0.128, 0.567, 0.551)
+        c6 = (0.135, 0.659, 0.518)
+        c7 = (0.267, 0.749, 0.441)
+        c8 = (0.478, 0.821, 0.318)
+        c9 = (0.741, 0.873, 0.150)
+        if x < 0.11: return mix(c0, c1, x / 0.11)
+        if x < 0.22: return mix(c1, c2, (x - 0.11) / 0.11)
+        if x < 0.33: return mix(c2, c3, (x - 0.22) / 0.11)
+        if x < 0.44: return mix(c3, c4, (x - 0.33) / 0.11)
+        if x < 0.55: return mix(c4, c5, (x - 0.44) / 0.11)
+        if x < 0.66: return mix(c5, c6, (x - 0.55) / 0.11)
+        if x < 0.77: return mix(c6, c7, (x - 0.66) / 0.11)
+        if x < 0.88: return mix(c7, c8, (x - 0.77) / 0.11)
+        return mix(c8, c9, (x - 0.88) / 0.12)
+    elif scheme_index == 2:  # Plasma
+        c0 = (0.050, 0.030, 0.528)
+        c1 = (0.291, 0.071, 0.718)
+        c2 = (0.507, 0.104, 0.749)
+        c3 = (0.692, 0.165, 0.564)
+        c4 = (0.845, 0.277, 0.388)
+        c5 = (0.954, 0.468, 0.199)
+        c6 = (0.940, 0.975, 0.131)
+        if x < 0.16: return mix(c0, c1, x / 0.16)
+        if x < 0.32: return mix(c1, c2, (x - 0.16) / 0.16)
+        if x < 0.48: return mix(c2, c3, (x - 0.32) / 0.16)
+        if x < 0.64: return mix(c3, c4, (x - 0.48) / 0.16)
+        if x < 0.80: return mix(c4, c5, (x - 0.64) / 0.16)
+        return mix(c5, c6, (x - 0.80) / 0.20)
+    elif scheme_index == 3:  # Inferno
+        c0 = (0.000, 0.000, 0.016)
+        c1 = (0.073, 0.038, 0.201)
+        c2 = (0.243, 0.053, 0.404)
+        c3 = (0.449, 0.111, 0.437)
+        c4 = (0.665, 0.177, 0.366)
+        c5 = (0.866, 0.301, 0.228)
+        c6 = (0.976, 0.505, 0.096)
+        c7 = (0.985, 0.768, 0.263)
+        c8 = (0.988, 0.941, 0.729)
+        if x < 0.125: return mix(c0, c1, x / 0.125)
+        if x < 0.250: return mix(c1, c2, (x - 0.125) / 0.125)
+        if x < 0.375: return mix(c2, c3, (x - 0.250) / 0.125)
+        if x < 0.500: return mix(c3, c4, (x - 0.375) / 0.125)
+        if x < 0.625: return mix(c4, c5, (x - 0.500) / 0.125)
+        if x < 0.750: return mix(c5, c6, (x - 0.625) / 0.125)
+        if x < 0.875: return mix(c6, c7, (x - 0.750) / 0.125)
+        return mix(c7, c8, (x - 0.875) / 0.125)
+    elif scheme_index == 4:  # Turbo
+        g0 = (0.12, 0.01, 0.22)
+        g1 = (0.13, 0.15, 0.48)
+        g2 = (0.15, 0.65, 0.51)
+        g3 = (0.85, 0.60, 0.12)
+        g4 = (0.92, 0.11, 0.43)
+        if x < 0.25: return mix(g0, g1, x / 0.25)
+        if x < 0.50: return mix(g1, g2, (x - 0.25) / 0.25)
+        if x < 0.75: return mix(g2, g3, (x - 0.50) / 0.25)
+        return mix(g3, g4, (x - 0.75) / 0.25)
+    elif scheme_index == 5:  # Ink Fire
+        c0 = (1.0, 1.0, 1.0)
+        c1 = (1.0, 0.9, 0.2)
+        c2 = (1.0, 0.2, 0.1)
+        c3 = (0.4, 0.0, 0.0)
+        c4 = (0.0, 0.0, 0.0)
+        if x < 0.25: return mix(c0, c1, x / 0.25)
+        if x < 0.50: return mix(c1, c2, (x - 0.25) / 0.25)
+        if x < 0.75: return mix(c2, c3, (x - 0.50) / 0.25)
+        return mix(c3, c4, (x - 0.75) / 0.25)
+    elif scheme_index == 6:  # Magma
+        c0 = (0.001, 0.000, 0.031)
+        c1 = (0.170, 0.047, 0.360)
+        c2 = (0.447, 0.051, 0.439)
+        c3 = (0.729, 0.160, 0.345)
+        c4 = (0.960, 0.419, 0.231)
+        c5 = (0.988, 0.768, 0.470)
+        c6 = (0.988, 0.988, 0.823)
+        if x < 0.16: return mix(c0, c1, x / 0.16)
+        if x < 0.32: return mix(c1, c2, (x - 0.16) / 0.16)
+        if x < 0.48: return mix(c2, c3, (x - 0.32) / 0.16)
+        if x < 0.64: return mix(c3, c4, (x - 0.48) / 0.16)
+        if x < 0.80: return mix(c4, c5, (x - 0.64) / 0.16)
+        return mix(c5, c6, (x - 0.80) / 0.20)
+    elif scheme_index == 7:  # Grayscale
+        return (x, x, x)
+    elif scheme_index == 8:  # Ocean
+        c0 = (0.0, 0.0, 0.1)
+        c1 = (0.0, 0.2, 0.6)
+        c2 = (0.0, 0.8, 1.0)
+        c3 = (1.0, 1.0, 1.0)
+        if x < 0.33: return mix(c0, c1, x / 0.33)
+        if x < 0.66: return mix(c1, c2, (x - 0.33) / 0.33)
+        return mix(c2, c3, (x - 0.66) / 0.34)
+    elif scheme_index == 9:  # Hot
+        c0 = (0.0, 0.0, 0.0)
+        c1 = (0.8, 0.0, 0.0)
+        c2 = (1.0, 0.5, 0.0)
+        c3 = (1.0, 1.0, 0.0)
+        c4 = (1.0, 1.0, 1.0)
+        if x < 0.25: return mix(c0, c1, x / 0.25)
+        if x < 0.50: return mix(c1, c2, (x - 0.25) / 0.25)
+        if x < 0.75: return mix(c2, c3, (x - 0.50) / 0.25)
+        return mix(c3, c4, (x - 0.75) / 0.25)
+    elif scheme_index == 10: # Cool
+        return mix((0.0, 1.0, 1.0), (1.0, 0.0, 1.0), x)
+    else:                    # Classic / Default (0)
+        def smoothstep(e0, e1, v):
+            t = max(0.0, min(1.0, (v - e0) / (e1 - e0)))
+            return t * t * (3.0 - 2.0 * t)
+        return (
+            smoothstep(0.0, 0.3, x),
+            smoothstep(0.3, 0.6, x),
+            smoothstep(0.6, 1.0, x)
+        )
+
+def get_colormap_min_color(scheme_index: int, invert: bool, light_to_color: bool = True) -> tuple[float, float, float]:
+    """Evaluate the minimum density (x=0.0) color for the specified scheme."""
+    # If inverted, the minimum density maps to the high end (1.0) of the colormap.
+    x = 1.0 if invert else 0.0
+    return eval_colormap(scheme_index, x)
 
 # ==============================================================================
 # PASS 1: EXACT RENDERING (Primal Geometry)
@@ -641,17 +810,53 @@ out vec4 FragColor;
 
 uniform sampler2D u_tex;
 uniform float u_gain;
-uniform float u_log_scale;
+uniform float u_max_val;
+uniform int u_is_log;
 uniform int u_scheme;
+uniform int u_invert;
+uniform int u_light_to_color;
+uniform vec2 u_uv_min;
+uniform vec2 u_uv_max;
 
 """ + HEATMAP_FUNCS + r"""
 
 void main() {
+    // Discard fragments outside the plotting viewport bounds to keep margins clean
+    if (v_uv.x < u_uv_min.x || v_uv.x > u_uv_max.x || v_uv.y < u_uv_min.y || v_uv.y > u_uv_max.y) {
+        discard;
+    }
+
     float val = texture(u_tex, v_uv).r;
-    if (val <= 0.0) discard;
+    if (val <= 0.0) {
+        discard;
+    }
     
-    // Normalize log value
-    float norm = clamp(log10(1.0 + val * u_gain) / u_log_scale, 0.0, 1.0);
+    float norm = 0.0;
+    if (u_is_log == 1) {
+        norm = log10(1.0 + val * u_gain) / max(log10(1.0 + u_max_val * u_gain), 1e-6);
+    } else {
+        // Linear normalization scaled by gain so gain still acts as sensitivity threshold
+        norm = (val * u_gain) / max(u_max_val, 1e-6);
+    }
+    norm = clamp(norm, 0.0, 1.0);
+    
+    if (u_invert == 1) {
+        if (u_light_to_color == 1) {
+            // Prevent mapping all the way to 0.0 (which is black).
+            // Zero density (norm = 0.0) maps to 1.0 (white/bright end of colormap).
+            // Max density (norm = 1.0) maps to 0.25 (vibrant color, no black).
+            norm = 1.0 - 0.75 * norm;
+        } else {
+            norm = 1.0 - norm;
+        }
+    } else {
+        if (u_light_to_color == 1) {
+            // Prevent mapping all the way to 1.0 (which is white/light/yellow).
+            // Zero density (norm = 0.0) maps to 0.0 (black/dark end of colormap).
+            // Max density (norm = 1.0) maps to 0.75 (vibrant color, no white/bright clipping).
+            norm = 0.75 * norm;
+        }
+    }
     FragColor = vec4(apply_heatmap(u_scheme, norm), 1.0);
 }
 """

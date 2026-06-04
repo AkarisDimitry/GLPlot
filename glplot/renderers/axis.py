@@ -54,9 +54,30 @@ class AxisRenderer:
 
         win = ctx.window_world
         
+        # Get background color to calculate contrast
+        if ctx.is_density:
+            from ..utils.shaders import get_colormap_min_color
+            scheme_idx = getattr(self.options, "density_scheme_index", 0)
+            invert = getattr(self.options, "density_invert", False)
+            ltc = getattr(self.options, "density_light_to_color", True)
+            bg_color = get_colormap_min_color(scheme_idx, invert, ltc)
+        else:
+            v = self.options.visual.gradient_background
+            if v.enabled:
+                bg_color = (
+                    0.5 * (v.top_color[0] + v.bottom_color[0]),
+                    0.5 * (v.top_color[1] + v.bottom_color[1]),
+                    0.5 * (v.top_color[2] + v.bottom_color[2]),
+                )
+            else:
+                bg_color = self.options.visual.background_color
+
+        lum = 0.299 * bg_color[0] + 0.587 * bg_color[1] + 0.114 * bg_color[2]
+        is_light = lum > 0.5
+        
         # 1. Draw Grid
         if self.options.axis_show_grid:
-            c = self.options.axis_grid_color
+            c = (0.2, 0.2, 0.2) if is_light else (0.8, 0.8, 0.8)
             glUniform4f(self.u_color, c[0], c[1], c[2], self.options.axis_grid_alpha)
             glUniform1f(self.u_alpha, 1.0)
             
@@ -75,7 +96,8 @@ class AxisRenderer:
 
         # 2. Draw Spines (Frame)
         if self.options.axis_show_frame:
-            glUniform4f(self.u_color, 0.2, 0.2, 0.2, 1.0) # Dark spines
+            c_spine = (0.15, 0.15, 0.15, 1.0) if is_light else (0.85, 0.85, 0.85, 1.0)
+            glUniform4f(self.u_color, c_spine[0], c_spine[1], c_spine[2], c_spine[3])
             frame = [
                 (win[0], win[2]), (win[1], win[2]),
                 (win[1], win[2]), (win[1], win[3]),
@@ -89,10 +111,6 @@ class AxisRenderer:
         glBindVertexArray(0)
         glUseProgram(0)
 
-        # 3. Draw Axis Labels (Scale)
-        if self.options.axis_show_labels:
-            self._draw_labels(axis, ctx)
-
     def _draw_labels(self, axis: AxisManager, ctx: RenderContext) -> None:
         """Draw numeric labels along the axes."""
         try:
@@ -101,7 +119,33 @@ class AxisRenderer:
             return
 
         draw_list = imgui.get_background_draw_list()
-        color = imgui.get_color_u32_rgba(0.2, 0.2, 0.2, 1.0)
+        
+        # Get background color to calculate contrast
+        if ctx.is_density:
+            from ..utils.shaders import get_colormap_min_color
+            scheme_idx = getattr(self.options, "density_scheme_index", 0)
+            invert = getattr(self.options, "density_invert", False)
+            ltc = getattr(self.options, "density_light_to_color", True)
+            bg_color = get_colormap_min_color(scheme_idx, invert, ltc)
+        else:
+            v = self.options.visual.gradient_background
+            if v.enabled:
+                bg_color = (
+                    0.5 * (v.top_color[0] + v.bottom_color[0]),
+                    0.5 * (v.top_color[1] + v.bottom_color[1]),
+                    0.5 * (v.top_color[2] + v.bottom_color[2]),
+                )
+            else:
+                bg_color = self.options.visual.background_color
+
+        lum = 0.299 * bg_color[0] + 0.587 * bg_color[1] + 0.114 * bg_color[2]
+        is_light = lum > 0.5
+
+        if is_light:
+            color = imgui.get_color_u32_rgba(0.15, 0.15, 0.15, 1.0)
+        else:
+            color = imgui.get_color_u32_rgba(0.85, 0.85, 0.85, 1.0)
+
         win = ctx.window_world
         
         # Helper to project world to screen

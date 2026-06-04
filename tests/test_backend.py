@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 # Mocking OpenGL and GLFW
 mock_gl = MagicMock()
 sys.modules['OpenGL'] = MagicMock()
+sys.modules['OpenGL'].GL = mock_gl
 sys.modules['OpenGL.GL'] = mock_gl
 sys.modules['glfw'] = MagicMock()
 
@@ -133,3 +134,20 @@ def test_headless_mode():
     assert backend.glfw.window_hint.called
     # Check if visibility hint was set to false
     # window_hint(glfw.VISIBLE, glfw.FALSE)
+
+def test_get_density_array():
+    plot = backend.GPULinePlot()
+    plot.density_renderer.accum_target = MagicMock()
+    plot.density_renderer.accum_target.fbo = 123
+    plot.density_renderer.accum_target.width = 100
+    plot.density_renderer.accum_target.height = 50
+    
+    import sys
+    current_mock_gl = sys.modules['OpenGL.GL']
+    dummy_data = np.arange(5000, dtype=np.float32)
+    current_mock_gl.glReadPixels.return_value = dummy_data.tobytes()
+    current_mock_gl.glGetIntegerv.return_value = 0
+    
+    res = plot.get_density_array()
+    assert res.shape == (50, 100)
+    assert np.allclose(res.flatten(), dummy_data)

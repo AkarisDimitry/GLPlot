@@ -64,6 +64,7 @@ class GPULinePlot:
         
         self.effects = EffectManager(self)
         self._shim_cache: Dict[str, BaseLayer] = {}
+        self._apply_background_mode()
 
     # --------------------------------------------------------
     # Public API
@@ -353,6 +354,15 @@ class GPULinePlot:
         fname = filename or f"plot_{int(time.time())}.png"
         self.savefig(fname, scale=scale)
 
+    def get_density_array(self) -> np.ndarray:
+        """
+        Read back the accumulated density values from the GPU framebuffer texture 
+        and return them as a 2D numpy array of shape (height, width).
+        """
+        if self.window:
+            glfw.make_context_current(self.window)
+        return self.density_renderer.get_density_array()
+
     # --------------------------------------------------------
     # Init
     # --------------------------------------------------------
@@ -419,7 +429,29 @@ class GPULinePlot:
     # --------------------------------------------------------
 
     def _update_runtime_policy(self) -> None:
+        prev_mode = self.policy.runtime.current_mode
         self.policy.update(self.scene, self.interaction, self.cache)
+        if prev_mode == RenderMode.INTERACTIVE and self.policy.runtime.current_mode == RenderMode.EXACT:
+            self.frame.dirty_scene = True
+        if self.hud.state.show_profiler:
+            self.policy.runtime.hud_enabled_this_frame = True
+            
+    def _apply_background_mode(self) -> None:
+        """Apply style overrides for background, axes, and grid based on light_bg_mode."""
+        if getattr(self.options, "light_bg_mode", False):
+            # Light BG mode
+            self.options.visual.background_color = (1.0, 1.0, 1.0)
+            self.options.visual.gradient_background.enabled = True
+            self.options.visual.gradient_background.top_color = (1.0, 1.0, 1.0)
+            self.options.visual.gradient_background.bottom_color = (0.95, 0.95, 0.95)
+            self.options.axis_grid_color = (0.8, 0.8, 0.8)
+        else:
+            # Dark BG mode
+            self.options.visual.background_color = (0.0, 0.0, 0.0)
+            self.options.visual.gradient_background.enabled = True
+            self.options.visual.gradient_background.top_color = (0.0, 0.0, 0.0)
+            self.options.visual.gradient_background.bottom_color = (0.08, 0.08, 0.12)
+            self.options.axis_grid_color = (0.2, 0.2, 0.2)
 
     def _get_adaptive_alpha(self, count: int) -> float:
         """
@@ -543,7 +575,8 @@ class GPULinePlot:
         
         if self.display_density:
              # Modular Density Pass (Lines, Scatters)
-             self.renderer_manager.draw_density(layers, ctx)
+             current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
+             self.renderer_manager.draw_density(layers, ctx, target_fbo=current_fbo)
         else:
              # Standard Pass
              self.renderer_manager.draw_exact(layers, ctx)
@@ -563,7 +596,8 @@ class GPULinePlot:
             
         current_window = self.camera_controller.world_window(self.width, self.height)
         if self.options.enable_cache_interaction_path and self.cache.capture_window is not None:
-            self.interaction_renderer.draw_cached_impostor(self.cache.capture_window, current_window)
+            current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
+            self.interaction_renderer.draw_cached_impostor(self.cache.capture_window, current_window, target_fbo=current_fbo)
         else:
             self._draw_exact_view()
             
@@ -662,11 +696,34 @@ class GPULinePlot:
         glfw.swap_interval(1)
 
         while not glfw.window_should_close(self.window):
-            glfw.poll_events()
+            if self.options.reactive_rendering:
+                glfw.wait_events_timeout(0.02)
+            else:
+                glfw.poll_events()
             
             # 1. Update Input and State
             self.hud.process_inputs()
             self._update_runtime_policy()
+            self._apply_background_mode()
+
+            # Check cache release deadline
+            t_now = glfw.get_time()
+            if self.cache.active and not self.interaction.drag_active and not self.interaction.right_drag_active and t_now >= self.cache.release_deadline:
+                self.cache.active = False
+                self.frame.dirty_scene = True
+
+            need_render = (
+                not self.options.reactive_rendering or
+                self.frame.dirty_scene or 
+                self.frame.dirty_ui or 
+                self.frame.dirty_pick or 
+                self.interaction.drag_active or
+                self.interaction.right_drag_active or
+                self.hud.state.show_profiler
+            )
+
+            if not need_render:
+                continue
 
             # 2. Start ImGui frame before ANY rendering/processing happens
             self.hud.begin()
@@ -687,23 +744,28 @@ class GPULinePlot:
 
             t0 = glfw.get_time()
 
-            self.effects.begin_scene()
+            t_scene_start = time.perf_counter()
+            if self.frame.dirty_scene or not self.effects.any_post_enabled():
+                self.effects.begin_scene()
 
-            self.effects.draw_background()
-            self._apply_blending_policy()
+                self.effects.draw_background()
+                self._apply_blending_policy()
 
-            if self.policy.runtime.current_mode == RenderMode.INTERACTIVE:
-                self._draw_interaction_view()
+                if self.policy.runtime.current_mode == RenderMode.INTERACTIVE:
+                    self._draw_interaction_view()
+                else:
+                    self._draw_exact_view()
+
+                # Draw zoom box if active
+                if self.interaction.right_drag_active:
+                    if self.options.enable_clipping_optimization:
+                        for i in range(4): glDisable(GL_CLIP_DISTANCE0 + i)
+                    self._draw_zoom_box()
+                    
+                self.effects.end_scene()
             else:
-                self._draw_exact_view()
-
-            # Draw zoom box if active
-            if self.interaction.right_drag_active:
-                if self.options.enable_clipping_optimization:
-                    for i in range(4): glDisable(GL_CLIP_DISTANCE0 + i)
-                self._draw_zoom_box()
-                
-            self.effects.end_scene()
+                self.effects.resolve()
+            self.hud.state.gpu_timings["Render Scene"] = time.perf_counter() - t_scene_start
 
             # Update HUD metrics and Draw
             self._service_hud_metrics(t0)
@@ -712,15 +774,43 @@ class GPULinePlot:
             if self.options.enable_clipping_optimization:
                 for i in range(4): glDisable(GL_CLIP_DISTANCE0 + i)
 
+            t_hud_start = time.perf_counter()
+            # Draw Axis Labels (Scale) on every frame so they update dynamically and persist when the scene is cached.
+            if self.options.axis_show_labels:
+                window_world = self.camera_controller.world_window(self.width, self.height)
+                mvp = self.camera_controller.mvp(self.width, self.height)
+                ndc_scale, ndc_offset = self._get_ndc_transform(window_world)
+                ctx_labels = RenderContext(
+                    mvp=mvp,
+                    window_world=window_world,
+                    ndc_scale=ndc_scale,
+                    ndc_offset=ndc_offset,
+                    width_px=self.width,
+                    height_px=self.height,
+                    fb_width=self.fb_width,
+                    fb_height=self.fb_height,
+                    dpr=self.fb_width / max(self.width, 1),
+                    mode=self.policy.runtime.current_mode,
+                    global_alpha=1.0,
+                    lod_keep_prob=1.0,
+                    is_density=self.display_density,
+                    time=time.perf_counter()
+                )
+                self.axis_manager.update(ctx_labels)
+                self.renderer_manager.renderers["axis"]._draw_labels(self.axis_manager, ctx_labels)
+
             # HUD panels are only updated if HUD is enabled, but begin/end must wrap all
             if self.policy.runtime.hud_enabled_this_frame:
                 self.hud.update()
             
             self.hud.end()
+            self.hud.state.gpu_timings["UI Panels"] = time.perf_counter() - t_hud_start
             
             # Note: GL state is cleaned up/reset at start of next frame or specific renderers
 
+            t_swap_start = time.perf_counter()
             glfw.swap_buffers(self.window)
+            self.hud.state.gpu_timings["Buffer Swap"] = time.perf_counter() - t_swap_start
             t1 = glfw.get_time()
 
             dt = max(t1 - t0, 1e-6)
@@ -728,10 +818,6 @@ class GPULinePlot:
             self.frame.last_frame_time = t1
             self.frame.dirty_scene = False
             self.frame.dirty_ui = False
-
-            if self.cache.active and not self.interaction.drag_active and not self.interaction.right_drag_active and t1 >= self.cache.release_deadline:
-                self.cache.active = False
-                self.frame.dirty_scene = True
 
         self.effects.shutdown()
 
@@ -834,6 +920,7 @@ class GPULinePlot:
         self.frame.dirty_pick = True
 
     def _on_mouse_button(self, window, button, action, mods) -> None:
+        self.frame.dirty_ui = True
         self.hud.on_mouse_button(window, button, action, mods)
         if self.hud.wants_mouse():
             return
@@ -903,13 +990,15 @@ class GPULinePlot:
                 self.frame.dirty_scene = True
 
     def _on_cursor(self, window, x, y) -> None:
-        if self.hud.wants_mouse():
-            # Still update world coords for status panel
-            self.mouse_world = self.camera_controller.screen_to_world(x, y, self.width, self.height)
+        if (x, y) == self.interaction.last_mouse:
             return
-
+        
         self.mouse_world = self.camera_controller.screen_to_world(x, y, self.width, self.height)
         self.frame.dirty_ui = True
+
+        if self.hud.wants_mouse():
+            self.interaction.last_mouse = (x, y)
+            return
 
         if self.interaction.drag_active:
             px, py = self.interaction.press_mouse
@@ -965,6 +1054,8 @@ class GPULinePlot:
         elif self.interaction.right_drag_active:
             self.interaction.last_mouse = (x, y)
             self.frame.dirty_ui = True
+        else:
+            self.interaction.last_mouse = (x, y)
 
     def _run_picking_pass(self) -> None:
         if not self.interaction.last_mouse:
@@ -1173,6 +1264,7 @@ class GPULinePlot:
         self.frame.dirty_scene = True
 
     def _on_key(self, window, key, sc, action, mods) -> None:
+        self.frame.dirty_ui = True
         self.hud.on_key(window, key, sc, action, mods)
 
         if action in (glfw.PRESS, glfw.REPEAT):
@@ -1189,6 +1281,13 @@ class GPULinePlot:
 
             elif key == glfw.KEY_C and action == glfw.PRESS:
                 self.toggle_line_colormap()
+
+            elif key == glfw.KEY_F3 and action == glfw.PRESS:
+                self.hud.state.show_profiler = not self.hud.state.show_profiler
+                if self.hud.state.show_profiler:
+                    self.options.enable_hud = True
+                self.frame.dirty_scene = True
+                self.frame.dirty_ui = True
 
             # --- Visual Parameters (Arrows) ---
             if key == glfw.KEY_UP:
@@ -1242,11 +1341,11 @@ class GPULinePlot:
                 self.frame.dirty_scene = True
 
             elif key == glfw.KEY_LEFT_BRACKET and action in (glfw.PRESS, glfw.REPEAT):
-                self.options.density_log_scale = max(0.1, self.options.density_log_scale - 0.2)
+                self.decrease_density_gain()
                 self.frame.dirty_scene = True
 
             elif key == glfw.KEY_RIGHT_BRACKET and action in (glfw.PRESS, glfw.REPEAT):
-                self.options.density_log_scale += 0.2
+                self.increase_density_gain()
                 self.frame.dirty_scene = True
 
             elif key == glfw.KEY_H and action == glfw.PRESS:
@@ -1268,4 +1367,5 @@ class GPULinePlot:
                 self.interaction.shift_down = False
 
     def _on_char(self, window, char) -> None:
+        self.frame.dirty_ui = True
         self.hud.on_char(window, char)

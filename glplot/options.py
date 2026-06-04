@@ -88,6 +88,7 @@ class EngineOptions:
     enable_multisample: bool = False
     enable_antialiasing: bool = True
     always_lod: bool = False
+    reactive_rendering: bool = True
 
     # Picking policy
     shift_required_for_picking: bool = True
@@ -99,10 +100,14 @@ class EngineOptions:
     # Density rendering
     density_gain: float = 1.0
     density_resolution_scale: float = 1.0   # 1.0 = full-res, 0.5 = faster
-    density_scheme_index: int = 0
+    density_scheme_index: int = 9
     density_gain_step: float = 1.25
     density_log_scale: float = 3.0           # Divisor for log normalization
     density_weighted: bool = False          # Accumulate alpha instead of 1.0
+    density_invert: bool = True
+    density_is_log: bool = True             # Enable logarithmic colormap scaling by default
+    light_bg_mode: bool = True
+    density_light_to_color: bool = True     # Go from white to color (instead of white to color to black)
 
     # Style
     blend_mode: BlendMode = BlendMode.AUTO
