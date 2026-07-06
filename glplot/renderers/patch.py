@@ -31,6 +31,8 @@ class PatchRenderer:
         self.u_color = -1
         self.u_alpha = -1
         self.u_offset = -1
+        self.u_window = -1
+        self.u_accum_window = -1
 
     def initialize(self) -> None:
         self.prog = link_program(PATCH_VS, PATCH_FS)
@@ -38,12 +40,14 @@ class PatchRenderer:
         self.u_color = glGetUniformLocation(self.prog, "u_color")
         self.u_alpha = glGetUniformLocation(self.prog, "u_alpha")
         self.u_offset = glGetUniformLocation(self.prog, "u_layer_offset")
+        self.u_window = glGetUniformLocation(self.prog, "u_window")
 
         # Density accumulation (Triangles into R32F)
         self.accum_prog = link_program(PATCH_VS, DENSITY_ACCUM_FS)
         self.u_accum_mvp = glGetUniformLocation(self.accum_prog, "u_mvp")
         self.u_accum_alpha = glGetUniformLocation(self.accum_prog, "u_alpha")
         self.u_accum_weighted = glGetUniformLocation(self.accum_prog, "u_density_weighted")
+        self.u_accum_window = glGetUniformLocation(self.accum_prog, "u_window")
 
     def _create_buffers(self, layer: PatchLayer) -> GLPatchBuffers:
         vao = glGenVertexArrays(1)
@@ -89,7 +93,7 @@ class PatchRenderer:
 
         glUseProgram(self.prog)
         glUniformMatrix4fv(self.u_mvp, 1, GL_TRUE, ctx.mvp)
-        
+        glUniform4f(self.u_window, *ctx.window_world)
         overrides = self.options.visual.overrides
         alpha = ctx.global_alpha * layer.style.alpha * overrides.alpha_multiplier
         glUniform1f(self.u_alpha, float(alpha))
@@ -125,7 +129,7 @@ class PatchRenderer:
         # 2. Setup Shaders
         glUseProgram(self.accum_prog)
         glUniformMatrix4fv(self.u_accum_mvp, 1, GL_TRUE, ctx.mvp)
-        
+        glUniform4f(self.u_accum_window, *ctx.window_world)
         overrides = self.options.visual.overrides
         if self.options.density_weighted:
             glUniform1i(self.u_accum_weighted, 1)

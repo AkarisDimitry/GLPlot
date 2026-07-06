@@ -37,7 +37,10 @@ class DensityRenderer:
         self.resolve_vao = 0
 
         self.accum_target = GLOffscreenTarget()
-        self._clear_zero = np.array([0.0], dtype=np.float32)
+        # glClearBufferfv(GL_COLOR, ...) requires exactly 4 floats per the OpenGL spec,
+        # even for a single-channel R32F framebuffer.  A 1-element array causes the
+        # driver to read 12 bytes past the allocation, which segfaults on macOS.
+        self._clear_zero = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
     def initialize(self, fb_width: int, fb_height: int) -> None:
         """Initialize shaders and framebuffer targets."""

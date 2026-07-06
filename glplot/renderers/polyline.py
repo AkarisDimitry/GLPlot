@@ -34,8 +34,7 @@ class PolylineRenderer:
         self.options = options
 
         self.prog = 0
-        self.u_ndc_scale = -1
-        self.u_ndc_offset = -1
+        self.u_mvp = -1
         self.u_viewport = -1
         self.u_width = -1
         self.u_color = -1
@@ -44,20 +43,20 @@ class PolylineRenderer:
         self.u_use_colormap = -1
         self.u_scheme = -1
         self.u_id_norm = -1
+        self.u_window = -1
 
         self.accum_prog = 0
-        self.u_acc_ndc_scale = -1
-        self.u_acc_ndc_offset = -1
+        self.u_acc_mvp = -1
         self.u_acc_viewport = -1
         self.u_acc_width = -1
         self.u_acc_alpha = -1
         self.u_acc_weighted = -1
         self.u_acc_offset = -1
+        self.u_acc_window = -1
 
     def initialize(self) -> None:
         self.prog = link_program(WIDE_SEGMENT_INSTANCED_VS, WIDE_SEGMENT_INSTANCED_FS)
-        self.u_ndc_scale = glGetUniformLocation(self.prog, "u_ndc_scale")
-        self.u_ndc_offset = glGetUniformLocation(self.prog, "u_ndc_offset")
+        self.u_mvp = glGetUniformLocation(self.prog, "u_mvp")
         self.u_viewport = glGetUniformLocation(self.prog, "u_viewport_size")
         self.u_width = glGetUniformLocation(self.prog, "u_width")
         self.u_color = glGetUniformLocation(self.prog, "u_color")
@@ -66,15 +65,16 @@ class PolylineRenderer:
         self.u_use_colormap = glGetUniformLocation(self.prog, "u_use_colormap")
         self.u_scheme = glGetUniformLocation(self.prog, "u_scheme")
         self.u_id_norm = glGetUniformLocation(self.prog, "u_id_norm")
+        self.u_window = glGetUniformLocation(self.prog, "u_window")
 
         self.accum_prog = link_program(WIDE_SEGMENT_INSTANCED_VS, WIDE_SEGMENT_DENSITY_FS)
-        self.u_acc_ndc_scale = glGetUniformLocation(self.accum_prog, "u_ndc_scale")
-        self.u_acc_ndc_offset = glGetUniformLocation(self.accum_prog, "u_ndc_offset")
+        self.u_acc_mvp = glGetUniformLocation(self.accum_prog, "u_mvp")
         self.u_acc_viewport = glGetUniformLocation(self.accum_prog, "u_viewport_size")
         self.u_acc_width = glGetUniformLocation(self.accum_prog, "u_width")
         self.u_acc_alpha = glGetUniformLocation(self.accum_prog, "u_alpha")
         self.u_acc_weighted = glGetUniformLocation(self.accum_prog, "u_density_weighted")
         self.u_acc_offset = glGetUniformLocation(self.accum_prog, "u_layer_offset")
+        self.u_acc_window = glGetUniformLocation(self.accum_prog, "u_window")
 
     def _create_buffers(self, layer: PolylineLayer) -> GLWideSegmentBuffers:
         vao = glGenVertexArrays(1)
@@ -165,8 +165,7 @@ class PolylineRenderer:
         color = layer.style.color if layer.style.color is not None else (0.0, 0.0, 0.0, 1.0)
 
         glUseProgram(self.prog)
-        glUniform2f(self.u_ndc_scale, *ctx.ndc_scale)
-        glUniform2f(self.u_ndc_offset, *ctx.ndc_offset)
+        glUniformMatrix4fv(self.u_mvp, 1, GL_TRUE, ctx.mvp)
         glUniform2f(self.u_viewport, float(ctx.fb_width), float(ctx.fb_height))
         glUniform1f(self.u_width, float(width_px))
         glUniform4f(self.u_color, *color)
@@ -176,6 +175,8 @@ class PolylineRenderer:
         glUniform1i(self.u_use_colormap, 1 if self.options.line_colormap_enabled else 0)
         glUniform1i(self.u_scheme, self.options.density_scheme_index)
         glUniform1f(self.u_id_norm, float(id_norm))
+        l, r, b, t = ctx.window_world
+        glUniform4f(self.u_window, l, r, b, t)
 
         glBindVertexArray(layer._gl.vao)
         glDrawElementsInstanced(
@@ -210,13 +211,14 @@ class PolylineRenderer:
             weighted = 0
 
         glUseProgram(self.accum_prog)
-        glUniform2f(self.u_acc_ndc_scale, *ctx.ndc_scale)
-        glUniform2f(self.u_acc_ndc_offset, *ctx.ndc_offset)
+        glUniformMatrix4fv(self.u_acc_mvp, 1, GL_TRUE, ctx.mvp)
         glUniform2f(self.u_acc_viewport, float(ctx.fb_width), float(ctx.fb_height))
         glUniform1f(self.u_acc_width, float(width_px))
         glUniform1f(self.u_acc_alpha, float(alpha))
         glUniform1i(self.u_acc_weighted, weighted)
         glUniform2f(self.u_acc_offset, *layer.translation)
+        l, r, b, t = ctx.window_world
+        glUniform4f(self.u_acc_window, l, r, b, t)
 
         glBindVertexArray(layer._gl.vao)
         glDrawElementsInstanced(

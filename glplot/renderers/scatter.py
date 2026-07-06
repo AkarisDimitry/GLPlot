@@ -5,7 +5,7 @@ from OpenGL.GL import *
 from typing import TYPE_CHECKING, Optional, Tuple
 
 from .base import GLScatterBuffers
-from ..utils.shaders import SCATTER_VS, SCATTER_FS, DENSITY_POINTS_VS, DENSITY_POINTS_FS
+from ..utils.shaders import SCATTER_VS, SCATTER_FS, DENSITY_POINTS_VS, DENSITY_POINTS_FS, IMAGE_VS, IMAGE_FS
 from ..utils.gl_utils import link_program
 
 if TYPE_CHECKING:
@@ -35,6 +35,12 @@ class ScatterRenderer:
         self.u_accum_alpha = -1
         self.u_accum_offset = -1
 
+        # Textured-quad program (imshow layers)
+        self.image_prog = 0
+        self.u_image_mvp = -1
+        self.u_image_alpha = -1
+        self.u_image_tex = -1
+
     def initialize(self) -> None:
         """Link shaders and setup uniform locations."""
         self.prog = link_program(SCATTER_VS, SCATTER_FS)
@@ -46,6 +52,12 @@ class ScatterRenderer:
         self.u_outline_enabled = glGetUniformLocation(self.prog, "u_outline_enabled")
         self.u_outline_color = glGetUniformLocation(self.prog, "u_outline_color")
         self.u_outline_width_px = glGetUniformLocation(self.prog, "u_outline_width_px")
+
+        # Textured-quad program for imshow layers
+        self.image_prog = link_program(IMAGE_VS, IMAGE_FS)
+        self.u_image_mvp   = glGetUniformLocation(self.image_prog, "u_mvp")
+        self.u_image_alpha = glGetUniformLocation(self.image_prog, "u_alpha")
+        self.u_image_tex   = glGetUniformLocation(self.image_prog, "u_tex")
 
         # Density Accumulation Program
         self.accum_prog = link_program(DENSITY_POINTS_VS, DENSITY_POINTS_FS)
@@ -100,6 +112,10 @@ class ScatterRenderer:
 
     def draw(self, layer: ScatterLayer, ctx: RenderContext) -> None:
         """Draw the scatter layer using current context."""
+        if layer.metadata.get("artist") == "imshow":
+            self._draw_image(layer, ctx)
+            return
+
         if layer.pts is None or len(layer.pts) == 0: return
 
         # 1. Resource Management
@@ -130,20 +146,107 @@ class ScatterRenderer:
         if layer.style.point_outline_enabled:
             glUniform4f(self.u_outline_color, *layer.style.point_outline_color)
             glUniform1f(self.u_outline_width_px, float(layer.style.point_outline_width) * ctx.dpr)
-        
+
         glUniform2f(self.u_offset, *layer.translation)
 
         # 3. Draw call
         glBindVertexArray(layer._gl.vao)
         glDrawArrays(GL_POINTS, 0, layer._gl.count)
-        
+
         # Cleanup
         glBindVertexArray(0)
         glUseProgram(0)
         glDisable(GL_PROGRAM_POINT_SIZE)
 
+    # ------------------------------------------------------------------
+    # Textured-quad path for imshow layers
+    # ------------------------------------------------------------------
+
+    def _make_image_texture(self, layer: ScatterLayer) -> int:
+        """Upload the imshow matrix as a GL_RGBA texture and return the texture ID."""
+        import matplotlib.cm as mcm
+        meta = layer.metadata
+        matrix = np.asarray(meta["matrix"], dtype=float)
+        lo = meta.get("vmin"); hi = meta.get("vmax")
+        lo = float(np.nanmin(matrix)) if lo is None else float(lo)
+        hi = float(np.nanmax(matrix)) if hi is None else float(hi)
+        norm = np.clip((matrix - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+        cmap_fn = mcm.get_cmap(meta.get("cmap", "viridis"))
+        rgba = cmap_fn(norm).astype(np.float32)          # (rows, cols, 4)
+        nan_mask = np.isnan(matrix)
+        rgba[nan_mask] = 0.0
+        # OpenGL origin is bottom-left; "upper" means row-0 = image top → flip
+        if meta.get("origin", "upper") == "upper":
+            rgba = rgba[::-1, :, :]
+        img = (np.clip(rgba, 0.0, 1.0) * 255).astype(np.uint8)
+        h, w = img.shape[:2]
+        tex = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, tex)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.tobytes())
+        glBindTexture(GL_TEXTURE_2D, 0)
+        return tex
+
+    def _make_image_quad(self, layer: ScatterLayer) -> dict:
+        """Create VAO/VBO for a textured quad covering the imshow extent."""
+        xmin, xmax, ymin, ymax = layer.metadata["extent"]
+        # interleaved: [pos_x, pos_y, uv_x, uv_y]
+        verts = np.array([
+            [xmin, ymin, 0.0, 0.0],
+            [xmax, ymin, 1.0, 0.0],
+            [xmax, ymax, 1.0, 1.0],
+            [xmin, ymax, 0.0, 1.0],
+        ], dtype=np.float32)
+        indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
+        vao = glGenVertexArrays(1)
+        glBindVertexArray(vao)
+        vbo = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, verts.nbytes, verts, GL_STATIC_DRAW)
+        stride = 4 * 4  # 4 floats × 4 bytes
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, C.c_void_p(0))
+        glEnableVertexAttribArray(1)
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, C.c_void_p(8))
+        ebo = glGenBuffers(1)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
+        glBindVertexArray(0)
+        return {"vao": vao, "vbo": vbo, "ebo": ebo, "tex": self._make_image_texture(layer)}
+
+    def _draw_image(self, layer: ScatterLayer, ctx: RenderContext) -> None:
+        """Render an imshow layer as a smooth textured quad."""
+        if not hasattr(layer, "_image_gl") or layer._image_gl is None:
+            layer._image_gl = self._make_image_quad(layer)
+            layer.dirty.gpu_dirty = False
+        elif layer.dirty.gpu_dirty:
+            old_tex = layer._image_gl["tex"]
+            glDeleteTextures(1, [old_tex])
+            layer._image_gl["tex"] = self._make_image_texture(layer)
+            layer.dirty.gpu_dirty = False
+
+        gl = layer._image_gl
+        overrides = self.options.visual.overrides
+        alpha = ctx.global_alpha * layer.style.alpha * overrides.alpha_multiplier
+
+        glUseProgram(self.image_prog)
+        glUniformMatrix4fv(self.u_image_mvp, 1, GL_TRUE, ctx.mvp)
+        glUniform1f(self.u_image_alpha, float(alpha))
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, gl["tex"])
+        glUniform1i(self.u_image_tex, 0)
+        glBindVertexArray(gl["vao"])
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
+        glBindVertexArray(0)
+        glBindTexture(GL_TEXTURE_2D, 0)
+        glUseProgram(0)
+
     def draw_density(self, layer: ScatterLayer, ctx: RenderContext) -> None:
         """Accumulate point density into the current R32F target."""
+        if layer.metadata.get("artist") == "imshow": return
         if layer.pts is None or len(layer.pts) == 0: return
 
         # 1. Resource Management

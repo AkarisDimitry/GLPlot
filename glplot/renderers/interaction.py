@@ -6,7 +6,6 @@ from ..utils.gl_utils import link_program
 from .base import GLOffscreenTarget
 
 if TYPE_CHECKING:
-    from ..options import EngineOptions
     from ..engine import GPULinePlot
 
 class InteractionRenderer:
@@ -65,7 +64,9 @@ class InteractionRenderer:
         glBindFramebuffer(GL_FRAMEBUFFER, target_fbo)
         glViewport(0, 0, self.plot.fb_width, self.plot.fb_height)
         glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        # Cache stores premultiplied RGB (cleared to transparent black); use
+        # GL_ONE so the already-multiplied RGB reaches the screen unchanged.
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
         glUseProgram(self.cache_prog)
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.cache_target.tex)

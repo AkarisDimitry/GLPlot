@@ -38,3 +38,4 @@ class GLOffscreenTarget:
     tex: int = 0
     width: int = 0
     height: int = 0
+    depth_rbo: int = 0
