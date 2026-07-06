@@ -33,7 +33,7 @@ test-py310:
   image: python:3.10
   before_script:
     - apt-get update
-    - apt-get install -y libgl1-mesa libglu1-mesa-glx libosmesa6
+    - apt-get install -y libglvnd0 libgl1 libglu1-mesa libosmesa6
     - pip install --upgrade pip setuptools wheel
     - pip install -e ".[test]"
   script:
@@ -53,7 +53,7 @@ test-py311:
   image: python:3.11
   before_script:
     - apt-get update
-    - apt-get install -y libgl1-mesa libglu1-mesa-glx libosmesa6
+    - apt-get install -y libglvnd0 libgl1 libglu1-mesa libosmesa6
     - pip install --upgrade pip setuptools wheel
     - pip install -e ".[test]"
   script:
@@ -73,7 +73,7 @@ test-py312:
   image: python:3.12
   before_script:
     - apt-get update
-    - apt-get install -y libgl1-mesa libglu1-mesa-glx libosmesa6
+    - apt-get install -y libglvnd0 libgl1 libglu1-mesa libosmesa6
     - pip install --upgrade pip setuptools wheel
     - pip install -e ".[test]"
   script:
