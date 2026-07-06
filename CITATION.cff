@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: GLPlot - High-Performance GPU-Accelerated Plotting Library for Python
+message: "If you use GLPlot in your research, please cite it as below."
+type: software
+authors:
+  - family-names: Lombardi
+    given-names: Juan Manuel
+    email: lombardi@fhi-berlin.mpg.de
+    affiliation: "Fritz Haber Institute of the Max Planck Society"
+identifiers:
+  - type: url
+    value: "https://github.com/AkarisDimitry/GLPlot"
+  - type: doi
+    value: "10.5281/zenodo.PLACEHOLDER"
+repository-code: "https://github.com/AkarisDimitry/GLPlot"
+url: "https://github.com/AkarisDimitry/GLPlot"
+repository: "https://github.com/AkarisDimitry/GLPlot"
+abstract: "GLPlot is a high-performance, GPU-accelerated plotting library for Python that provides a Matplotlib-compatible API with OpenGL/GLFW backend support. It efficiently handles millions of geometric primitives through instanced rendering and advanced density visualization techniques, enabling interactive scientific visualization at scale."
+keywords:
+  - plotting
+  - visualization
+  - GPU acceleration
+  - OpenGL
+  - scientific computing
+  - Python
+  - GLSL
+license: MIT
+version: 0.1.2
+date-released: 2026-07-06
