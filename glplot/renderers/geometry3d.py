@@ -160,7 +160,9 @@ class Geometry3DRenderer:
         )
         near = max(radius * 0.02, 1e-3)
         far = max(radius * 12.0, near + 1.0)
-        return _perspective(fov, ctx.aspect, near, far) @ _look_at(eye, center, np.array([0, 0, 1], dtype=np.float32))
+        return _perspective(fov, ctx.aspect, near, far) @ _look_at(
+            eye, center, np.array([0, 0, 1], dtype=np.float32)
+        )
 
     def draw(self, layer: Layer3D, ctx: RenderContext) -> None:
         if layer.vertices is None or len(layer.vertices) == 0:

@@ -7,8 +7,8 @@ from .layers import BaseLayer
 
 @dataclass
 class LineDataset:
-    ab: Optional[np.ndarray] = None              # shape (N, 2)
-    colors: Optional[np.ndarray] = None          # shape (N, 4)
+    ab: Optional[np.ndarray] = None  # shape (N, 2)
+    colors: Optional[np.ndarray] = None  # shape (N, 4)
     x_range: Tuple[float, float] = (-3.0, 3.0)
 
     def validate(self) -> None:
@@ -28,16 +28,19 @@ class LineDataset:
     def count(self) -> int:
         return 0 if self.ab is None else int(self.ab.shape[0])
 
+
 @dataclass
 class ScatterDataset:
-    pts: Optional[np.ndarray] = None             # shape (M,2)
-    colors: Optional[np.ndarray] = None          # shape (M,4)
+    pts: Optional[np.ndarray] = None  # shape (M,2)
+    colors: Optional[np.ndarray] = None  # shape (M,4)
     size: float = 5.0
+
 
 @dataclass
 class StripDataset:
-    pts: Optional[np.ndarray] = None             # shape (K,2)
+    pts: Optional[np.ndarray] = None  # shape (K,2)
     color: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+
 
 @dataclass
 class SceneData:
@@ -46,6 +49,7 @@ class SceneData:
     scatters: List[ScatterDataset] = field(default_factory=list)
     strips: List[StripDataset] = field(default_factory=list)
     texts: List[Dict[str, Any]] = field(default_factory=list)
+
 
 @dataclass
 class CameraState:
@@ -71,6 +75,7 @@ class CameraState:
             self.zoom_x *= factor
             self.zoom_y *= factor
 
+
 @dataclass
 class InteractionState:
     drag_active: bool = False
@@ -83,7 +88,7 @@ class InteractionState:
     ctrl_down: bool = False
     alt_down: bool = False
 
-    drag_mode: str = "pan"            # "pan", "move", "ratio", "rotate3d"
+    drag_mode: str = "pan"  # "pan", "move", "ratio", "rotate3d"
     selected_layer_id: Optional[int] = None
     drag_start_world: Tuple[float, float] = (0.0, 0.0)
     drag_start_translation: Optional[Tuple[float, float]] = None
@@ -101,6 +106,7 @@ class InteractionState:
     last_hover_pick_time: float = 0.0
     hover_resume_time: float = 0.0
 
+
 @dataclass
 class CacheState:
     active: bool = False
@@ -108,6 +114,7 @@ class CacheState:
     refresh_requested: bool = False
     last_capture_time: float = 0.0
     release_deadline: float = 0.0
+
 
 @dataclass
 class FrameState:

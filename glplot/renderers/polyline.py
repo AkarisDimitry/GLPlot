@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ..core.context import RenderContext
     from ..options import EngineOptions
 
+
 @dataclass
 class GLWideSegmentBuffers:
     vao: int = 0
@@ -25,11 +26,13 @@ class GLWideSegmentBuffers:
     ebo: int = 0
     instance_count: int = 0
 
+
 class PolylineRenderer:
     """
     High-performance renderer for PolylineLayer using GPU Instancing.
     Replaces the older CPU-side expansion logic.
     """
+
     def __init__(self, options: EngineOptions):
         self.options = options
 
@@ -83,14 +86,17 @@ class PolylineRenderer:
         # Static quad corners: (t, side)
         # t in [0, 1] goes from start to end of segment
         # side in [-0.5, 0.5] handles expansion around centerline
-        quad = np.array([
-            [0.0, -0.5],
-            [0.0,  0.5],
-            [1.0, -0.5],
-            [1.0,  0.5],
-        ], dtype=np.float32)
+        quad = np.array(
+            [
+                [0.0, -0.5],
+                [0.0, 0.5],
+                [1.0, -0.5],
+                [1.0, 0.5],
+            ],
+            dtype=np.float32,
+        )
 
-        indices = np.array([0, 1, 2,  2, 1, 3], dtype=np.uint16)
+        indices = np.array([0, 1, 2, 2, 1, 3], dtype=np.uint16)
 
         vbo_quad = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, vbo_quad)
@@ -105,7 +111,7 @@ class PolylineRenderer:
         # Per-instance segment buffer: [p0.x, p0.y, p1.x, p1.y]
         vbo_inst = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, vbo_inst)
-        glBufferData(GL_ARRAY_BUFFER, 16, None, GL_STREAM_DRAW) # Initial tiny allocation
+        glBufferData(GL_ARRAY_BUFFER, 16, None, GL_STREAM_DRAW)  # Initial tiny allocation
 
         stride = 4 * 4
         # i_p0 (location 1)
@@ -140,7 +146,7 @@ class PolylineRenderer:
         segs[:, 2:4] = pts[1:]
 
         glBindBuffer(GL_ARRAY_BUFFER, bufs.vbo_inst)
-        
+
         # Buffer Orphaning for performance
         glBufferData(GL_ARRAY_BUFFER, segs.nbytes, None, GL_STREAM_DRAW)
         glBufferSubData(GL_ARRAY_BUFFER, 0, segs.nbytes, segs)
@@ -171,7 +177,7 @@ class PolylineRenderer:
         glUniform4f(self.u_color, *color)
         glUniform1f(self.u_alpha, float(alpha))
         glUniform2f(self.u_offset, *layer.translation)
-        
+
         glUniform1i(self.u_use_colormap, 1 if self.options.line_colormap_enabled else 0)
         glUniform1i(self.u_scheme, self.options.density_scheme_index)
         glUniform1f(self.u_id_norm, float(id_norm))
@@ -180,11 +186,7 @@ class PolylineRenderer:
 
         glBindVertexArray(layer._gl.vao)
         glDrawElementsInstanced(
-            GL_TRIANGLES,
-            6,
-            GL_UNSIGNED_SHORT,
-            C.c_void_p(0),
-            layer._gl.instance_count
+            GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, C.c_void_p(0), layer._gl.instance_count
         )
         glBindVertexArray(0)
         glUseProgram(0)
@@ -222,11 +224,7 @@ class PolylineRenderer:
 
         glBindVertexArray(layer._gl.vao)
         glDrawElementsInstanced(
-            GL_TRIANGLES,
-            6,
-            GL_UNSIGNED_SHORT,
-            C.c_void_p(0),
-            layer._gl.instance_count
+            GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, C.c_void_p(0), layer._gl.instance_count
         )
         glBindVertexArray(0)
         glUseProgram(0)

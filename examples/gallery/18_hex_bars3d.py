@@ -1,7 +1,6 @@
 import numpy as np
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(1800)
 rows = np.arange(-12, 13)
 cols = np.arange(-12, 13)

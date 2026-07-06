@@ -5,6 +5,7 @@ from vispy import app, scene
 # Force GLFW backend to match GLPlot and our known working setup
 app.use_app("glfw")
 
+
 def main():
     # Initialize glfw and reset window hints to defaults (essential for macOS)
     glfw.init()
@@ -35,20 +36,23 @@ def main():
     color_arr = np.repeat(colors, 2, axis=0)
 
     print("Initializing interactive VisPy canvas using GLFW...")
-    canvas = scene.SceneCanvas(keys='interactive', show=True, size=(1024, 768), title="VisPy Interactive - 100,000 Lines")
+    canvas = scene.SceneCanvas(
+        keys="interactive", show=True, size=(1024, 768), title="VisPy Interactive - 100,000 Lines"
+    )
     grid = canvas.central_widget.add_grid()
     view = grid.add_view()
 
     # Add lines and enable alpha blending (disabling depth test)
-    line = scene.visuals.Line(pos, color=color_arr, connect='segments', parent=view.scene)
-    line.set_gl_state(depth_test=False, blend=True, blend_func=('src_alpha', 'one_minus_src_alpha'))
+    line = scene.visuals.Line(pos, color=color_arr, connect="segments", parent=view.scene)
+    line.set_gl_state(depth_test=False, blend=True, blend_func=("src_alpha", "one_minus_src_alpha"))
 
     # Camera setup (pan/zoom)
-    view.camera = 'panzoom'
+    view.camera = "panzoom"
     view.camera.set_range(x=(x_range[0], x_range[1]), y=(-1000, 1000))
 
     print("Opening interactive GUI window. Close the window to exit.")
     app.run()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

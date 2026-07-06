@@ -63,15 +63,17 @@ def diagnose_camera_state():
 
     # Check view persistence
     print("\n--- CHECKING VIEW PERSISTENCE ---")
-    print("  Current xlim:", (plot.xlim if hasattr(plot, 'xlim') else "N/A"))
-    print("  Current ylim:", (plot.ylim if hasattr(plot, 'ylim') else "N/A"))
+    print("  Current xlim:", (plot.xlim if hasattr(plot, "xlim") else "N/A"))
+    print("  Current ylim:", (plot.ylim if hasattr(plot, "ylim") else "N/A"))
 
     # Test set_view with explicit limits
     print("\n--- TESTING SET_VIEW ---")
     print("  Calling set_view(xlim=(-5, 5), ylim=(-1, 1))")
     try:
         plot.set_view(xlim=(-5, 5), ylim=(-1, 1))
-        print(f"  Camera after set_view: zoom_x={plot.camera.zoom_x:.6f}, zoom_y={plot.camera.zoom_y:.6f}")
+        print(
+            f"  Camera after set_view: zoom_x={plot.camera.zoom_x:.6f}, zoom_y={plot.camera.zoom_y:.6f}"
+        )
     except Exception as e:
         print(f"  Error: {e}")
 
@@ -118,5 +120,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

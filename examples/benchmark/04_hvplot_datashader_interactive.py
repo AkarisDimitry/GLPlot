@@ -64,16 +64,14 @@ plot = df.hvplot.line(
 # Panel application
 # ---------------------------------------------------------------------------
 
-description = pn.pane.Markdown(
-    f"""
+description = pn.pane.Markdown(f"""
 # One-million-point line with hvPlot + Datashader
 
 This plot contains **{N_POINTS:,} samples**.
 
 Zooming or panning causes Datashader to recompute the rasterized representation
 for the currently visible range on the CPU in real-time.
-"""
-)
+""")
 
 app = pn.Column(
     description,

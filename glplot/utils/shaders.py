@@ -171,17 +171,17 @@ vec3 apply_heatmap(int scheme, float x) {
 """
 
 DENSITY_SCHEMES = [
-    "Classic (B-W-C)", 
-    "Viridis", 
-    "Plasma", 
-    "Inferno", 
-    "Turbo (Rainbow)", 
-    "Ink Fire (White BG)", 
+    "Classic (B-W-C)",
+    "Viridis",
+    "Plasma",
+    "Inferno",
+    "Turbo (Rainbow)",
+    "Ink Fire (White BG)",
     "Magma",
     "Grayscale",
     "Ocean",
     "Hot",
-    "Cool"
+    "Cool",
 ]
 
 GEOMETRY3D_VS = r"""
@@ -235,6 +235,7 @@ void main() {
 }
 """
 
+
 def mix(c1, c2, x):
     return (
         c1[0] * (1.0 - x) + c2[0] * x,
@@ -242,10 +243,11 @@ def mix(c1, c2, x):
         c1[2] * (1.0 - x) + c2[2] * x,
     )
 
+
 def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
     """Evaluate colormap RGB color for a given normalized value [0.0, 1.0]."""
     x = max(0.0, min(1.0, x))
-    if scheme_index == 1:    # Viridis
+    if scheme_index == 1:  # Viridis
         c0 = (0.267, 0.005, 0.329)
         c1 = (0.283, 0.141, 0.458)
         c2 = (0.254, 0.265, 0.530)
@@ -256,14 +258,22 @@ def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
         c7 = (0.267, 0.749, 0.441)
         c8 = (0.478, 0.821, 0.318)
         c9 = (0.741, 0.873, 0.150)
-        if x < 0.11: return mix(c0, c1, x / 0.11)
-        if x < 0.22: return mix(c1, c2, (x - 0.11) / 0.11)
-        if x < 0.33: return mix(c2, c3, (x - 0.22) / 0.11)
-        if x < 0.44: return mix(c3, c4, (x - 0.33) / 0.11)
-        if x < 0.55: return mix(c4, c5, (x - 0.44) / 0.11)
-        if x < 0.66: return mix(c5, c6, (x - 0.55) / 0.11)
-        if x < 0.77: return mix(c6, c7, (x - 0.66) / 0.11)
-        if x < 0.88: return mix(c7, c8, (x - 0.77) / 0.11)
+        if x < 0.11:
+            return mix(c0, c1, x / 0.11)
+        if x < 0.22:
+            return mix(c1, c2, (x - 0.11) / 0.11)
+        if x < 0.33:
+            return mix(c2, c3, (x - 0.22) / 0.11)
+        if x < 0.44:
+            return mix(c3, c4, (x - 0.33) / 0.11)
+        if x < 0.55:
+            return mix(c4, c5, (x - 0.44) / 0.11)
+        if x < 0.66:
+            return mix(c5, c6, (x - 0.55) / 0.11)
+        if x < 0.77:
+            return mix(c6, c7, (x - 0.66) / 0.11)
+        if x < 0.88:
+            return mix(c7, c8, (x - 0.77) / 0.11)
         return mix(c8, c9, (x - 0.88) / 0.12)
     elif scheme_index == 2:  # Plasma
         c0 = (0.050, 0.030, 0.528)
@@ -273,11 +283,16 @@ def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
         c4 = (0.845, 0.277, 0.388)
         c5 = (0.954, 0.468, 0.199)
         c6 = (0.940, 0.975, 0.131)
-        if x < 0.16: return mix(c0, c1, x / 0.16)
-        if x < 0.32: return mix(c1, c2, (x - 0.16) / 0.16)
-        if x < 0.48: return mix(c2, c3, (x - 0.32) / 0.16)
-        if x < 0.64: return mix(c3, c4, (x - 0.48) / 0.16)
-        if x < 0.80: return mix(c4, c5, (x - 0.64) / 0.16)
+        if x < 0.16:
+            return mix(c0, c1, x / 0.16)
+        if x < 0.32:
+            return mix(c1, c2, (x - 0.16) / 0.16)
+        if x < 0.48:
+            return mix(c2, c3, (x - 0.32) / 0.16)
+        if x < 0.64:
+            return mix(c3, c4, (x - 0.48) / 0.16)
+        if x < 0.80:
+            return mix(c4, c5, (x - 0.64) / 0.16)
         return mix(c5, c6, (x - 0.80) / 0.20)
     elif scheme_index == 3:  # Inferno
         c0 = (0.000, 0.000, 0.016)
@@ -289,13 +304,20 @@ def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
         c6 = (0.976, 0.505, 0.096)
         c7 = (0.985, 0.768, 0.263)
         c8 = (0.988, 0.941, 0.729)
-        if x < 0.125: return mix(c0, c1, x / 0.125)
-        if x < 0.250: return mix(c1, c2, (x - 0.125) / 0.125)
-        if x < 0.375: return mix(c2, c3, (x - 0.250) / 0.125)
-        if x < 0.500: return mix(c3, c4, (x - 0.375) / 0.125)
-        if x < 0.625: return mix(c4, c5, (x - 0.500) / 0.125)
-        if x < 0.750: return mix(c5, c6, (x - 0.625) / 0.125)
-        if x < 0.875: return mix(c6, c7, (x - 0.750) / 0.125)
+        if x < 0.125:
+            return mix(c0, c1, x / 0.125)
+        if x < 0.250:
+            return mix(c1, c2, (x - 0.125) / 0.125)
+        if x < 0.375:
+            return mix(c2, c3, (x - 0.250) / 0.125)
+        if x < 0.500:
+            return mix(c3, c4, (x - 0.375) / 0.125)
+        if x < 0.625:
+            return mix(c4, c5, (x - 0.500) / 0.125)
+        if x < 0.750:
+            return mix(c5, c6, (x - 0.625) / 0.125)
+        if x < 0.875:
+            return mix(c6, c7, (x - 0.750) / 0.125)
         return mix(c7, c8, (x - 0.875) / 0.125)
     elif scheme_index == 4:  # Turbo
         g0 = (0.12, 0.01, 0.22)
@@ -303,9 +325,12 @@ def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
         g2 = (0.15, 0.65, 0.51)
         g3 = (0.85, 0.60, 0.12)
         g4 = (0.92, 0.11, 0.43)
-        if x < 0.25: return mix(g0, g1, x / 0.25)
-        if x < 0.50: return mix(g1, g2, (x - 0.25) / 0.25)
-        if x < 0.75: return mix(g2, g3, (x - 0.50) / 0.25)
+        if x < 0.25:
+            return mix(g0, g1, x / 0.25)
+        if x < 0.50:
+            return mix(g1, g2, (x - 0.25) / 0.25)
+        if x < 0.75:
+            return mix(g2, g3, (x - 0.50) / 0.25)
         return mix(g3, g4, (x - 0.75) / 0.25)
     elif scheme_index == 5:  # Ink Fire
         c0 = (1.0, 1.0, 1.0)
@@ -313,9 +338,12 @@ def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
         c2 = (1.0, 0.2, 0.1)
         c3 = (0.4, 0.0, 0.0)
         c4 = (0.0, 0.0, 0.0)
-        if x < 0.25: return mix(c0, c1, x / 0.25)
-        if x < 0.50: return mix(c1, c2, (x - 0.25) / 0.25)
-        if x < 0.75: return mix(c2, c3, (x - 0.50) / 0.25)
+        if x < 0.25:
+            return mix(c0, c1, x / 0.25)
+        if x < 0.50:
+            return mix(c1, c2, (x - 0.25) / 0.25)
+        if x < 0.75:
+            return mix(c2, c3, (x - 0.50) / 0.25)
         return mix(c3, c4, (x - 0.75) / 0.25)
     elif scheme_index == 6:  # Magma
         c0 = (0.001, 0.000, 0.031)
@@ -325,11 +353,16 @@ def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
         c4 = (0.960, 0.419, 0.231)
         c5 = (0.988, 0.768, 0.470)
         c6 = (0.988, 0.988, 0.823)
-        if x < 0.16: return mix(c0, c1, x / 0.16)
-        if x < 0.32: return mix(c1, c2, (x - 0.16) / 0.16)
-        if x < 0.48: return mix(c2, c3, (x - 0.32) / 0.16)
-        if x < 0.64: return mix(c3, c4, (x - 0.48) / 0.16)
-        if x < 0.80: return mix(c4, c5, (x - 0.64) / 0.16)
+        if x < 0.16:
+            return mix(c0, c1, x / 0.16)
+        if x < 0.32:
+            return mix(c1, c2, (x - 0.16) / 0.16)
+        if x < 0.48:
+            return mix(c2, c3, (x - 0.32) / 0.16)
+        if x < 0.64:
+            return mix(c3, c4, (x - 0.48) / 0.16)
+        if x < 0.80:
+            return mix(c4, c5, (x - 0.64) / 0.16)
         return mix(c5, c6, (x - 0.80) / 0.20)
     elif scheme_index == 7:  # Grayscale
         return (x, x, x)
@@ -338,8 +371,10 @@ def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
         c1 = (0.0, 0.2, 0.6)
         c2 = (0.0, 0.8, 1.0)
         c3 = (1.0, 1.0, 1.0)
-        if x < 0.33: return mix(c0, c1, x / 0.33)
-        if x < 0.66: return mix(c1, c2, (x - 0.33) / 0.33)
+        if x < 0.33:
+            return mix(c0, c1, x / 0.33)
+        if x < 0.66:
+            return mix(c1, c2, (x - 0.33) / 0.33)
         return mix(c2, c3, (x - 0.66) / 0.34)
     elif scheme_index == 9:  # Hot
         c0 = (0.0, 0.0, 0.0)
@@ -347,27 +382,32 @@ def eval_colormap(scheme_index: int, x: float) -> tuple[float, float, float]:
         c2 = (1.0, 0.5, 0.0)
         c3 = (1.0, 1.0, 0.0)
         c4 = (1.0, 1.0, 1.0)
-        if x < 0.25: return mix(c0, c1, x / 0.25)
-        if x < 0.50: return mix(c1, c2, (x - 0.25) / 0.25)
-        if x < 0.75: return mix(c2, c3, (x - 0.50) / 0.25)
+        if x < 0.25:
+            return mix(c0, c1, x / 0.25)
+        if x < 0.50:
+            return mix(c1, c2, (x - 0.25) / 0.25)
+        if x < 0.75:
+            return mix(c2, c3, (x - 0.50) / 0.25)
         return mix(c3, c4, (x - 0.75) / 0.25)
-    elif scheme_index == 10: # Cool
+    elif scheme_index == 10:  # Cool
         return mix((0.0, 1.0, 1.0), (1.0, 0.0, 1.0), x)
-    else:                    # Classic / Default (0)
+    else:  # Classic / Default (0)
+
         def smoothstep(e0, e1, v):
             t = max(0.0, min(1.0, (v - e0) / (e1 - e0)))
             return t * t * (3.0 - 2.0 * t)
-        return (
-            smoothstep(0.0, 0.3, x),
-            smoothstep(0.3, 0.6, x),
-            smoothstep(0.6, 1.0, x)
-        )
 
-def get_colormap_min_color(scheme_index: int, invert: bool, light_to_color: bool = True) -> tuple[float, float, float]:
+        return (smoothstep(0.0, 0.3, x), smoothstep(0.3, 0.6, x), smoothstep(0.6, 1.0, x))
+
+
+def get_colormap_min_color(
+    scheme_index: int, invert: bool, light_to_color: bool = True
+) -> tuple[float, float, float]:
     """Evaluate the minimum density (x=0.0) color for the specified scheme."""
     # If inverted, the minimum density maps to the high end (1.0) of the colormap.
     x = 1.0 if invert else 0.0
     return eval_colormap(scheme_index, x)
+
 
 # ==============================================================================
 # PASS 1: EXACT RENDERING (Primal Geometry)
@@ -538,7 +578,8 @@ void main() {
 }
 """
 
-EXACT_LINES_FS = r"""
+EXACT_LINES_FS = (
+    r"""
 #version 330 core
 in vec4 v_col;
 flat in float v_id_norm;
@@ -549,7 +590,9 @@ uniform int u_use_colormap;
 uniform int u_scheme;
 uniform int u_antialiasing;
 
-""" + HEATMAP_FUNCS + r"""
+"""
+    + HEATMAP_FUNCS
+    + r"""
 
 void main() {
     float alpha = v_col.a;
@@ -567,6 +610,7 @@ void main() {
     FragColor = vec4(color.rgb, alpha);
 }
 """
+)
 
 # --- IMAGE (textured quad for imshow) ---
 
@@ -800,7 +844,8 @@ void main() {
 }
 """
 
-WIDE_SEGMENT_INSTANCED_FS = r"""
+WIDE_SEGMENT_INSTANCED_FS = (
+    r"""
 #version 330 core
 in vec4 v_col;
 flat in float v_id_norm;
@@ -809,7 +854,9 @@ out vec4 FragColor;
 uniform int u_use_colormap;
 uniform int u_scheme;
 
-""" + HEATMAP_FUNCS + r"""
+"""
+    + HEATMAP_FUNCS
+    + r"""
 
 void main() {
     vec4 color = v_col;
@@ -819,6 +866,7 @@ void main() {
     FragColor = color;
 }
 """
+)
 
 WIDE_SEGMENT_DENSITY_FS = r"""
 #version 330 core
@@ -909,7 +957,8 @@ void main() {
 }
 """
 
-DENSITY_RESOLVE_FS = r"""
+DENSITY_RESOLVE_FS = (
+    r"""
 #version 330 core
 #define log10(x) (log(x) / log(10.0))
 
@@ -926,7 +975,9 @@ uniform int u_light_to_color;
 uniform vec2 u_uv_min;
 uniform vec2 u_uv_max;
 
-""" + HEATMAP_FUNCS + r"""
+"""
+    + HEATMAP_FUNCS
+    + r"""
 
 void main() {
     // Discard fragments outside the plotting viewport bounds to keep margins clean
@@ -968,6 +1019,7 @@ void main() {
     FragColor = vec4(apply_heatmap(u_scheme, norm), 1.0);
 }
 """
+)
 
 # ==============================================================================
 # PASS 3: PICKING & INTERACTION

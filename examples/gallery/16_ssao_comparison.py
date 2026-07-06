@@ -1,7 +1,6 @@
 import numpy as np
 import glplot.pyplot as plt
 
-
 axis = np.linspace(-4.0, 4.0, 45)
 x, y = np.meshgrid(axis, axis)
 r = np.hypot(x, y)
@@ -44,4 +43,3 @@ plt.zlabel("height")
 plt.legend()
 plt.show()
 plt.savefig("examples/gallery/results/16_ssao_comparison.png")
-

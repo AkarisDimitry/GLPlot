@@ -175,8 +175,9 @@ class EffectManager:
             scheme_idx = getattr(self.options, "density_scheme_index", 0)
             invert = getattr(self.options, "density_invert", False)
             ltc = getattr(self.options, "density_light_to_color", True)
-            
+
             from ..utils.shaders import get_colormap_min_color
+
             c = get_colormap_min_color(scheme_idx, invert, ltc)
             glClearColor(c[0], c[1], c[2], 1.0)
             glClear(GL_COLOR_BUFFER_BIT)
@@ -192,11 +193,12 @@ class EffectManager:
 
         self.ensure_resources()
         glDisable(GL_BLEND)
-        
+
         # Disable world clipping for background pass
         if self.options.enable_clipping_optimization:
-            for i in range(4): glDisable(GL_CLIP_DISTANCE0 + i)
-            
+            for i in range(4):
+                glDisable(GL_CLIP_DISTANCE0 + i)
+
         glUseProgram(self.prog_bg)
         glUniform3f(self.u_bg_top_color, *v.top_color)
         glUniform3f(self.u_bg_bottom_color, *v.bottom_color)
@@ -281,7 +283,8 @@ class EffectManager:
 
         if self.options.enable_clipping_optimization:
             # Re-enable for subsequent exact draws if they don't explicitly handle it
-            for i in range(4): glEnable(GL_CLIP_DISTANCE0 + i)
+            for i in range(4):
+                glEnable(GL_CLIP_DISTANCE0 + i)
 
         glBindVertexArray(0)
         glUseProgram(0)
@@ -310,7 +313,9 @@ class EffectManager:
         self.ping_fbo = self._create_target(bw, bh, GL_RGBA8)
         self.pong_fbo = self._create_target(bw, bh, GL_RGBA8)
 
-    def _create_target(self, w: int, h: int, internal_format: int, with_depth: bool = False) -> GLOffscreenTarget:
+    def _create_target(
+        self, w: int, h: int, internal_format: int, with_depth: bool = False
+    ) -> GLOffscreenTarget:
         tex = glGenTextures(1)
         glBindTexture(GL_TEXTURE_2D, tex)
 
@@ -344,7 +349,9 @@ class EffectManager:
             depth_rbo = glGenRenderbuffers(1)
             glBindRenderbuffer(GL_RENDERBUFFER, depth_rbo)
             glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h)
-            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rbo)
+            glFramebufferRenderbuffer(
+                GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rbo
+            )
             glBindRenderbuffer(GL_RENDERBUFFER, 0)
 
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)

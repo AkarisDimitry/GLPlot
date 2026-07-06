@@ -8,13 +8,16 @@ if TYPE_CHECKING:
     from .core.legacy import SceneData, InteractionState, CacheState
     from .core.context import RenderContext
 
+
 class RenderPolicyManager:
     """
     Orchestrates rendering policies including LOD, blending, and density fallbacks.
     Implements 'Width-Aware' scaling to protect against fill-rate bottlenecks.
     """
+
     def __init__(self, options: EngineOptions):
         from .options import RuntimePolicy
+
         self.options = options
         self.runtime = RuntimePolicy()
 
@@ -24,6 +27,7 @@ class RenderPolicyManager:
         is_hud_interacting = False
         try:
             import imgui
+
             if imgui.get_current_context() is not None:
                 is_hud_interacting = imgui.is_any_item_active()
         except Exception:
@@ -35,26 +39,33 @@ class RenderPolicyManager:
             self.runtime.current_mode = RenderMode.EXACT
 
         if self.options.shift_required_for_picking:
-            self.runtime.picking_enabled_this_frame = interaction.shift_down and not interaction.drag_active
+            self.runtime.picking_enabled_this_frame = (
+                interaction.shift_down and not interaction.drag_active
+            )
         else:
             self.runtime.picking_enabled_this_frame = not interaction.drag_active
 
-        if self.options.enable_hud and (self.runtime.current_mode == RenderMode.EXACT or is_hud_interacting):
+        if self.options.enable_hud and (
+            self.runtime.current_mode == RenderMode.EXACT or is_hud_interacting
+        ):
             self.runtime.hud_enabled_this_frame = True
         else:
             self.runtime.hud_enabled_this_frame = False
 
         # Blending policy
         from .options import BlendMode
+
         m = self.options.blend_mode
         if m == BlendMode.OFF:
             self.runtime.blending_enabled = False
         elif m == BlendMode.AUTO:
-            self.runtime.blending_enabled = (n <= self.options.auto_disable_blending_threshold)
+            self.runtime.blending_enabled = n <= self.options.auto_disable_blending_threshold
         else:
             self.runtime.blending_enabled = True
 
-    def estimate_polyline_screen_length_px(self, pts: np.ndarray, ctx: RenderContext, max_samples: int = 4096) -> float:
+    def estimate_polyline_screen_length_px(
+        self, pts: np.ndarray, ctx: RenderContext, max_samples: int = 4096
+    ) -> float:
         """Estimate the total length of a polyline in screen pixels (cheaply)."""
         if pts is None or len(pts) < 2:
             return 0.0
@@ -84,15 +95,16 @@ class RenderPolicyManager:
         target_coverage = self.options.lod_target_coverage
         total_est_px2 = 0.0
         target_px2 = target_coverage * ctx.fb_width * ctx.fb_height
-        
+
         overrides = self.options.visual.overrides
 
         # 1. Line Families (Approx coverage: Count * ViewportWidth * Width)
         if scene.lines.ab is not None:
             from .options import RenderMode
+
             # Relax budget for density mode as overdraw is the goal
             mode_multiplier = 100.0 if ctx.is_density else 1.0
-            
+
             width = self.options.global_line_width * overrides.line_width_multiplier
             est = float(len(scene.lines.ab)) * ctx.fb_width * max(1.0, width)
             total_est_px2 += est / mode_multiplier
@@ -100,6 +112,7 @@ class RenderPolicyManager:
         # 2. Polylines (Approx coverage: Length * Width)
         for layer in scene.layers:
             from .core.layers import PolylineLayer
+
             if isinstance(layer, PolylineLayer):
                 width = layer.style.line_width * overrides.line_width_multiplier
                 length = self.estimate_polyline_screen_length_px(layer.pts, ctx)
@@ -107,13 +120,15 @@ class RenderPolicyManager:
 
         if total_est_px2 <= target_px2:
             return 1.0
-            
+
         return max(0.001, min(1.0, target_px2 / total_est_px2))
 
-    def should_force_density_mode(self, scene: SceneData, ctx: RenderContext, factor: float = 3.0) -> bool:
+    def should_force_density_mode(
+        self, scene: SceneData, ctx: RenderContext, factor: float = 3.0
+    ) -> bool:
         """Determines if the scene is so complex that density mode should be forced during interaction."""
         target_px2 = ctx.fb_width * ctx.fb_height * factor
-        
+
         # Reuse LOD calc logic but for a higher threshold
         # (This is a simplified version for V1)
         prob = self.calculate_width_aware_lod(scene, ctx, target_coverage=factor)

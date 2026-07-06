@@ -2,7 +2,6 @@ import numpy as np
 import os
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(21)
 n = 250_000
 cluster = rng.integers(0, 4, size=n)
@@ -17,7 +16,13 @@ plt.scatter(x, y, c=score, cmap="plasma", s=1.4, alpha=0.72, label="250k cluster
 plt.axhline(0, color="k", linestyle="--", linewidth=1)
 plt.axvline(0, color="k", linestyle="--", linewidth=1)
 plt.axline((0, 0), slope=0.55, color="cyan", linewidth=2, label="decision ridge")
-plt.annotate("dense branch", xy=(1.8, 0.0), xytext=(-2.9, 2.8), arrowprops={"color": "cyan", "width": 1.2}, color="cyan")
+plt.annotate(
+    "dense branch",
+    xy=(1.8, 0.0),
+    xytext=(-2.9, 2.8),
+    arrowprops={"color": "cyan", "width": 1.2},
+    color="cyan",
+)
 plt.xlabel("x")
 plt.ylabel("y")
 plt.title("250k points with guides, colormap, and annotation")

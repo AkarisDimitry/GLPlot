@@ -12,11 +12,13 @@ if TYPE_CHECKING:
 try:
     import imgui
     from imgui.integrations.glfw import GlfwRenderer
+
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):
     IMGUI_AVAILABLE = False
     imgui = None
     GlfwRenderer = None
+
 
 class HudManager:
     def __init__(self, plot: GPULinePlot):
@@ -33,7 +35,10 @@ class HudManager:
     def _scene_3d_stats(self) -> dict[str, Any]:
         layers = [layer for layer in self.plot.scene.layers if self._is_3d_layer(layer)]
         data_layers = [layer for layer in layers if layer.metadata.get("artist") != "axis3d"]
-        vertices = sum(0 if getattr(layer, "vertices", None) is None else len(layer.vertices) for layer in data_layers)
+        vertices = sum(
+            0 if getattr(layer, "vertices", None) is None else len(layer.vertices)
+            for layer in data_layers
+        )
         triangles = 0
         for layer in data_layers:
             if getattr(layer, "primitive", None) == "triangles":
@@ -122,7 +127,7 @@ class HudManager:
         # We detect which one changed since last frame and propagate it
         engine_sel = self.plot.interaction.selected_layer_id
         hud_sel = self.state.selected_layer_id
-        
+
         if engine_sel != self.state._last_engine_selection:
             # Picking changed it (Engine -> HUD)
             self.state.selected_layer_id = engine_sel
@@ -135,90 +140,122 @@ class HudManager:
             self.state._last_engine_selection = hud_sel
 
         self._draw_main_menu()
-        
+
         if self.state.show_status_overlay:
             self._draw_status_overlay()
-            
+
         if self.state.show_layers:
             self._draw_layers_panel()
-            
+
         if self.state.show_render_controls:
             self._draw_render_panel()
-            
+
         if self.state.show_profiler:
             self._draw_profiler_panel()
-            
+
         if self.state.show_selection and self.state.selected_object:
             self._draw_selection_panel()
 
         if self.state.show_analysis:
             self._draw_analysis_panel()
-            
+
         self._draw_layer_inspector()
 
     def _draw_main_menu(self):
         if imgui.begin_main_menu_bar():
             if imgui.begin_menu("View"):
-                _, self.state.show_status_overlay = imgui.menu_item("Status Overlay", None, self.state.show_status_overlay)
+                _, self.state.show_status_overlay = imgui.menu_item(
+                    "Status Overlay", None, self.state.show_status_overlay
+                )
                 _, self.state.show_layers = imgui.menu_item("Layers", None, self.state.show_layers)
-                _, self.state.show_render_controls = imgui.menu_item("Render Controls", None, self.state.show_render_controls)
-                _, self.state.show_profiler = imgui.menu_item("Profiler", None, self.state.show_profiler)
-                _, self.state.show_selection = imgui.menu_item("Selection Info", None, self.state.show_selection)
-                _, self.state.show_analysis = imgui.menu_item("Analysis", None, self.state.show_analysis)
+                _, self.state.show_render_controls = imgui.menu_item(
+                    "Render Controls", None, self.state.show_render_controls
+                )
+                _, self.state.show_profiler = imgui.menu_item(
+                    "Profiler", None, self.state.show_profiler
+                )
+                _, self.state.show_selection = imgui.menu_item(
+                    "Selection Info", None, self.state.show_selection
+                )
+                _, self.state.show_analysis = imgui.menu_item(
+                    "Analysis", None, self.state.show_analysis
+                )
                 imgui.end_menu()
-            
+
             if imgui.begin_menu("Actions"):
-                if imgui.menu_item("Reset View")[0]: self.controller.reset_view()
-                if imgui.menu_item("Autoscale")[0]: self.controller.autoscale()
+                if imgui.menu_item("Reset View")[0]:
+                    self.controller.reset_view()
+                if imgui.menu_item("Autoscale")[0]:
+                    self.controller.autoscale()
                 imgui.separator()
-                if imgui.menu_item("Toggle Density")[0]: self.controller.toggle_density()
-                if imgui.menu_item("Export PNG")[0]: self.controller.export()
+                if imgui.menu_item("Toggle Density")[0]:
+                    self.controller.toggle_density()
+                if imgui.menu_item("Export PNG")[0]:
+                    self.controller.export()
                 imgui.end_menu()
-                
+
             imgui.end_main_menu_bar()
 
     def _draw_status_overlay(self):
         # Transparent overlay strip at the top (below menu)
         imgui.set_next_window_position(0, 20)
         imgui.set_next_window_size(self.plot.width, 30)
-        flags = (imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_RESIZE | 
-                 imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_SCROLLBAR | 
-                 imgui.WINDOW_NO_BACKGROUND)
-        
+        flags = (
+            imgui.WINDOW_NO_TITLE_BAR
+            | imgui.WINDOW_NO_RESIZE
+            | imgui.WINDOW_NO_MOVE
+            | imgui.WINDOW_NO_SCROLLBAR
+            | imgui.WINDOW_NO_BACKGROUND
+        )
+
         imgui.begin("StatusOverlay", flags=flags)
-        
-        fps = 1.0 / max(0.0001, self.state.cpu_frame_times[-1]) if self.state.cpu_frame_times else 0.0
+
+        fps = (
+            1.0 / max(0.0001, self.state.cpu_frame_times[-1]) if self.state.cpu_frame_times else 0.0
+        )
         n_lines = self.plot.scene.lines.count
         n_3d_layers = len(self.plot.get_3d_layers()) if hasattr(self.plot, "get_3d_layers") else 0
-        n_3d_vertices = sum(len(layer.vertices) for layer in self.plot.get_3d_layers() if getattr(layer, "vertices", None) is not None) if n_3d_layers else 0
-        
-        imgui.text(f"FPS: {fps:4.1f} | Lines: {n_lines:,} | 3D Layers: {n_3d_layers:,} ({n_3d_vertices:,} verts) | Mode: {'Density' if self.plot.display_density else 'Exact'} | ")
+        n_3d_vertices = (
+            sum(
+                len(layer.vertices)
+                for layer in self.plot.get_3d_layers()
+                if getattr(layer, "vertices", None) is not None
+            )
+            if n_3d_layers
+            else 0
+        )
+
+        imgui.text(
+            f"FPS: {fps:4.1f} | Lines: {n_lines:,} | 3D Layers: {n_3d_layers:,} ({n_3d_vertices:,} verts) | Mode: {'Density' if self.plot.display_density else 'Exact'} | "
+        )
         imgui.same_line()
         if self.plot.mouse_world:
-            imgui.text(f"Mouse: ({self.plot.mouse_world[0]:.4f}, {self.plot.mouse_world[1]:.4f}) | ")
+            imgui.text(
+                f"Mouse: ({self.plot.mouse_world[0]:.4f}, {self.plot.mouse_world[1]:.4f}) | "
+            )
             imgui.same_line()
-        
+
         imgui.text(f"Alpha: {self.options.default_global_alpha:.3f} | ")
         imgui.same_line()
-        
+
         mode = self.plot.interaction.drag_mode
         imgui.text_colored(f"Drag: {mode.upper()}", 1.0, 1.0, 0.4)
-        
+
         imgui.end()
 
     def _draw_layers_panel(self):
         imgui.set_next_window_size(300, 400, imgui.FIRST_USE_EVER)
         imgui.begin("Layers & Stacking", True)
-        
+
         imgui.text_disabled("Drag to reorder (List order = Render order)")
         imgui.separator()
-        
+
         layers = self.plot.scene.layers
         to_move = None
-        
+
         for i, layer in enumerate(layers):
             imgui.push_id(str(layer.layer_id))
-            
+
             # Visibility checkbox
             changed, visible = imgui.checkbox("##vis", layer.style.visible)
             if changed:
@@ -226,11 +263,11 @@ class HudManager:
                 layer.dirty.style_dirty = True
                 self.plot.frame.dirty_scene = True
                 self.plot.cache.refresh_requested = True
-            
+
             imgui.same_line()
-            
+
             # Layer Selectable (Drag Source/Target)
-            is_selected = (self.state.selected_layer_id == layer.layer_id)
+            is_selected = self.state.selected_layer_id == layer.layer_id
             layer_name = layer.label or layer.layer_type
             size_text = self._layer_size_text(layer)
             suffix = f" [{layer.layer_type}"
@@ -240,26 +277,26 @@ class HudManager:
             _, selected = imgui.selectable(f"{layer_name}{suffix}##{i}", is_selected)
             if selected:
                 self.state.selected_layer_id = layer.layer_id
-            
+
             # Drag and Drop Reordering
             if imgui.is_item_active() and not imgui.is_item_hovered():
                 # Potential drag start
                 pass
-            
+
             if imgui.begin_drag_drop_source():
                 imgui.set_drag_drop_payload("LAYER_ORDER", str(i).encode())
                 imgui.text(f"Moving {layer.label}...")
                 imgui.end_drag_drop_source()
-                
+
             if imgui.begin_drag_drop_target():
                 payload = imgui.accept_drag_drop_payload("LAYER_ORDER")
                 if payload:
                     src_idx = int(payload.decode())
                     to_move = (src_idx, i)
                 imgui.end_drag_drop_target()
-                
+
             imgui.pop_id()
-            
+
         if to_move:
             src, dst = to_move
             layer = layers.pop(src)
@@ -270,74 +307,107 @@ class HudManager:
         imgui.end()
 
     def _draw_layer_inspector(self):
-        if self.state.selected_layer_id is None: return
-        
-        layer = next((l for l in self.plot.scene.layers if l.layer_id == self.state.selected_layer_id), None)
-        if not layer: return
+        if self.state.selected_layer_id is None:
+            return
+
+        layer = next(
+            (l for l in self.plot.scene.layers if l.layer_id == self.state.selected_layer_id), None
+        )
+        if not layer:
+            return
 
         def _mark_dirty():
             layer.dirty.style_dirty = True
             self.plot.frame.dirty_scene = True
             self.plot.cache.refresh_requested = True
-        
+
         imgui.set_next_window_size(300, 300, imgui.FIRST_USE_EVER)
         imgui.begin("Layer Inspector", True)
-        
+
         imgui.text(f"ID: {layer.layer_id}")
         imgui.text(f"Type: {layer.layer_type.upper()}")
-        
+
         changed, label = imgui.input_text("Label", layer.label, 64)
-        if changed: layer.label = label
-        
+        if changed:
+            layer.label = label
+
         imgui.separator()
-        
+
         style = layer.style
         if imgui.collapsing_header("Style Properties", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
             # Alpha
             changed, alpha = imgui.slider_float("Alpha", style.alpha, 0.0, 1.0)
-            if changed: style.alpha = alpha; _mark_dirty()
-            
+            if changed:
+                style.alpha = alpha
+                _mark_dirty()
+
             # Color (if applicable)
             if style.color is not None:
                 changed, color = imgui.color_edit4("Primary Color", *style.color)
-                if changed: style.color = color; _mark_dirty()
-                
+                if changed:
+                    style.color = color
+                    _mark_dirty()
+
             # Line Width
             if layer.layer_type in ["polyline", "wireframe3d"]:
                 changed, lw = imgui.slider_float("Line Width", style.line_width, 0.1, 10.0)
-                if changed: style.line_width = lw; _mark_dirty()
-                
+                if changed:
+                    style.line_width = lw
+                    _mark_dirty()
+
             # Point Size
             if layer.layer_type in ["scatter", "scatter3d", "volume3d"]:
                 changed, ps = imgui.slider_float("Point Size", style.point_size, 1.0, 100.0)
-                if changed: style.point_size = ps; _mark_dirty()
-                
+                if changed:
+                    style.point_size = ps
+                    _mark_dirty()
+
                 imgui.separator()
                 imgui.text("Outline")
                 changed, out_en = imgui.checkbox("Enable Outline", style.point_outline_enabled)
-                if changed: style.point_outline_enabled = out_en; _mark_dirty()
-                
+                if changed:
+                    style.point_outline_enabled = out_en
+                    _mark_dirty()
+
                 changed, out_col = imgui.color_edit4("Outline Color", *style.point_outline_color)
-                if changed: style.point_outline_color = out_col; _mark_dirty()
-                
-                changed, out_w = imgui.slider_float("Outline Width", style.point_outline_width, 0.1, 5.0)
-                if changed: style.point_outline_width = out_w; _mark_dirty()
+                if changed:
+                    style.point_outline_color = out_col
+                    _mark_dirty()
+
+                changed, out_w = imgui.slider_float(
+                    "Outline Width", style.point_outline_width, 0.1, 5.0
+                )
+                if changed:
+                    style.point_outline_width = out_w
+                    _mark_dirty()
 
             if self._is_3d_layer(layer):
                 imgui.separator()
                 imgui.text("3D Camera")
                 camera = dict(layer.metadata.get("camera", {}))
-                changed, elev = imgui.slider_float("Elev", float(camera.get("elev", self.plot.view3d.get("elev", 28.0))), -90.0, 90.0)
+                changed, elev = imgui.slider_float(
+                    "Elev",
+                    float(camera.get("elev", self.plot.view3d.get("elev", 28.0))),
+                    -90.0,
+                    90.0,
+                )
                 if changed:
                     camera["elev"] = elev
                     layer.metadata["camera"] = camera
                     _mark_dirty()
-                changed, azim = imgui.slider_float("Azim", float(camera.get("azim", self.plot.view3d.get("azim", -45.0))), -180.0, 180.0)
+                changed, azim = imgui.slider_float(
+                    "Azim",
+                    float(camera.get("azim", self.plot.view3d.get("azim", -45.0))),
+                    -180.0,
+                    180.0,
+                )
                 if changed:
                     camera["azim"] = azim
                     layer.metadata["camera"] = camera
                     _mark_dirty()
-                changed, fov = imgui.slider_float("FOV", float(camera.get("fov", self.plot.view3d.get("fov", 42.0))), 15.0, 90.0)
+                changed, fov = imgui.slider_float(
+                    "FOV", float(camera.get("fov", self.plot.view3d.get("fov", 42.0))), 15.0, 90.0
+                )
                 if changed:
                     camera["fov"] = fov
                     layer.metadata["camera"] = camera
@@ -351,7 +421,7 @@ class HudManager:
                 layer.translation = (n_trans[0], n_trans[1])
                 self.plot.frame.dirty_scene = True
                 self.plot.cache.refresh_requested = True
-            
+
             if imgui.button("Reset Position"):
                 layer.translation = (0.0, 0.0)
                 self.plot.frame.dirty_scene = True
@@ -362,58 +432,70 @@ class HudManager:
     def _draw_render_panel(self):
         imgui.set_next_window_size(300, 450, imgui.FIRST_USE_EVER)
         imgui.begin("Render & Style", True)
-        
+
         if imgui.collapsing_header("Global Style", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
             ov = self.options.visual.overrides
             vis = self.options.visual
-            
+
             _, vis.background_color = imgui.color_edit3("Background Color", *vis.background_color)
             if imgui.is_item_deactivated_after_edit():
-                 self.plot.frame.dirty_scene = True
-            
+                self.plot.frame.dirty_scene = True
+
             changed, alpha = imgui.slider_float("Alpha Mult", ov.alpha_multiplier, 0.0, 2.0)
-            if changed: ov.alpha_multiplier = alpha; self.plot.frame.dirty_scene = True
-            
+            if changed:
+                ov.alpha_multiplier = alpha
+                self.plot.frame.dirty_scene = True
+
             changed, lw = imgui.slider_float("Line Width Mult", ov.line_width_multiplier, 0.1, 5.0)
-            if changed: ov.line_width_multiplier = lw; self.plot.frame.dirty_scene = True
-            
+            if changed:
+                ov.line_width_multiplier = lw
+                self.plot.frame.dirty_scene = True
+
             changed, ps = imgui.slider_float("Point Size Mult", ov.point_size_multiplier, 0.1, 5.0)
-            if changed: ov.point_size_multiplier = ps; self.plot.frame.dirty_scene = True
-            
+            if changed:
+                ov.point_size_multiplier = ps
+                self.plot.frame.dirty_scene = True
+
             # Blending Mode Dropdown
             from ..options import BlendMode
+
             items = [m.name for m in BlendMode]
             try:
                 current = items.index(self.options.blend_mode.name)
             except:
                 current = 0
-                
+
             imgui.push_item_width(120)
             changed, clicked = imgui.combo("Blending", current, items)
             if changed:
                 self.options.blend_mode = list(BlendMode)[clicked]
                 self.plot.frame.dirty_scene = True
             imgui.pop_item_width()
-            
+
             # Antialiasing Toggle
             changed, aa_en = imgui.checkbox("Antialiasing (SDF)", self.options.enable_antialiasing)
             if changed:
                 self.options.enable_antialiasing = aa_en
                 self.plot.frame.dirty_scene = True
-        
+
         if imgui.collapsing_header("Density Engine", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
             from ..utils.shaders import DENSITY_SCHEMES
-            
+
             # Mode Toggle
-            changed, den_en = imgui.checkbox("Enable Density Mode (Heatmap)", self.plot.display_density)
-            if changed: self.plot.set_density_enabled(den_en)
-            
+            changed, den_en = imgui.checkbox(
+                "Enable Density Mode (Heatmap)", self.plot.display_density
+            )
+            if changed:
+                self.plot.set_density_enabled(den_en)
+
             # Weighted Density Toggle
-            changed, weighted = imgui.checkbox("Weighted Accumulation", self.options.density_weighted)
+            changed, weighted = imgui.checkbox(
+                "Weighted Accumulation", self.options.density_weighted
+            )
             if changed:
                 self.options.density_weighted = weighted
                 self.plot.frame.dirty_scene = True
-            
+
             # Scheme Selection
             imgui.push_item_width(150)
             changed, idx = imgui.combo("Scheme", self.options.density_scheme_index, DENSITY_SCHEMES)
@@ -421,7 +503,7 @@ class HudManager:
                 self.options.density_scheme_index = idx
                 self.plot.frame.dirty_scene = True
             imgui.pop_item_width()
-            
+
             # Light BG Mode
             light_mode = getattr(self.options, "light_bg_mode", False)
             changed_bg, val_bg = imgui.checkbox("Light BG Mode", light_mode)
@@ -448,30 +530,38 @@ class HudManager:
                 self.options.density_light_to_color = val_ltc
                 self.plot.frame.dirty_scene = True
                 self.plot.frame.dirty_ui = True
-            
+
             # Gain and Scale
             imgui.push_item_width(180)
-            changed, gain = imgui.drag_float("Gain (Intensity)", self.options.density_gain, 1.0, 0.1, 10000.0, "%.1f")
-            if changed: self.options.density_gain = gain; self.plot.frame.dirty_scene = True
-            
+            changed, gain = imgui.drag_float(
+                "Gain (Intensity)", self.options.density_gain, 1.0, 0.1, 10000.0, "%.1f"
+            )
+            if changed:
+                self.options.density_gain = gain
+                self.plot.frame.dirty_scene = True
+
             is_log = getattr(self.options, "density_is_log", True)
             changed_log, val_log = imgui.checkbox("Logarithmic Scale", is_log)
             if changed_log:
                 self.options.density_is_log = val_log
                 self.plot.frame.dirty_scene = True
 
-            changed, res = imgui.slider_float("Inner Resolution", self.options.density_resolution_scale, 0.1, 1.0, "%.2f")
-            if changed: self.controller.set_density_resolution(res)
+            changed, res = imgui.slider_float(
+                "Inner Resolution", self.options.density_resolution_scale, 0.1, 1.0, "%.2f"
+            )
+            if changed:
+                self.controller.set_density_resolution(res)
             imgui.text_disabled("0.5x is 4x faster, 1.0x is sharpest")
             imgui.pop_item_width()
-            
+
             # Color Bar Preview
             imgui.text("Colormap Preview:")
             draw_list = imgui.get_window_draw_list()
             pos = imgui.get_cursor_screen_pos()
             w, h = 220, 18
-            
+
             from ..utils.shaders import eval_colormap
+
             is_inverted = getattr(self.options, "density_invert", False)
             ltc = getattr(self.options, "density_light_to_color", True)
             scheme_idx = self.options.density_scheme_index
@@ -488,11 +578,15 @@ class HudManager:
                         norm = 0.75 * v
                     else:
                         norm = v
-                
+
                 c = eval_colormap(scheme_idx, norm)
-                color = imgui.get_color_u32_rgba(max(0,min(1,c[0])), max(0,min(1,c[1])), max(0,min(1,c[2])), 1.0)
-                draw_list.add_rect_filled(pos.x + i*(w/20), pos.y, pos.x + (i+1)*(w/20), pos.y + h, color)
-            
+                color = imgui.get_color_u32_rgba(
+                    max(0, min(1, c[0])), max(0, min(1, c[1])), max(0, min(1, c[2])), 1.0
+                )
+                draw_list.add_rect_filled(
+                    pos.x + i * (w / 20), pos.y, pos.x + (i + 1) * (w / 20), pos.y + h, color
+                )
+
             imgui.dummy(w, h + 5)
 
         if hasattr(self.plot, "is_3d_scene") and self.plot.is_3d_scene():
@@ -501,19 +595,28 @@ class HudManager:
                 imgui.separator()
 
                 view = self.plot.view3d
-                changed, elev = imgui.slider_float("Elevation", float(view.get("elev", 28.0)), -90.0, 90.0)
-                if changed: self.controller.set_3d_view(elev=elev)
-                changed, azim = imgui.slider_float("Azimuth", float(view.get("azim", -45.0)), -180.0, 180.0)
-                if changed: self.controller.set_3d_view(azim=azim)
+                changed, elev = imgui.slider_float(
+                    "Elevation", float(view.get("elev", 28.0)), -90.0, 90.0
+                )
+                if changed:
+                    self.controller.set_3d_view(elev=elev)
+                changed, azim = imgui.slider_float(
+                    "Azimuth", float(view.get("azim", -45.0)), -180.0, 180.0
+                )
+                if changed:
+                    self.controller.set_3d_view(azim=azim)
                 changed, fov = imgui.slider_float("FOV", float(view.get("fov", 42.0)), 15.0, 90.0)
-                if changed: self.controller.set_3d_view(fov=fov)
+                if changed:
+                    self.controller.set_3d_view(fov=fov)
 
                 dist = view.get("distance")
                 if dist is None:
                     imgui.text_disabled("Distance: auto  (scroll to control)")
                 else:
                     dist_max = max(float(dist) * 8.0, 10.0)
-                    changed, dist_val = imgui.slider_float("Distance##3d", float(dist), 0.001, dist_max)
+                    changed, dist_val = imgui.slider_float(
+                        "Distance##3d", float(dist), 0.001, dist_max
+                    )
                     if changed:
                         self.controller.set_3d_view(distance=max(0.001, dist_val))
                     imgui.same_line()
@@ -526,8 +629,11 @@ class HudManager:
                             layer.dirty.style_dirty = True
                         self.plot.frame.dirty_scene = True
 
-                changed, show_axes = imgui.checkbox("Show 3D Axes", bool(view.get("show_axes", True)))
-                if changed: self.controller.set_3d_view(show_axes=show_axes)
+                changed, show_axes = imgui.checkbox(
+                    "Show 3D Axes", bool(view.get("show_axes", True))
+                )
+                if changed:
+                    self.controller.set_3d_view(show_axes=show_axes)
                 if imgui.button("Reset 3D View"):
                     self.controller.reset_3d_view()
                 imgui.same_line()
@@ -551,43 +657,62 @@ class HudManager:
                     self.plot.frame.dirty_scene = True
 
         if imgui.collapsing_header("Plot Framework", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
-            _, self.options.axis_show_grid = imgui.checkbox("Show Grid", self.options.axis_show_grid)
+            _, self.options.axis_show_grid = imgui.checkbox(
+                "Show Grid", self.options.axis_show_grid
+            )
             if self.options.axis_show_grid:
                 imgui.same_line()
                 imgui.push_item_width(100)
-                _, self.options.axis_grid_alpha = imgui.slider_float("Alpha##Grid", self.options.axis_grid_alpha, 0.0, 1.0)
+                _, self.options.axis_grid_alpha = imgui.slider_float(
+                    "Alpha##Grid", self.options.axis_grid_alpha, 0.0, 1.0
+                )
                 imgui.pop_item_width()
-                
+
                 imgui.indent(10)
-                _, self.options.axis_grid_color = imgui.color_edit3("Grid Color", *self.options.axis_grid_color)
+                _, self.options.axis_grid_color = imgui.color_edit3(
+                    "Grid Color", *self.options.axis_grid_color
+                )
                 imgui.unindent(10)
-                
-            _, self.options.axis_show_labels = imgui.checkbox("Show Scale (Labels)", self.options.axis_show_labels)
-            _, self.options.axis_show_frame = imgui.checkbox("Show Framework", self.options.axis_show_frame)
+
+            _, self.options.axis_show_labels = imgui.checkbox(
+                "Show Scale (Labels)", self.options.axis_show_labels
+            )
+            _, self.options.axis_show_frame = imgui.checkbox(
+                "Show Framework", self.options.axis_show_frame
+            )
 
         if imgui.collapsing_header("LOD Configuration", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
             changed, lod_en = imgui.checkbox("LOD Enabled (Sub-sampling)", self.options.lod_enabled)
-            if changed: self.controller.set_lod_enabled(lod_en)
+            if changed:
+                self.controller.set_lod_enabled(lod_en)
 
             if self.options.lod_enabled:
                 imgui.push_item_width(180)
                 # Range 0.1 to 500.0 covers from very sparse to extreme fidelity (overkill)
-                changed, budget = imgui.slider_float("Complexity Budget", self.options.lod_target_coverage, 0.1, 500.0, "%.2f")
-                if changed: self.controller.set_lod_budget(budget)
+                changed, budget = imgui.slider_float(
+                    "Complexity Budget", self.options.lod_target_coverage, 0.1, 500.0, "%.2f"
+                )
+                if changed:
+                    self.controller.set_lod_budget(budget)
                 imgui.pop_item_width()
                 imgui.text_disabled("Higher = More detail, lower FPS")
-                
 
         if imgui.collapsing_header("Visual Effects", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
             v = self.options.visual
-            
+
             # --- Background ---
             if imgui.tree_node("Gradient Background", imgui.TREE_NODE_DEFAULT_OPEN):
-                _, v.gradient_background.enabled = imgui.checkbox("Enabled##BG", v.gradient_background.enabled)
-                _, v.gradient_background.top_color = imgui.color_edit3("Top Color", *v.gradient_background.top_color)
-                _, v.gradient_background.bottom_color = imgui.color_edit3("Bottom Color", *v.gradient_background.bottom_color)
+                _, v.gradient_background.enabled = imgui.checkbox(
+                    "Enabled##BG", v.gradient_background.enabled
+                )
+                _, v.gradient_background.top_color = imgui.color_edit3(
+                    "Top Color", *v.gradient_background.top_color
+                )
+                _, v.gradient_background.bottom_color = imgui.color_edit3(
+                    "Bottom Color", *v.gradient_background.bottom_color
+                )
                 imgui.tree_pop()
-            
+
             # --- Bloom ---
             if imgui.tree_node("Bloom / Glow", imgui.TREE_NODE_DEFAULT_OPEN):
                 _, v.glow.enabled = imgui.checkbox("Enabled##Bloom", v.glow.enabled)
@@ -607,39 +732,50 @@ class HudManager:
             self.state.show_profiler = False
             imgui.end()
             return
-        
+
         if expanded:
             # 1. Performance Overview
             imgui.text_colored("PERFORMANCE OVERVIEW", 0.3, 0.8, 1.0)
             if self.state.cpu_frame_times:
                 avg_ms = sum(self.state.cpu_frame_times) / len(self.state.cpu_frame_times) * 1000.0
                 imgui.text(f"Avg CPU Frame: {avg_ms:5.2f} ms ({1000.0/avg_ms:.1f} FPS)")
-                
+
                 # Sparkline
                 import numpy as np
+
                 history = np.array(self.state.cpu_frame_times, dtype=np.float32)
-                imgui.plot_lines("##FPSGraph", history, overlay_text="", 
-                                 scale_min=0, scale_max=0.033, graph_size=(0, 50))
-            
+                imgui.plot_lines(
+                    "##FPSGraph",
+                    history,
+                    overlay_text="",
+                    scale_min=0,
+                    scale_max=0.033,
+                    graph_size=(0, 50),
+                )
+
             imgui.separator()
-            
+
             # 2. Rendering Pipelines Detailed Timings
             imgui.text_colored("SUB-OPERATION TIMINGS", 0.3, 0.8, 1.0)
             for k, v in sorted(self.state.gpu_timings.items()):
                 imgui.text(f" - {k}: {v*1000.0:5.2f} ms")
-            
+
             imgui.separator()
 
             # 3. Engine State & Statistics
             imgui.text_colored("ENGINE STATISTICS", 0.3, 0.8, 1.0)
             mode_str = self.plot.policy.runtime.current_mode.name
             imgui.text(f"Render Mode: {mode_str}")
-            
-            sleep_str = "SLEEPING (Reactive)" if self.plot.options.reactive_rendering and not self.plot.hud.state.show_profiler else "ACTIVE Redrawing"
+
+            sleep_str = (
+                "SLEEPING (Reactive)"
+                if self.plot.options.reactive_rendering and not self.plot.hud.state.show_profiler
+                else "ACTIVE Redrawing"
+            )
             imgui.text(f"Gating Loop: {sleep_str}")
-            
+
             imgui.text(f"Total Lines: {self.plot.scene.lines.count:,}")
-            
+
             win = self.plot.camera_controller.world_window(self.plot.width, self.plot.height)
             imgui.text(f"X range: [{win[0]:.2f}, {win[1]:.2f}]")
             imgui.text(f"Y range: [{win[2]:.2f}, {win[3]:.2f}]")
@@ -649,7 +785,7 @@ class HudManager:
     def _draw_selection_panel(self):
         imgui.set_next_window_size(250, 180, imgui.FIRST_USE_EVER)
         imgui.begin("Selection Info", True)
-        
+
         info = self.state.selected_object
         imgui.text_colored(f"Type: {info.get('type', 'N/A').upper()}", 1.0, 0.8, 0.4)
         imgui.text(f"Dataset: {info.get('dataset_idx', 0)}")
@@ -657,27 +793,28 @@ class HudManager:
         imgui.separator()
         imgui.text(f"X: {info.get('x', 0.0):.6f}")
         imgui.text(f"Y: {info.get('y', 0.0):.6f}")
-        
-        if imgui.button("Isolate"): 
+
+        if imgui.button("Isolate"):
             # Logic later
             pass
         imgui.same_line()
-        if imgui.button("Reset"): self.state.selected_object = None
+        if imgui.button("Reset"):
+            self.state.selected_object = None
 
         imgui.end()
 
     def _draw_analysis_panel(self):
         imgui.set_next_window_size(400, 300, imgui.FIRST_USE_EVER)
         imgui.begin("Analysis (Sampled)", True)
-        
+
         if self.state.sampled_histogram_a is not None:
             imgui.text("Slope (a) Distribution")
             imgui.plot_histogram("##HistA", self.state.sampled_histogram_a, graph_size=(0, 80))
-            
+
         if self.state.sampled_histogram_b is not None:
             imgui.text("Intercept (b) Distribution")
             imgui.plot_histogram("##HistB", self.state.sampled_histogram_b, graph_size=(0, 80))
-            
+
         imgui.end()
 
     def end(self) -> None:

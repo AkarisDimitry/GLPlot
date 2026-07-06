@@ -11,6 +11,7 @@ Controls: Click & drag to pan, scroll to zoom infinitely
 import numpy as np
 import glplot.pyplot as plt
 
+
 def mandelbrot_set(xmin, xmax, ymin, ymax, width, height, max_iter=40):
     """Compute Mandelbrot set for given region"""
     x = np.linspace(xmin, xmax, width)
@@ -23,10 +24,11 @@ def mandelbrot_set(xmin, xmax, ymin, ymax, width, height, max_iter=40):
 
     for i in range(max_iter):
         mask = np.abs(Z) <= 2
-        Z[mask] = Z[mask]**2 + C[mask]
+        Z[mask] = Z[mask] ** 2 + C[mask]
         M[mask] = i
 
     return M
+
 
 # Render Mandelbrot set (300k points)
 width, height = 600, 600

@@ -4,7 +4,6 @@ from pathlib import Path
 import glplot.pyplot as _gplt
 from glplot.engine import GPULinePlot
 
-
 EXPECTED_FILES = [
     "01_line_plot.png",
     "02_scatter_fill.png",

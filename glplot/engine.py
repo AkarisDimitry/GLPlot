@@ -9,11 +9,24 @@ from OpenGL.GL import *
 from .options import EngineOptions, RenderMode, BlendMode
 from .policy import RenderPolicyManager
 from .core.legacy import (
-    SceneData, CameraState, InteractionState, 
-    CacheState, FrameState, LineDataset, 
-    ScatterDataset, StripDataset
+    SceneData,
+    CameraState,
+    InteractionState,
+    CacheState,
+    FrameState,
+    LineDataset,
+    ScatterDataset,
+    StripDataset,
 )
-from .core.layers import BaseLayer, LineFamilyLayer, ScatterLayer, PolylineLayer, PatchLayer, TextLayer, Layer3D
+from .core.layers import (
+    BaseLayer,
+    LineFamilyLayer,
+    ScatterLayer,
+    PolylineLayer,
+    PatchLayer,
+    TextLayer,
+    Layer3D,
+)
 from .core.context import RenderContext
 from .controllers import CameraController
 from .renderers.exact import ExactLineRenderer
@@ -29,8 +42,16 @@ from .managers.axis import AxisManager
 
 
 class GPULinePlot:
-    def __init__(self, width: int = 1280, height: int = 800, title: str = "GLPlot", options: Optional[EngineOptions] = None):
-        self.options = options or EngineOptions(window_width=width, window_height=height, title=title)
+    def __init__(
+        self,
+        width: int = 1280,
+        height: int = 800,
+        title: str = "GLPlot",
+        options: Optional[EngineOptions] = None,
+    ):
+        self.options = options or EngineOptions(
+            window_width=width, window_height=height, title=title
+        )
         self.policy = RenderPolicyManager(self.options)
         self.scene = SceneData()
         self.camera = CameraState()
@@ -69,11 +90,11 @@ class GPULinePlot:
             "distance": None,
             "show_axes": True,
         }
-        
+
         self.picked_info: Optional[dict] = None
         self.mouse_world: Optional[Tuple[float, float]] = None
         self._last_perf_t = time.perf_counter()
-        
+
         self.effects = EffectManager(self)
         self._shim_cache: Dict[str, BaseLayer] = {}
         self._apply_background_mode()
@@ -134,15 +155,17 @@ class GPULinePlot:
 
     def _is_pure_3d_scene(self) -> bool:
         """True when all visible data layers are 3D — no 2D axis overlay should be drawn."""
-        data_layers = [l for l in self.scene.layers
-                       if l.metadata.get("artist") not in self._SYSTEM_3D_ARTISTS]
+        data_layers = [
+            l for l in self.scene.layers if l.metadata.get("artist") not in self._SYSTEM_3D_ARTISTS
+        ]
         return bool(data_layers) and all(
             getattr(l, "layer_type", "").endswith("3d") for l in data_layers
         )
 
     def get_3d_layers(self) -> list[Layer3D]:
         return [
-            layer for layer in self.scene.layers
+            layer
+            for layer in self.scene.layers
             if isinstance(layer, Layer3D)
             and layer.metadata.get("artist") not in self._SYSTEM_3D_ARTISTS
         ]
@@ -198,7 +221,13 @@ class GPULinePlot:
         for layer in self.scene.layers:
             if isinstance(layer, Layer3D):
                 camera = dict(layer.metadata.get("camera", {}))
-                camera.update({k: v for k, v in self.view3d.items() if k in {"elev", "azim", "fov", "distance"} and v is not None})
+                camera.update(
+                    {
+                        k: v
+                        for k, v in self.view3d.items()
+                        if k in {"elev", "azim", "fov", "distance"} and v is not None
+                    }
+                )
                 if bounds is not None:
                     dx = max(bounds[1] - bounds[0], 1e-6)
                     dy = max(bounds[3] - bounds[2], 1e-6)
@@ -212,8 +241,11 @@ class GPULinePlot:
         if self.view3d["show_axes"]:
             self.ensure_3d_axes()
         else:
-            self.scene.layers = [l for l in self.scene.layers
-                                  if l.metadata.get("artist") not in self._SYSTEM_3D_ARTISTS]
+            self.scene.layers = [
+                l
+                for l in self.scene.layers
+                if l.metadata.get("artist") not in self._SYSTEM_3D_ARTISTS
+            ]
         self.frame.dirty_scene = True
         self.cache.refresh_requested = True
 
@@ -253,37 +285,67 @@ class GPULinePlot:
 
         vertices = np.array(
             [
-                [xmin, ymin, zmin], [xmax, ymin, zmin],
-                [xmin, ymin, zmin], [xmin, ymax, zmin],
-                [xmin, ymin, zmin], [xmin, ymin, zmax],
-                [xmax, ymin, zmin], [xmax, ymax, zmin],
-                [xmax, ymin, zmin], [xmax, ymin, zmax],
-                [xmin, ymax, zmin], [xmax, ymax, zmin],
-                [xmin, ymax, zmin], [xmin, ymax, zmax],
-                [xmin, ymin, zmax], [xmax, ymin, zmax],
-                [xmin, ymin, zmax], [xmin, ymax, zmax],
-                [xmax, ymax, zmin], [xmax, ymax, zmax],
-                [xmax, ymin, zmax], [xmax, ymax, zmax],
-                [xmin, ymax, zmax], [xmax, ymax, zmax],
+                [xmin, ymin, zmin],
+                [xmax, ymin, zmin],
+                [xmin, ymin, zmin],
+                [xmin, ymax, zmin],
+                [xmin, ymin, zmin],
+                [xmin, ymin, zmax],
+                [xmax, ymin, zmin],
+                [xmax, ymax, zmin],
+                [xmax, ymin, zmin],
+                [xmax, ymin, zmax],
+                [xmin, ymax, zmin],
+                [xmax, ymax, zmin],
+                [xmin, ymax, zmin],
+                [xmin, ymax, zmax],
+                [xmin, ymin, zmax],
+                [xmax, ymin, zmax],
+                [xmin, ymin, zmax],
+                [xmin, ymax, zmax],
+                [xmax, ymax, zmin],
+                [xmax, ymax, zmax],
+                [xmax, ymin, zmax],
+                [xmax, ymax, zmax],
+                [xmin, ymax, zmax],
+                [xmax, ymax, zmax],
             ],
             dtype=np.float32,
         )
         box_col = np.array([0.82, 0.88, 1.0, 0.50], dtype=np.float32)
         colors = np.tile(box_col, (len(vertices), 1))
 
-        camera = {k: v for k, v in self.view3d.items() if k in {"elev", "azim", "fov", "distance"} and v is not None}
+        camera = {
+            k: v
+            for k, v in self.view3d.items()
+            if k in {"elev", "azim", "fov", "distance"} and v is not None
+        }
         camera.setdefault("distance", max(dx, dy, dz) * 3.0)
 
         # --- Floor plane (drawn first, behind all data) ---
-        floor_verts = np.array([
-            [xmin, ymin, zmin], [xmax, ymin, zmin], [xmax, ymax, zmin],
-            [xmin, ymin, zmin], [xmax, ymax, zmin], [xmin, ymax, zmin],
-        ], dtype=np.float32)
+        floor_verts = np.array(
+            [
+                [xmin, ymin, zmin],
+                [xmax, ymin, zmin],
+                [xmax, ymax, zmin],
+                [xmin, ymin, zmin],
+                [xmax, ymax, zmin],
+                [xmin, ymax, zmin],
+            ],
+            dtype=np.float32,
+        )
         floor_color = np.tile(np.array([0.58, 0.64, 0.76, 0.09], dtype=np.float32), (6, 1))
-        existing_floor = next((l for l in self.scene.layers if l.metadata.get("artist") == "floor3d"), None)
+        existing_floor = next(
+            (l for l in self.scene.layers if l.metadata.get("artist") == "floor3d"), None
+        )
         if existing_floor is None:
-            existing_floor = Layer3D(vertices=floor_verts, colors=floor_color,
-                                     primitive="triangles", label="3D floor", layer_type="wireframe3d")
+            existing_floor = Layer3D(
+                vertices=floor_verts,
+                colors=floor_color,
+                primitive="triangles",
+                label="3D floor",
+                layer_type="wireframe3d",
+            )
             existing_floor.metadata["artist"] = "floor3d"
             self.scene.layers.insert(0, existing_floor)
         else:
@@ -294,10 +356,17 @@ class GPULinePlot:
         existing_floor.metadata["scene_bounds"] = padded_bounds
 
         # --- Bounding-box wireframe (drawn last, always on top) ---
-        existing = next((l for l in self.scene.layers if l.metadata.get("artist") == "axis3d"), None)
+        existing = next(
+            (l for l in self.scene.layers if l.metadata.get("artist") == "axis3d"), None
+        )
         if existing is None:
-            existing = Layer3D(vertices=vertices, colors=colors, primitive="lines",
-                               label="3D axes", layer_type="wireframe3d")
+            existing = Layer3D(
+                vertices=vertices,
+                colors=colors,
+                primitive="lines",
+                label="3D axes",
+                layer_type="wireframe3d",
+            )
             existing.metadata["artist"] = "axis3d"
             existing.style.line_width = 2.2
             self.scene.layers.append(existing)
@@ -322,8 +391,14 @@ class GPULinePlot:
 
         return existing
 
-    def set_lines_ab(self, ab: np.ndarray, x_range=(-3.0, 3.0), colors: Optional[np.ndarray] = None, label: Optional[str] = None) -> None:
-        ab   = np.ascontiguousarray(ab, np.float32)
+    def set_lines_ab(
+        self,
+        ab: np.ndarray,
+        x_range=(-3.0, 3.0),
+        colors: Optional[np.ndarray] = None,
+        label: Optional[str] = None,
+    ) -> None:
+        ab = np.ascontiguousarray(ab, np.float32)
         cols = None if colors is None else np.ascontiguousarray(colors, np.float32)
         x_range = (float(x_range[0]), float(x_range[1]))
 
@@ -337,35 +412,49 @@ class GPULinePlot:
         existing = getattr(self, "_primary_line_layer", None)
         if existing is None:
             layer_label = label or "Lines"
-            existing = LineFamilyLayer(
-                ab=ab, colors=cols, x_range=x_range, label=layer_label
-            )
+            existing = LineFamilyLayer(ab=ab, colors=cols, x_range=x_range, label=layer_label)
             self._primary_line_layer = existing
-            self.scene.layers.insert(0, existing)   # lines always render first
+            self.scene.layers.insert(0, existing)  # lines always render first
         else:
             # Update data in-place so the GPU buffers are refreshed next frame
-            existing.ab      = ab
-            existing.colors  = cols
+            existing.ab = ab
+            existing.colors = cols
             existing.x_range = x_range
             existing.dirty.gpu_dirty = True
             if label:
                 existing.label = label
 
         self.frame.dirty_scene = True
-        self.frame.dirty_pick  = True
+        self.frame.dirty_pick = True
         if self.exact_renderer.buffers.vao:
             self.exact_renderer.upload(self.scene.lines)
 
-    def add_text(self, x: float, y: float, text: str, fontsize: int = 12, color: Optional[Any] = None, label: Optional[str] = None) -> None:
+    def add_text(
+        self,
+        x: float,
+        y: float,
+        text: str,
+        fontsize: int = 12,
+        color: Optional[Any] = None,
+        label: Optional[str] = None,
+    ) -> None:
         layer_label = label or f"Text: {text[:10]}"
         layer = TextLayer(x=x, y=y, text=text, label=layer_label)
         layer.style.text_size_px = fontsize
-        if color is not None: layer.style.color = color
+        if color is not None:
+            layer.style.color = color
         self.scene.layers.append(layer)
         self.scene.texts.append({"x": x, "y": y, "str": text, "fontsize": fontsize, "color": color})
         self.frame.dirty_ui = True
 
-    def add_scatter(self, x: np.ndarray, y: np.ndarray, colors: np.ndarray, size: float = 6.0, label: Optional[str] = None) -> None:
+    def add_scatter(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        colors: np.ndarray,
+        size: float = 6.0,
+        label: Optional[str] = None,
+    ) -> None:
         pts = np.column_stack([x, y]).astype(np.float32)
         cols = np.ascontiguousarray(colors, np.float32)
         layer_label = label or f"Scatter {len(self.scene.layers)}"
@@ -374,7 +463,14 @@ class GPULinePlot:
         self.scene.scatters.append(ScatterDataset(pts=pts, colors=cols, size=size))
         self.frame.dirty_scene = True
 
-    def add_line_strip(self, x: np.ndarray, y: np.ndarray, color: Tuple[float, float, float, float] = (0,0,0,1), width: float = 1.0, label: Optional[str] = None) -> None:
+    def add_line_strip(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        color: Tuple[float, float, float, float] = (0, 0, 0, 1),
+        width: float = 1.0,
+        label: Optional[str] = None,
+    ) -> None:
         pts = np.column_stack([x, y]).astype(np.float32)
         layer_label = label or f"Polyline {len(self.scene.layers)}"
         layer = PolylineLayer(pts=pts, color=color, width=width, label=layer_label)
@@ -382,11 +478,21 @@ class GPULinePlot:
         self.scene.strips.append(StripDataset(pts=pts, color=color))
         self.frame.dirty_scene = True
 
-    def add_patch(self, vertices: np.ndarray, indices: Optional[np.ndarray] = None, mode: str = "strip", face_color: Optional[Tuple] = None, edge_color: Optional[Tuple] = None, label: Optional[str] = None) -> None:
+    def add_patch(
+        self,
+        vertices: np.ndarray,
+        indices: Optional[np.ndarray] = None,
+        mode: str = "strip",
+        face_color: Optional[Tuple] = None,
+        edge_color: Optional[Tuple] = None,
+        label: Optional[str] = None,
+    ) -> None:
         layer_label = label or f"Patch {len(self.scene.layers)}"
         layer = PatchLayer(vertices=vertices, indices=indices, mode=mode, label=layer_label)
-        if face_color is not None: layer.style.face_color = face_color
-        if edge_color is not None: layer.style.edge_color = edge_color
+        if face_color is not None:
+            layer.style.face_color = face_color
+        if edge_color is not None:
+            layer.style.edge_color = edge_color
         self.scene.layers.append(layer)
         self.frame.dirty_scene = True
 
@@ -411,12 +517,16 @@ class GPULinePlot:
         self.cache.refresh_requested = True
 
     def next_density_scheme(self) -> None:
-        self.options.density_scheme_index = (self.options.density_scheme_index + 1) % len(DENSITY_SCHEMES)
+        self.options.density_scheme_index = (self.options.density_scheme_index + 1) % len(
+            DENSITY_SCHEMES
+        )
         self.frame.dirty_scene = True
         self.cache.refresh_requested = True
 
     def previous_density_scheme(self) -> None:
-        self.options.density_scheme_index = (self.options.density_scheme_index - 1) % len(DENSITY_SCHEMES)
+        self.options.density_scheme_index = (self.options.density_scheme_index - 1) % len(
+            DENSITY_SCHEMES
+        )
         self.frame.dirty_scene = True
         self.cache.refresh_requested = True
 
@@ -428,7 +538,9 @@ class GPULinePlot:
         self.density_renderer.rebuild_target(self.fb_width, self.fb_height)
         self.frame.dirty_scene = True
 
-    def set_view(self, xlim: Optional[Tuple[float, float]] = None, ylim: Optional[Tuple[float, float]] = None) -> None:
+    def set_view(
+        self, xlim: Optional[Tuple[float, float]] = None, ylim: Optional[Tuple[float, float]] = None
+    ) -> None:
         """
         Sets the world-space view limits, mimicking Matplotlib's xlim/ylim.
         Allows independent scaling of X and Y axes (unforcing 1:1 data aspect).
@@ -438,13 +550,9 @@ class GPULinePlot:
 
         tx = xlim if xlim is not None else self.get_xlim()
         ty = ylim if ylim is not None else self.get_ylim()
-        
-        self.camera_controller.fit_bounds(
-            tx[0], tx[1], 
-            ty[0], ty[1], 
-            self.width, self.height
-        )
-        
+
+        self.camera_controller.fit_bounds(tx[0], tx[1], ty[0], ty[1], self.width, self.height)
+
         self._needs_initial_autoscale = False
         # Flush interaction cache on manual view changes
         self.cache.active = False
@@ -469,34 +577,36 @@ class GPULinePlot:
             mapping = {
                 "auto": BlendMode.AUTO,
                 "alpha": BlendMode.ALPHA,
-                "on": BlendMode.ALPHA, # Legacy shim
+                "on": BlendMode.ALPHA,  # Legacy shim
                 "additive": BlendMode.ADDITIVE,
                 "subtractive": BlendMode.SUBTRACTIVE,
                 "screen": BlendMode.SCREEN,
-                "off": BlendMode.OFF
+                "off": BlendMode.OFF,
             }
             m = mode.lower()
             if m not in mapping:
-                raise ValueError("blend mode must be 'auto', 'alpha', 'additive', 'subtractive', 'screen', or 'off'")
+                raise ValueError(
+                    "blend mode must be 'auto', 'alpha', 'additive', 'subtractive', 'screen', or 'off'"
+                )
             mode = mapping[m]
-            
+
         self.options.blend_mode = mode
         self.frame.dirty_scene = True
 
     def cycle_blending_mode(self) -> None:
         modes = [
-            BlendMode.AUTO, 
-            BlendMode.ALPHA, 
-            BlendMode.ADDITIVE, 
-            BlendMode.SUBTRACTIVE, 
-            BlendMode.SCREEN, 
-            BlendMode.OFF
+            BlendMode.AUTO,
+            BlendMode.ALPHA,
+            BlendMode.ADDITIVE,
+            BlendMode.SUBTRACTIVE,
+            BlendMode.SCREEN,
+            BlendMode.OFF,
         ]
         try:
             current_idx = modes.index(self.options.blend_mode)
         except ValueError:
             current_idx = 0
-            
+
         idx = (current_idx + 1) % len(modes)
         self.options.blend_mode = modes[idx]
         self.frame.dirty_scene = True
@@ -507,25 +617,24 @@ class GPULinePlot:
         Applies a performance preset.
         Options: 'extreme', 'performance', 'balanced', 'quality'.
         """
-        if name == 'extreme':
+        if name == "extreme":
             self.options.default_line_budget_per_px = 0.5
             self.options.interaction_budget_lines_per_screen_px = 1.0
             self.options.enable_cache_interaction_path = True
             self.options.cache_safe_margin = 0.4
-        elif name == 'performance':
+        elif name == "performance":
             self.options.default_line_budget_per_px = 1.0
             self.options.interaction_budget_lines_per_screen_px = 2.0
             self.options.enable_cache_interaction_path = True
-        elif name == 'balanced':
+        elif name == "balanced":
             self.options.default_line_budget_per_px = 5.0
             self.options.interaction_budget_lines_per_screen_px = 5.0
             self.options.enable_cache_interaction_path = True
-        elif name == 'quality':
+        elif name == "quality":
             self.options.default_line_budget_per_px = 20.0
             self.options.interaction_budget_lines_per_screen_px = 20.0
             self.options.enable_cache_interaction_path = False
         self.frame.dirty_scene = True
-
 
     def _get_all_layers(self) -> List[BaseLayer]:
         """
@@ -542,30 +651,29 @@ class GPULinePlot:
         """
         layers = self._get_all_layers()
         bounds = self.renderer_manager.get_bounds(layers)
-        
+
         if bounds is None:
-             if axes == "both":
-                 self.camera_controller.reset_view()
-             return
+            if axes == "both":
+                self.camera_controller.reset_view()
+            return
 
         xmin, xmax, ymin, ymax = bounds
-        
+
         # Apply fractional padding
         dx = (xmax - xmin) * padding
         dy = (ymax - ymin) * padding
-        
+
         # Sane defaults: only apply a fixed buffer if the original data span is zero
         # to prevent division by zero in camera projection.
-        if (xmax - xmin) < 1e-9: dx = 0.5
-        if (ymax - ymin) < 1e-9: dy = 0.5
-        
+        if (xmax - xmin) < 1e-9:
+            dx = 0.5
+        if (ymax - ymin) < 1e-9:
+            dy = 0.5
+
         self.camera_controller.fit_bounds(
-            xmin - dx, xmax + dx, 
-            ymin - dy, ymax + dy, 
-            self.width, self.height,
-            axes=axes
+            xmin - dx, xmax + dx, ymin - dy, ymax + dy, self.width, self.height, axes=axes
         )
-        
+
         self._needs_initial_autoscale = False
         self.cache.active = False
         self.frame.dirty_scene = True
@@ -615,7 +723,7 @@ class GPULinePlot:
 
     def get_density_array(self) -> np.ndarray:
         """
-        Read back the accumulated density values from the GPU framebuffer texture 
+        Read back the accumulated density values from the GPU framebuffer texture
         and return them as a 2D numpy array of shape (height, width).
         """
         if self.window:
@@ -666,7 +774,7 @@ class GPULinePlot:
     def _init_gl(self) -> None:
         glViewport(0, 0, self.fb_width, self.fb_height)
         glClearColor(1.0, 1.0, 1.0, 1.0)
-        
+
         # Clipping Optimizations (Must be enabled for shaders to work correctly)
         if self.options.enable_clipping_optimization:
             for i in range(4):
@@ -708,11 +816,14 @@ class GPULinePlot:
     def _update_runtime_policy(self) -> None:
         prev_mode = self.policy.runtime.current_mode
         self.policy.update(self.scene, self.interaction, self.cache)
-        if prev_mode == RenderMode.INTERACTIVE and self.policy.runtime.current_mode == RenderMode.EXACT:
+        if (
+            prev_mode == RenderMode.INTERACTIVE
+            and self.policy.runtime.current_mode == RenderMode.EXACT
+        ):
             self.frame.dirty_scene = True
         if self.hud.state.show_profiler:
             self.policy.runtime.hud_enabled_this_frame = True
-            
+
     def _apply_background_mode(self) -> None:
         """Apply style overrides for background, axes, and grid based on light_bg_mode."""
         if getattr(self.options, "light_bg_mode", False):
@@ -736,18 +847,18 @@ class GPULinePlot:
         Ensures visibility on High-DPI displays while preventing saturation on dense datasets.
         """
         base_alpha = self.options.default_global_alpha
-        
+
         if self.options.enable_auto_alpha and count > 1000:
             scale_factor = math.sqrt(count / 1000.0)
             # Unified Floor at 0.15 to ensure visibility
             base_alpha = max(0.15, base_alpha / scale_factor)
-        
+
         # High-DPI (Retina) compensation: single-pixel lines are physically thinner,
         # so we boost alpha to maintain perceived weight.
         dpr = self.fb_width / max(self.width, 1)
         if dpr > 1.1:
             base_alpha = min(1.0, base_alpha * 1.5)
-            
+
         return float(base_alpha)
 
     def _compute_lod_keep_prob(self) -> float:
@@ -774,12 +885,14 @@ class GPULinePlot:
             global_alpha=self.options.default_global_alpha,
             lod_keep_prob=1.0,
             is_density=self.display_density,
-            time=time.perf_counter()
+            time=time.perf_counter(),
         )
-        
+
         return self.policy.calculate_width_aware_lod(self.scene, ctx)
 
-    def _get_ndc_transform(self, window: Tuple[float, float, float, float]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    def _get_ndc_transform(
+        self, window: Tuple[float, float, float, float]
+    ) -> Tuple[Tuple[float, float], Tuple[float, float]]:
         """Calculate scale and offset to transform world coordinates to NDC [-1, 1]."""
         l, r, b, t = window
         rl = r - l
@@ -796,9 +909,10 @@ class GPULinePlot:
             return
 
         glEnable(GL_BLEND)
-        glBlendEquation(GL_FUNC_ADD) # Default reset
+        glBlendEquation(GL_FUNC_ADD)  # Default reset
 
         from .options import BlendMode
+
         m = self.options.blend_mode
         if m == BlendMode.ALPHA or m == BlendMode.AUTO:
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -817,7 +931,7 @@ class GPULinePlot:
     def _draw_exact_view(self) -> None:
         t_start = time.perf_counter()
         self._apply_blending_policy()
-        
+
         # 1. Prepare RenderContext for this frame
         mvp = self.camera_controller.mvp(self.width, self.height)
         window = self.camera_controller.world_window(self.width, self.height)
@@ -840,7 +954,7 @@ class GPULinePlot:
             global_alpha=base_alpha,
             lod_keep_prob=prob,
             is_density=self.display_density,
-            time=time.perf_counter()
+            time=time.perf_counter(),
         )
 
         # 2. Draw using the new RendererManager (Modular Architecture)
@@ -850,15 +964,15 @@ class GPULinePlot:
         if not self._is_pure_3d_scene():
             self.axis_manager.update(ctx)
             self.renderer_manager.draw_axes(self.axis_manager, ctx)
-        
+
         if self.display_density:
-             # Modular Density Pass (Lines, Scatters)
-             current_fbo = int(glGetIntegerv(GL_FRAMEBUFFER_BINDING))
-             self.renderer_manager.draw_density(layers, ctx, target_fbo=current_fbo)
+            # Modular Density Pass (Lines, Scatters)
+            current_fbo = int(glGetIntegerv(GL_FRAMEBUFFER_BINDING))
+            self.renderer_manager.draw_density(layers, ctx, target_fbo=current_fbo)
         else:
-             # Standard Pass
-             self.renderer_manager.draw_exact(layers, ctx)
-             
+            # Standard Pass
+            self.renderer_manager.draw_exact(layers, ctx)
+
         # Overlay Text pass (screen-aligned, always last)
         self.renderer_manager.renderers["text"].draw_all(layers, ctx)
 
@@ -867,22 +981,30 @@ class GPULinePlot:
     def _draw_interaction_view(self) -> None:
         t_start = time.perf_counter()
         self._apply_blending_policy()
-        
+
         # Disable world clipping for screen-space impostor
         if self.options.enable_clipping_optimization:
-            for i in range(4): glDisable(GL_CLIP_DISTANCE0 + i)
-            
+            for i in range(4):
+                glDisable(GL_CLIP_DISTANCE0 + i)
+
         current_window = self.camera_controller.world_window(self.width, self.height)
-        if self.options.enable_cache_interaction_path and self.cache.capture_window is not None and not self.is_3d_scene():
+        if (
+            self.options.enable_cache_interaction_path
+            and self.cache.capture_window is not None
+            and not self.is_3d_scene()
+        ):
             current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
-            self.interaction_renderer.draw_cached_impostor(self.cache.capture_window, current_window, target_fbo=current_fbo)
+            self.interaction_renderer.draw_cached_impostor(
+                self.cache.capture_window, current_window, target_fbo=current_fbo
+            )
         else:
             self._draw_exact_view()
-            
+
         # Re-enable if needed for next passes (exact view usually enables it anyway)
         if self.options.enable_clipping_optimization:
-            for i in range(4): glEnable(GL_CLIP_DISTANCE0 + i)
-            
+            for i in range(4):
+                glEnable(GL_CLIP_DISTANCE0 + i)
+
         self.hud.state.gpu_timings["Interaction"] = time.perf_counter() - t_start
 
     def _capture_interaction_cache(self) -> None:
@@ -924,13 +1046,15 @@ class GPULinePlot:
             global_alpha=base_alpha,
             lod_keep_prob=prob,
             is_density=self.display_density,
-            time=time.perf_counter()
+            time=time.perf_counter(),
         )
 
         layers = self._get_all_layers()
 
         if self.display_density:
-            self.renderer_manager.draw_density(layers, ctx, target_fbo=target_fbo, target_size=target_size)
+            self.renderer_manager.draw_density(
+                layers, ctx, target_fbo=target_fbo, target_size=target_size
+            )
         else:
             self._apply_blending_policy()
             # Only draw primal geometry into the interaction cache
@@ -951,10 +1075,10 @@ class GPULinePlot:
         margin = self.options.cache_safe_margin
         cw, ch = (cr - cl), (ct - cb)
         return (
-            l < cl + cw * margin or
-            r > cr - cw * margin or
-            b < cb + ch * margin or
-            t > ct - ch * margin
+            l < cl + cw * margin
+            or r > cr - cw * margin
+            or b < cb + ch * margin
+            or t > ct - ch * margin
         )
 
     def _service_deferred_cache_refresh(self) -> None:
@@ -981,7 +1105,7 @@ class GPULinePlot:
                 glfw.wait_events_timeout(0.02)
             else:
                 glfw.poll_events()
-            
+
             # 1. Update Input and State
             self.hud.process_inputs()
             self._update_runtime_policy()
@@ -989,18 +1113,23 @@ class GPULinePlot:
 
             # Check cache release deadline
             t_now = glfw.get_time()
-            if self.cache.active and not self.interaction.drag_active and not self.interaction.right_drag_active and t_now >= self.cache.release_deadline:
+            if (
+                self.cache.active
+                and not self.interaction.drag_active
+                and not self.interaction.right_drag_active
+                and t_now >= self.cache.release_deadline
+            ):
                 self.cache.active = False
                 self.frame.dirty_scene = True
 
             need_render = (
-                not self.options.reactive_rendering or
-                self.frame.dirty_scene or 
-                self.frame.dirty_ui or 
-                self.frame.dirty_pick or 
-                self.interaction.drag_active or
-                self.interaction.right_drag_active or
-                self.hud.state.show_profiler
+                not self.options.reactive_rendering
+                or self.frame.dirty_scene
+                or self.frame.dirty_ui
+                or self.frame.dirty_pick
+                or self.interaction.drag_active
+                or self.interaction.right_drag_active
+                or self.hud.state.show_profiler
             )
 
             if not need_render:
@@ -1010,14 +1139,16 @@ class GPULinePlot:
             self.hud.begin()
 
             self._service_deferred_cache_refresh()
-            
+
             # Picking Pass (Deferred).
             # dirty_pick is set on explicit Shift+Click → always honour it.
             # The extra gate only applies to continuous hover-picking when shift is held.
             if self.frame.dirty_pick:
-                run_pick = (not self.options.shift_required_for_picking) or \
-                           self.interaction.shift_down or \
-                           self.interaction.explicit_pick_requested
+                run_pick = (
+                    (not self.options.shift_required_for_picking)
+                    or self.interaction.shift_down
+                    or self.interaction.explicit_pick_requested
+                )
                 if run_pick:
                     self._run_picking_pass()
                 self.frame.dirty_pick = False
@@ -1040,9 +1171,10 @@ class GPULinePlot:
                 # Draw zoom box if active
                 if self.interaction.right_drag_active:
                     if self.options.enable_clipping_optimization:
-                        for i in range(4): glDisable(GL_CLIP_DISTANCE0 + i)
+                        for i in range(4):
+                            glDisable(GL_CLIP_DISTANCE0 + i)
                     self._draw_zoom_box()
-                    
+
                 self.effects.end_scene()
             else:
                 self.effects.resolve()
@@ -1050,10 +1182,11 @@ class GPULinePlot:
 
             # Update HUD metrics and Draw
             self._service_hud_metrics(t0)
-            
+
             # Disable world clipping for HUD
             if self.options.enable_clipping_optimization:
-                for i in range(4): glDisable(GL_CLIP_DISTANCE0 + i)
+                for i in range(4):
+                    glDisable(GL_CLIP_DISTANCE0 + i)
 
             t_hud_start = time.perf_counter()
             # Draw Axis Labels (Scale) on every frame so they update dynamically and persist when the scene is cached.
@@ -1075,19 +1208,21 @@ class GPULinePlot:
                     global_alpha=1.0,
                     lod_keep_prob=1.0,
                     is_density=self.display_density,
-                    time=time.perf_counter()
+                    time=time.perf_counter(),
                 )
                 if not self._is_pure_3d_scene():
                     self.axis_manager.update(ctx_labels)
-                    self.renderer_manager.renderers["axis"]._draw_labels(self.axis_manager, ctx_labels)
+                    self.renderer_manager.renderers["axis"]._draw_labels(
+                        self.axis_manager, ctx_labels
+                    )
 
             # HUD panels are only updated if HUD is enabled, but begin/end must wrap all
             if self.policy.runtime.hud_enabled_this_frame:
                 self.hud.update()
-            
+
             self.hud.end()
             self.hud.state.gpu_timings["UI Panels"] = time.perf_counter() - t_hud_start
-            
+
             # Note: GL state is cleaned up/reset at start of next frame or specific renderers
 
             t_swap_start = time.perf_counter()
@@ -1105,18 +1240,18 @@ class GPULinePlot:
 
     def _service_hud_metrics(self, t0: float) -> None:
         now = glfw.get_time()
-        
+
         # Fast bucket (Every frame)
         self.hud.state.cpu_frame_times.append(time.perf_counter() - self._last_perf_t)
         self._last_perf_t = time.perf_counter()
         self.hud.state.selected_object = self.picked_info
-        
+
         # Medium bucket (4 Hz)
         if now - self.hud.state.last_medium_update > 0.25:
             self.hud.state.last_medium_update = now
             # Profiler stats
             self.hud.state.fps_history.append(self.frame.fps_estimate)
-            
+
         # Slow bucket (2 Hz or Idle)
         if now - self.hud.state.last_slow_update > 0.5:
             self.hud.state.last_slow_update = now
@@ -1129,7 +1264,7 @@ class GPULinePlot:
             sample_size = min(n, 10000)
             indices = np.random.choice(n, sample_size, replace=False)
             sample = self.scene.lines.ab[indices]
-            
+
             # Simple histogram calculation
             hist_a, _ = np.histogram(sample[:, 0], bins=50)
             hist_b, _ = np.histogram(sample[:, 1], bins=50)
@@ -1140,28 +1275,28 @@ class GPULinePlot:
         # Modern replacement for immediate mode glBegin
         px, py = self.interaction.right_press_mouse
         mx, my = self.interaction.last_mouse
-        
+
         # Screen to NDC [-1, 1]
         x0, y0 = 2.0 * px / self.width - 1.0, 1.0 - 2.0 * py / self.height
         x1, y1 = 2.0 * mx / self.width - 1.0, 1.0 - 2.0 * my / self.height
-        
+
         # We reuse the TextRenderer's unit quad or similar to avoid defining a new VAO just for this.
         # However, for robustness, we'll just use AxisRenderer's logic or simple GL lines.
         # Actually, let's just use the TextRenderer's draw_list approach if available,
         # but since we are in the engine, we'll do a quick VAO-less draw if possible,
         # or just use a simple 4-vertex local buffer.
-        
+
         glDisable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        
+
         # For V1 optimization, we'll use a simple attribute-less draw or just keep it simple.
         # Since this is a UI element, using the ImGui draw list is the best path.
         draw_list = self.hud.get_draw_list()
         if draw_list:
-             color = 0x4C3366CC # Abgr: (0.3, 0.4, 0.8, 1.0) approx
-             draw_list.add_rect_filled(px, py, mx, my, color)
-             draw_list.add_rect(px, py, mx, my, 0xCC3366CC)
+            color = 0x4C3366CC  # Abgr: (0.3, 0.4, 0.8, 1.0) approx
+            draw_list.add_rect_filled(px, py, mx, my, color)
+            draw_list.add_rect(px, py, mx, my, 0xCC3366CC)
 
     # --------------------------------------------------------
     # Callbacks
@@ -1198,7 +1333,9 @@ class GPULinePlot:
             factor = 0.9 if dy > 0 else 1.0 / 0.9
             self._zoom_3d(factor)
         else:
-            factor = self.options.zoom_scroll_factor if dy > 0 else 1.0 / self.options.zoom_scroll_factor
+            factor = (
+                self.options.zoom_scroll_factor if dy > 0 else 1.0 / self.options.zoom_scroll_factor
+            )
             mx, my = glfw.get_cursor_pos(self.window)
             self.camera_controller.apply_zoom_at_cursor(factor, mx, my, self.width, self.height)
 
@@ -1212,7 +1349,7 @@ class GPULinePlot:
             return
 
         mx, my = glfw.get_cursor_pos(self.window)
-        
+
         if button == glfw.MOUSE_BUTTON_LEFT:
             if action == glfw.PRESS:
                 # 1. Picking Pass (Shift + Click)
@@ -1221,23 +1358,32 @@ class GPULinePlot:
                     self.frame.dirty_pick = True
                     self.interaction.explicit_pick_requested = True
                     self.frame.dirty_scene = True
-                
+
                 # 2. Start Drag State
                 self.interaction.drag_active = True
                 self.interaction.drag_confirmed = False
                 self.interaction.drag_start_translation = None
                 self.interaction.press_mouse = (mx, my)
                 self.interaction.last_mouse = (mx, my)
-                self.interaction.drag_start_world = self.camera_controller.screen_to_world(mx, my, self.width, self.height)
-                
+                self.interaction.drag_start_world = self.camera_controller.screen_to_world(
+                    mx, my, self.width, self.height
+                )
+
                 # 3. Determine Drag Mode
-                if (mods & glfw.MOD_CONTROL):
+                if mods & glfw.MOD_CONTROL:
                     # For professional UX, resolve the mode ONCE at the start of the drag
                     self._run_picking_pass()
-                    
+
                     if self.interaction.selected_layer_id is not None:
                         self.interaction.drag_mode = "move"
-                        layer = next((l for l in self.scene.layers if l.layer_id == self.interaction.selected_layer_id), None)
+                        layer = next(
+                            (
+                                l
+                                for l in self.scene.layers
+                                if l.layer_id == self.interaction.selected_layer_id
+                            ),
+                            None,
+                        )
                         if layer:
                             self.interaction.drag_start_translation = layer.translation
                     else:
@@ -1245,10 +1391,17 @@ class GPULinePlot:
                         self.interaction.drag_mode = "ratio"
                         self.interaction.drag_start_zoom_x = self.camera.zoom_x
                         self.interaction.drag_start_zoom_y = self.camera.zoom_y
-                elif (mods & glfw.MOD_SHIFT):
+                elif mods & glfw.MOD_SHIFT:
                     self.interaction.drag_mode = "move"
                     if self.interaction.selected_layer_id is not None:
-                        layer = next((l for l in self.scene.layers if l.layer_id == self.interaction.selected_layer_id), None)
+                        layer = next(
+                            (
+                                l
+                                for l in self.scene.layers
+                                if l.layer_id == self.interaction.selected_layer_id
+                            ),
+                            None,
+                        )
                         if layer:
                             self.interaction.drag_start_translation = layer.translation
                 else:
@@ -1274,16 +1427,22 @@ class GPULinePlot:
                 if self.interaction.right_drag_active:
                     px, py = self.interaction.right_press_mouse
                     if abs(mx - px) > 5 and abs(my - py) > 5:
-                        w0, h0 = self.camera_controller.screen_to_world(px, py, self.width, self.height)
-                        w1, h1 = self.camera_controller.screen_to_world(mx, my, self.width, self.height)
-                        self.set_view(xlim=(min(w0, w1), max(w0, w1)), ylim=(min(h0, h1), max(h0, h1)))
+                        w0, h0 = self.camera_controller.screen_to_world(
+                            px, py, self.width, self.height
+                        )
+                        w1, h1 = self.camera_controller.screen_to_world(
+                            mx, my, self.width, self.height
+                        )
+                        self.set_view(
+                            xlim=(min(w0, w1), max(w0, w1)), ylim=(min(h0, h1), max(h0, h1))
+                        )
                 self.interaction.right_drag_active = False
                 self.frame.dirty_scene = True
 
     def _on_cursor(self, window, x, y) -> None:
         if (x, y) == self.interaction.last_mouse:
             return
-        
+
         self.mouse_world = self.camera_controller.screen_to_world(x, y, self.width, self.height)
         self.frame.dirty_ui = True
 
@@ -1294,24 +1453,38 @@ class GPULinePlot:
         if self.interaction.drag_active:
             px, py = self.interaction.press_mouse
             dist2 = (x - px) ** 2 + (y - py) ** 2
-            if not self.interaction.drag_confirmed and dist2 > self.options.drag_threshold_px ** 2:
+            if not self.interaction.drag_confirmed and dist2 > self.options.drag_threshold_px**2:
                 self.interaction.drag_confirmed = True
                 self.cache.active = True
                 self.cache.refresh_requested = True
                 self.cache.release_deadline = glfw.get_time() + 0.20
 
-            if self.interaction.drag_mode == "move" and self.interaction.selected_layer_id is not None:
+            if (
+                self.interaction.drag_mode == "move"
+                and self.interaction.selected_layer_id is not None
+            ):
                 # MOVE MODE: Translate the layer
-                layer = next((l for l in self.scene.layers if l.layer_id == self.interaction.selected_layer_id), None)
+                layer = next(
+                    (
+                        l
+                        for l in self.scene.layers
+                        if l.layer_id == self.interaction.selected_layer_id
+                    ),
+                    None,
+                )
                 if layer:
                     if self.interaction.drag_start_translation is None:
-                         self.interaction.drag_start_translation = layer.translation
-                         self.interaction.drag_start_world = self.camera_controller.screen_to_world(x, y, self.width, self.height)
+                        self.interaction.drag_start_translation = layer.translation
+                        self.interaction.drag_start_world = self.camera_controller.screen_to_world(
+                            x, y, self.width, self.height
+                        )
 
-                    curr_world = self.camera_controller.screen_to_world(x, y, self.width, self.height)
+                    curr_world = self.camera_controller.screen_to_world(
+                        x, y, self.width, self.height
+                    )
                     start_world = self.interaction.drag_start_world
                     start_trans = self.interaction.drag_start_translation
-                    
+
                     dx = curr_world[0] - start_world[0]
                     dy = curr_world[1] - start_world[1]
                     layer.translation = (start_trans[0] + dx, start_trans[1] + dy)
@@ -1323,12 +1496,20 @@ class GPULinePlot:
 
                 # Base-2 Exponential Law (100px = factor of 2.0 change)
                 sensitivity = 0.01
-                self.camera.zoom_x = self.interaction.drag_start_zoom_x * (2.0 ** (dx * sensitivity))
-                self.camera.zoom_y = self.interaction.drag_start_zoom_y * (2.0 ** (-dy * sensitivity))
+                self.camera.zoom_x = self.interaction.drag_start_zoom_x * (
+                    2.0 ** (dx * sensitivity)
+                )
+                self.camera.zoom_y = self.interaction.drag_start_zoom_y * (
+                    2.0 ** (-dy * sensitivity)
+                )
 
                 # Clamp to safe camera limits
-                self.camera.zoom_x = float(np.clip(self.camera.zoom_x, self.camera.zoom_min, self.camera.zoom_max))
-                self.camera.zoom_y = float(np.clip(self.camera.zoom_y, self.camera.zoom_min, self.camera.zoom_max))
+                self.camera.zoom_x = float(
+                    np.clip(self.camera.zoom_x, self.camera.zoom_min, self.camera.zoom_max)
+                )
+                self.camera.zoom_y = float(
+                    np.clip(self.camera.zoom_y, self.camera.zoom_min, self.camera.zoom_max)
+                )
                 self.cache.refresh_requested = True
             elif self.interaction.drag_mode == "rotate3d":
                 # ROTATE3D MODE: horizontal drag → azimuth, vertical drag → elevation
@@ -1342,9 +1523,9 @@ class GPULinePlot:
                 eased_x = nx * (0.55 + 0.45 * abs(nx))
                 eased_y = ny * (0.55 + 0.45 * abs(ny))
                 new_azim = self.interaction.drag_start_azim - eased_x * 180.0
-                new_elev = float(np.clip(
-                    self.interaction.drag_start_elev + eased_y * 120.0, -89.0, 89.0
-                ))
+                new_elev = float(
+                    np.clip(self.interaction.drag_start_elev + eased_y * 120.0, -89.0, 89.0)
+                )
                 self.set_3d_view(azim=new_azim, elev=new_elev)
                 self.cache.refresh_requested = True
             else:
@@ -1352,9 +1533,9 @@ class GPULinePlot:
                 lx, ly = self.interaction.last_mouse
                 wx0, wy0 = self.camera_controller.screen_to_world(lx, ly, self.width, self.height)
                 wx1, wy1 = self.camera_controller.screen_to_world(x, y, self.width, self.height)
-                self.camera.cx -= (wx1 - wx0)
-                self.camera.cy -= (wy1 - wy0)
-                
+                self.camera.cx -= wx1 - wx0
+                self.camera.cy -= wy1 - wy0
+
             self.interaction.last_mouse = (x, y)
             self.frame.dirty_scene = True
             if self.cache.active and self._cache_needs_refresh():
@@ -1368,24 +1549,24 @@ class GPULinePlot:
     def _run_picking_pass(self) -> None:
         if not self.interaction.last_mouse:
             return
-        
+
         mx, my = self.interaction.last_mouse
         mvp = self.camera_controller.mvp(self.width, self.height)
         window = self.camera_controller.world_window(self.width, self.height)
-        
+
         # Scale to framebuffer (pixel) coordinates for Retina / High-DPI displays.
         # GLFW cursor positions are in logical window units; the picking FBO is in pixels.
-        dpr_x = self.fb_width  / max(self.width,  1)
+        dpr_x = self.fb_width / max(self.width, 1)
         dpr_y = self.fb_height / max(self.height, 1)
         px = mx * dpr_x
         py = my * dpr_y
-        
+
         # 1. Render scene to picking buffer
         self.picking.draw_pick_scene(self.scene, self.exact_renderer.buffers, mvp, window)
-        
+
         # 2. Read back hit result at cursor (in pixel coords)
         hit = self.picking.pick_readback(px, py, self.scene)
-        
+
         if hit:
             self.picked_info = {
                 "type": hit["type"],
@@ -1393,11 +1574,11 @@ class GPULinePlot:
                 "element_idx": hit["element_idx"],
                 "layer": hit["layer"],
                 "x": self.mouse_world[0] if self.mouse_world else 0.0,
-                "y": self.mouse_world[1] if self.mouse_world else 0.0
+                "y": self.mouse_world[1] if self.mouse_world else 0.0,
             }
             # Update interaction selection
             self.interaction.selected_layer_id = hit["layer_id"]
-            
+
             # Specific logic for lines to get exact Y
             if hit["type"] == "line_family" and hit["layer"].ab is not None:
                 ei = hit["element_idx"]
@@ -1412,6 +1593,7 @@ class GPULinePlot:
             self.picked_info = None
             # We don't clear selected_layer_id on "miss" to allow dragging it
             # after selection even if the cursor moves off.
+
     def get_xlim(self) -> Tuple[float, float]:
         l, r, _, _ = self.camera_controller.world_window(self.width, self.height)
         return l, r
@@ -1432,7 +1614,7 @@ class GPULinePlot:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0)
-        
+
         if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
             glBindFramebuffer(GL_FRAMEBUFFER, 0)
             glDeleteFramebuffers(1, [fbo])
@@ -1446,14 +1628,14 @@ class GPULinePlot:
         transparent: bool = True,
         include_axes: bool = False,
         include_postfx: bool = True,
-        preserve_screen_space_styles: bool = True
+        preserve_screen_space_styles: bool = True,
     ) -> "GLPlotSnapshot":
         """
         Level 1 API: Capture the current viewport as a raster image + extent.
         Ensures perfect GL state restoration.
         """
         from .utils.mpl_bridge import GLPlotSnapshot
-        
+
         target_w = max(1, int(round(self.fb_width * scale)))
         target_h = max(1, int(round(self.fb_height * scale)))
 
@@ -1463,7 +1645,7 @@ class GPULinePlot:
         prev_clear_col = glGetFloatv(GL_COLOR_CLEAR_VALUE)
 
         fbo, tex = self._create_rgba_fbo(target_w, target_h)
-        
+
         xmin, xmax = self.get_xlim()
         ymin, ymax = self.get_ylim()
         window = (xmin, xmax, ymin, ymax)
@@ -1471,7 +1653,7 @@ class GPULinePlot:
         try:
             glBindFramebuffer(GL_FRAMEBUFFER, fbo)
             glViewport(0, 0, target_w, target_h)
-            
+
             if transparent:
                 glClearColor(0.0, 0.0, 0.0, 0.0)
             else:
@@ -1481,7 +1663,7 @@ class GPULinePlot:
 
             # Style scaling for high-res
             style_scale = scale if preserve_screen_space_styles else 1.0
-            
+
             mvp = self.camera_controller.mvp(self.width, self.height)
             ndc_scale, ndc_offset = self._get_ndc_transform(window)
             prob = self._compute_lod_keep_prob()
@@ -1501,7 +1683,7 @@ class GPULinePlot:
                 global_alpha=alpha,
                 lod_keep_prob=prob,
                 is_density=self.display_density,
-                time=time.perf_counter()
+                time=time.perf_counter(),
             )
 
             self._apply_blending_policy()
@@ -1513,7 +1695,9 @@ class GPULinePlot:
 
             # Pass to modular managers
             if self.display_density:
-                self.renderer_manager.draw_density(layers, ctx, target_fbo=fbo, target_size=(target_w, target_h))
+                self.renderer_manager.draw_density(
+                    layers, ctx, target_fbo=fbo, target_size=(target_w, target_h)
+                )
             else:
                 self.renderer_manager.draw_exact(layers, ctx)
 
@@ -1540,12 +1724,13 @@ class GPULinePlot:
             ylim=(ymin, ymax),
             width_px=target_w,
             height_px=target_h,
-            transparent=transparent
+            transparent=transparent,
         )
 
     def to_matplotlib(self, ax: Optional[Axes] = None, mpl_kwargs: dict = {}, **kwargs):
         """Level 2 API: Render and embed directly into Matplotlib."""
         from .utils.mpl_bridge import snapshot_to_matplotlib
+
         snap = self.capture_snapshot(**kwargs)
         return snapshot_to_matplotlib(snap, ax=ax, **mpl_kwargs)
 
@@ -1562,6 +1747,7 @@ class GPULinePlot:
             return
 
         import matplotlib.pyplot as plt
+
         ax = getattr(self, "_mpl_transfer_ax", None)
         fig, ax, artist = self.to_matplotlib(ax=ax, scale=2.0)
         plt.show(block=False)
@@ -1576,8 +1762,8 @@ class GPULinePlot:
         self.hud.on_key(window, key, sc, action, mods)
 
         if action in (glfw.PRESS, glfw.REPEAT):
-            shift = (mods & glfw.MOD_SHIFT)
-            
+            shift = mods & glfw.MOD_SHIFT
+
             if key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(self.window, True)
 
@@ -1602,21 +1788,25 @@ class GPULinePlot:
                 if self.display_density:
                     self.options.density_gain *= 1.2
                 else:
-                    self.options.default_global_alpha = min(1.0, self.options.default_global_alpha * 1.2)
+                    self.options.default_global_alpha = min(
+                        1.0, self.options.default_global_alpha * 1.2
+                    )
                 self.frame.dirty_scene = True
                 self.frame.dirty_ui = True
-                
+
             elif key == glfw.KEY_DOWN:
                 if self.display_density:
                     self.options.density_gain /= 1.2
                 else:
-                    self.options.default_global_alpha = max(0.001, self.options.default_global_alpha / 1.2)
+                    self.options.default_global_alpha = max(
+                        0.001, self.options.default_global_alpha / 1.2
+                    )
                 self.frame.dirty_scene = True
                 self.frame.dirty_ui = True
-                
+
             elif key == glfw.KEY_LEFT:
                 self.previous_density_scheme()
-                
+
             elif key == glfw.KEY_RIGHT:
                 self.next_density_scheme()
 
@@ -1629,7 +1819,7 @@ class GPULinePlot:
                     self.width * 0.5,
                     self.height * 0.5,
                     self.width,
-                    self.height
+                    self.height,
                 )
 
             elif key == glfw.KEY_MINUS or key == glfw.KEY_KP_SUBTRACT:
@@ -1638,7 +1828,7 @@ class GPULinePlot:
                     self.width * 0.5,
                     self.height * 0.5,
                     self.width,
-                    self.height
+                    self.height,
                 )
 
             elif key == glfw.KEY_B and action == glfw.PRESS:

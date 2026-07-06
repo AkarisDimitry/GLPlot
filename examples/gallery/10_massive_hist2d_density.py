@@ -1,7 +1,6 @@
 import numpy as np
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(123)
 n = 1_000_000
 theta = rng.uniform(0, 2 * np.pi, n)
@@ -17,5 +16,5 @@ plt.title("1,000,000-point density histogram")
 plt.xlabel("x")
 plt.ylabel("y")
 plt.legend()
-plt.show()
+# plt.show()
 plt.savefig("examples/gallery/results/10_massive_hist2d_density.png")

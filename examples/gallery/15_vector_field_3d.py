@@ -1,7 +1,6 @@
 import numpy as np
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(1515)
 
 grid = np.linspace(-3.0, 3.0, 21)
@@ -23,7 +22,19 @@ cloud_energy = np.exp(-0.11 * radius**2) + 0.2 * np.sin(theta) ** 2
 mask = speed.ravel() > np.quantile(speed, 0.58)
 
 plt.figure("Gallery - 3D Vector Field", figsize=(9, 6))
-plt.volume3d(cloud_x, cloud_y, cloud_z, cloud_energy, threshold=0.16, cmap="magma", alpha=0.22, s=0.9, elev=29, azim=-43, label="420k flow samples")
+plt.volume3d(
+    cloud_x,
+    cloud_y,
+    cloud_z,
+    cloud_energy,
+    threshold=0.16,
+    cmap="magma",
+    alpha=0.22,
+    s=0.9,
+    elev=29,
+    azim=-43,
+    label="420k flow samples",
+)
 plt.quiver3d(
     x.ravel()[mask],
     y.ravel()[mask],

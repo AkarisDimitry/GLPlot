@@ -1,7 +1,6 @@
 import numpy as np
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(7)
 core = rng.normal(loc=0.0, scale=0.58, size=520_000)
 left_tail = rng.normal(loc=-2.25, scale=0.38, size=260_000)
@@ -39,7 +38,13 @@ q05, q50, q95 = np.quantile(values, [0.05, 0.50, 0.95])
 plt.axvline(q05, color="white", linestyle="--", linewidth=1.0)
 plt.axvline(q50, color="k", linestyle="-", linewidth=1.7, label="median")
 plt.axvline(q95, color="white", linestyle="--", linewidth=1.0)
-plt.annotate("rare right tail", xy=(q95, smooth[np.argmin(np.abs(centers - q95))]), xytext=(2.1, counts.max() * 0.92), arrowprops={"color": "tab:red", "width": 1.0}, color="tab:red")
+plt.annotate(
+    "rare right tail",
+    xy=(q95, smooth[np.argmin(np.abs(centers - q95))]),
+    xytext=(2.1, counts.max() * 0.92),
+    arrowprops={"color": "tab:red", "width": 1.0},
+    color="tab:red",
+)
 plt.title("Spectral histogram of 1.26M multimodal samples")
 plt.xlabel("value")
 plt.ylabel("count")

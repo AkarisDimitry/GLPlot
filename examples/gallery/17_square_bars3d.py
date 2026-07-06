@@ -2,7 +2,6 @@ import numpy as np
 import os
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(1700)
 grid = np.arange(-14, 15)
 x, y = np.meshgrid(grid, grid)

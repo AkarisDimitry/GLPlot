@@ -63,7 +63,9 @@ def test_ssao_option_and_bar3d_edges():
     assert axis_bounds[3] >= scene_bounds[3]
     assert axis_bounds[4] <= scene_bounds[4]
     assert axis_bounds[5] >= scene_bounds[5]
-    assert np.allclose(axis_layers[0].colors[0], axis_layers[0].colors[2])  # uniform color: no axis coloring
+    assert np.allclose(
+        axis_layers[0].colors[0], axis_layers[0].colors[2]
+    )  # uniform color: no axis coloring
 
     fig.set_3d_view(elev=41, azim=-22, fov=55, show_axes=True)
     assert layer.metadata["camera"]["elev"] == 41
@@ -78,7 +80,9 @@ def test_ssao_option_and_bar3d_edges():
 
 
 def test_hud_layer_summary_helpers_support_3d_layers():
-    layer = Layer3D(vertices=np.zeros((1234, 3), dtype=np.float32), primitive="points", layer_type="scatter3d")
+    layer = Layer3D(
+        vertices=np.zeros((1234, 3), dtype=np.float32), primitive="points", layer_type="scatter3d"
+    )
     assert HudManager._is_3d_layer(layer) is True
     assert HudManager._layer_size_text(layer) == "1,234 verts"
 
@@ -102,7 +106,9 @@ def test_layer3d_bounds_and_camera_math_are_finite():
     assert radius > 0
 
     projection = _perspective(45.0, 16 / 9, 0.1, 100.0)
-    view = _look_at(np.array([3, 4, 5], dtype=np.float32), center, np.array([0, 0, 1], dtype=np.float32))
+    view = _look_at(
+        np.array([3, 4, 5], dtype=np.float32), center, np.array([0, 0, 1], dtype=np.float32)
+    )
     mvp = projection @ view
     assert mvp.shape == (4, 4)
     assert np.all(np.isfinite(mvp))

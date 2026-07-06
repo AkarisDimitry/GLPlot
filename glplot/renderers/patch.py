@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from ..core.context import RenderContext
     from ..options import EngineOptions
 
+
 class GLPatchBuffers:
     def __init__(self, vao: int, vbo: int, ebo: Optional[int] = None):
         self.vao = vao
@@ -19,11 +20,13 @@ class GLPatchBuffers:
         self.ebo = ebo
         self.count = 0
 
+
 class PatchRenderer:
     """
     Primitive renderer for PatchLayer.
     Specialized for area fills, bars, and bands using GL_TRIANGLE_STRIP/TRIANGLES.
     """
+
     def __init__(self, options: EngineOptions):
         self.options = options
         self.prog = 0
@@ -52,42 +55,46 @@ class PatchRenderer:
     def _create_buffers(self, layer: PatchLayer) -> GLPatchBuffers:
         vao = glGenVertexArrays(1)
         glBindVertexArray(vao)
-        
+
         vbo = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, vbo)
         glEnableVertexAttribArray(0)
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, C.c_void_p(0))
-        
+
         ebo = None
         if layer.indices is not None:
             ebo = glGenBuffers(1)
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
-        
+
         glBindVertexArray(0)
         return GLPatchBuffers(vao, vbo, ebo)
 
     def update_gpu_data(self, layer: PatchLayer, bufs: GLPatchBuffers) -> None:
-        if layer.vertices is None or len(layer.vertices) == 0: return
-        
+        if layer.vertices is None or len(layer.vertices) == 0:
+            return
+
         glBindBuffer(GL_ARRAY_BUFFER, bufs.vbo)
         glBufferData(GL_ARRAY_BUFFER, layer.vertices.nbytes, layer.vertices, GL_STATIC_DRAW)
-        
+
         if layer.indices is not None and bufs.ebo is not None:
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bufs.ebo)
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, layer.indices.nbytes, layer.indices, GL_STATIC_DRAW)
+            glBufferData(
+                GL_ELEMENT_ARRAY_BUFFER, layer.indices.nbytes, layer.indices, GL_STATIC_DRAW
+            )
             bufs.count = len(layer.indices)
         else:
             bufs.count = len(layer.vertices)
-            
+
         layer.dirty.gpu_dirty = False
 
     def draw(self, layer: PatchLayer, ctx: RenderContext) -> None:
-        if layer.vertices is None or len(layer.vertices) == 0: return
+        if layer.vertices is None or len(layer.vertices) == 0:
+            return
 
         if not hasattr(layer, "_gl") or layer._gl is None:
             layer._gl = self._create_buffers(layer)
             layer.dirty.gpu_dirty = True
-        
+
         if layer.dirty.gpu_dirty:
             self.update_gpu_data(layer, layer._gl)
 
@@ -98,26 +105,28 @@ class PatchRenderer:
         alpha = ctx.global_alpha * layer.style.alpha * overrides.alpha_multiplier
         glUniform1f(self.u_alpha, float(alpha))
         glUniform2f(self.u_offset, *layer.translation)
-        
+
         # Draw face
         if layer.style.face_color is not None:
             glUniform4f(self.u_color, *layer.style.face_color)
             glBindVertexArray(layer._gl.vao)
-            
+
             mode = GL_TRIANGLE_STRIP
-            if layer.mode == "triangles": mode = GL_TRIANGLES
-            
+            if layer.mode == "triangles":
+                mode = GL_TRIANGLES
+
             if layer._gl.ebo is not None:
                 glDrawElements(mode, layer._gl.count, GL_UNSIGNED_INT, None)
             else:
                 glDrawArrays(mode, 0, layer._gl.count)
-                
+
         glBindVertexArray(0)
         glUseProgram(0)
 
     def draw_density(self, layer: PatchLayer, ctx: RenderContext) -> None:
         """Accumulate patch area into density heatmap."""
-        if layer.vertices is None or len(layer.vertices) == 0: return
+        if layer.vertices is None or len(layer.vertices) == 0:
+            return
 
         # 1. Resource Management
         if not hasattr(layer, "_gl") or layer._gl is None:
@@ -142,12 +151,13 @@ class PatchRenderer:
         # 3. Draw call
         glBindVertexArray(layer._gl.vao)
         mode = GL_TRIANGLE_STRIP
-        if layer.mode == "triangles": mode = GL_TRIANGLES
-        
+        if layer.mode == "triangles":
+            mode = GL_TRIANGLES
+
         if layer._gl.ebo is not None:
             glDrawElements(mode, layer._gl.count, GL_UNSIGNED_INT, None)
         else:
             glDrawArrays(mode, 0, layer._gl.count)
-            
+
         glBindVertexArray(0)
         glUseProgram(0)

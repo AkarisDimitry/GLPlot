@@ -174,14 +174,19 @@ def test_contour_pcolormesh_and_3d_surface_helpers():
     wire = gplt.plot_wireframe(x, y, z, rstride=2, cstride=2)
     bars = gplt.bar3d([0, 1], [0, 1], [0, 0], 0.2, 0.2, [1, 2])
     hex_bars = gplt.bar3d([0], [0], [0], 0.3, 0.3, [1], shape="hex")
-    tri_mesh = gplt.mesh3d(np.array([[0, 0, 0], [1, 0, 0], [0, 1, 1]], dtype=np.float32), faces=np.array([[0, 1, 2]], dtype=np.uint32))
+    tri_mesh = gplt.mesh3d(
+        np.array([[0, 0, 0], [1, 0, 0], [0, 1, 1]], dtype=np.float32),
+        faces=np.array([[0, 1, 2]], dtype=np.uint32),
+    )
     volume = gplt.volume3d([0, 1], [0, 1], [0, 1], [0.2, 0.9], threshold=0.5)
     assert pseudo_mesh.metadata["artist"] == "pcolormesh"
     assert c.metadata["artist"] == "contour"
     assert cf.metadata["artist"] == "contourf"
     assert surface.metadata["artist"] == "plot_surface"
     assert surface.layer_type == "mesh3d"
-    assert all(a.metadata["artist"] == "plot_wireframe" and a.layer_type == "wireframe3d" for a in wire)
+    assert all(
+        a.metadata["artist"] == "plot_wireframe" and a.layer_type == "wireframe3d" for a in wire
+    )
     assert bars[0].metadata["artist"] == "bar3d"
     assert bars[0].layer_type == "bars3d"
     assert bars[1].metadata["artist"] == "bar3d_edges"

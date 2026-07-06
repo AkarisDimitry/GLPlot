@@ -11,10 +11,11 @@ if TYPE_CHECKING:
     from ..options import EngineOptions
     from ..core.context import RenderContext
 
+
 class DensityRenderer:
     """
     Modular Density Manager for Phase 5.
-    
+
     Coordinates the accumulation of density data from multiple primitive
     renderers into a shared R32F texture, then resolves it into a heatmap.
     """
@@ -113,7 +114,7 @@ class DensityRenderer:
     def resolve(self, target_fbo: int = 0, target_size: Optional[Tuple[int, int]] = None) -> None:
         """Resolve the accumulated density into a color heatmap in the target FBO."""
         glBindFramebuffer(GL_FRAMEBUFFER, target_fbo)
-        
+
         # Robust Viewport Management (Fix for 1/4 size rendering on HighDPI)
         if target_size is not None:
             glViewport(0, 0, int(target_size[0]), int(target_size[1]))
@@ -133,7 +134,7 @@ class DensityRenderer:
         w_px = max(self.plot.width, 1e-12)
         h_px = max(self.plot.height, 1e-12)
         margin_l, margin_r, margin_b, margin_t = 60.0, 20.0, 40.0, 20.0
-        
+
         uv_min_x = margin_l / w_px
         uv_min_y = margin_b / h_px
         uv_max_x = 1.0 - margin_r / w_px
@@ -146,10 +147,17 @@ class DensityRenderer:
         glUniform1i(self.u_resolve_tex, 0)
         glUniform1f(self.u_resolve_gain, float(self.options.density_gain))
         glUniform1f(self.u_resolve_max_val, max_val)
-        glUniform1i(self.u_resolve_is_log, 1 if getattr(self.options, "density_is_log", True) else 0)
+        glUniform1i(
+            self.u_resolve_is_log, 1 if getattr(self.options, "density_is_log", True) else 0
+        )
         glUniform1i(self.u_resolve_scheme, self.options.density_scheme_index)
-        glUniform1i(self.u_resolve_invert, 1 if getattr(self.options, "density_invert", False) else 0)
-        glUniform1i(self.u_resolve_light_to_color, 1 if getattr(self.options, "density_light_to_color", True) else 0)
+        glUniform1i(
+            self.u_resolve_invert, 1 if getattr(self.options, "density_invert", False) else 0
+        )
+        glUniform1i(
+            self.u_resolve_light_to_color,
+            1 if getattr(self.options, "density_light_to_color", True) else 0,
+        )
         glUniform2f(self.u_resolve_uv_min, uv_min_x, uv_min_y)
         glUniform2f(self.u_resolve_uv_max, uv_max_x, uv_max_y)
 
@@ -160,27 +168,28 @@ class DensityRenderer:
 
     def get_density_array(self) -> np.ndarray:
         """
-        Read back the accumulated float32 densities from the accumulation target 
+        Read back the accumulated float32 densities from the accumulation target
         and return them as a 2D float32 numpy array.
         """
         if not self.accum_target or not self.accum_target.fbo:
             return np.zeros((0, 0), dtype=np.float32)
-            
+
         import sys
-        gl = sys.modules.get('OpenGL.GL')
+
+        gl = sys.modules.get("OpenGL.GL")
         if gl is None:
             import OpenGL.GL as gl
-            
+
         w, h = self.accum_target.width, self.accum_target.height
-        
+
         # Save current bound FBO
         prev_fbo = gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING)
-        
+
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.accum_target.fbo)
         data = gl.glReadPixels(0, 0, w, h, gl.GL_RED, gl.GL_FLOAT)
-        
+
         # Restore previous bound FBO
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
-        
+
         buf = np.frombuffer(data, dtype=np.float32)
         return buf.reshape((h, w))

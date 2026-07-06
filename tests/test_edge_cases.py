@@ -208,14 +208,7 @@ class TestLabelsAndAnnotations:
 
     def test_special_characters_in_labels(self):
         """Test special characters in labels."""
-        labels = [
-            "μ = 0.5",
-            "α + β = γ",
-            "σ²",
-            "∂/∂x",
-            "±√2",
-            "∑ x_i"
-        ]
+        labels = ["μ = 0.5", "α + β = γ", "σ²", "∂/∂x", "±√2", "∑ x_i"]
         for label in labels:
             try:
                 gplt.xlabel(label)
@@ -237,7 +230,7 @@ class TestLayerInteraction:
     def test_many_layers(self):
         """Test figure with many layers."""
         for i in range(100):
-            gplt.plot([i, i+1], [i, i+1], alpha=0.1)
+            gplt.plot([i, i + 1], [i, i + 1], alpha=0.1)
         assert len(gplt.gcf().scene.layers) == 100
 
     def test_mixed_layer_types(self):

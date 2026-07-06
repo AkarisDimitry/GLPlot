@@ -13,16 +13,18 @@ if TYPE_CHECKING:
     from ..core.context import RenderContext
     from ..options import EngineOptions
 
+
 class LineFamilyRenderer:
     """
     Primitive renderer for LineFamilyLayer.
     Specialized for high-performance instanced rendering of lines via quad expansion.
     Uses optimized orthographic shaders for maximum throughput.
     """
+
     def __init__(self, options: EngineOptions):
         self.options = options
         self.prog = 0
-        
+
         # Uniform locations (Exact)
         self.u_ndc_scale = -1
         self.u_ndc_offset = -1
@@ -38,7 +40,7 @@ class LineFamilyRenderer:
         self.u_use_colormap = -1
         self.u_scheme = -1
         self.u_antialiasing = -1
-        
+
         # Accumulation uniforms
         self.accum_prog = 0
         self.u_accum_ndc_scale = -1
@@ -97,14 +99,9 @@ class LineFamilyRenderer:
         # t in {0,1}, side in {-0.5, 0.5}
         bufs.vbo_base = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, bufs.vbo_base)
-        quad_data = np.array([
-            0.0, -0.5,
-            0.0,  0.5,
-            1.0, -0.5,
-            1.0,  0.5
-        ], dtype=np.float32)
+        quad_data = np.array([0.0, -0.5, 0.0, 0.5, 1.0, -0.5, 1.0, 0.5], dtype=np.float32)
         glBufferData(GL_ARRAY_BUFFER, quad_data.nbytes, quad_data, GL_STATIC_DRAW)
-        
+
         # a_corner (loc 0)
         glEnableVertexAttribArray(0)
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, C.c_void_p(0))
@@ -136,8 +133,9 @@ class LineFamilyRenderer:
 
     def update_gpu_data(self, layer: LineFamilyLayer, bufs: GLLineBuffers) -> None:
         """Upload semantic data to GPU buffers."""
-        if layer.ab is None: return
-        
+        if layer.ab is None:
+            return
+
         glBindVertexArray(bufs.vao)
 
         # Upload AB
@@ -161,13 +159,14 @@ class LineFamilyRenderer:
 
     def draw(self, layer: LineFamilyLayer, ctx: RenderContext) -> None:
         """Draw the layer using current context."""
-        if layer.ab is None or len(layer.ab) == 0: return
+        if layer.ab is None or len(layer.ab) == 0:
+            return
 
         # 1. Resource Management
         if not hasattr(layer, "_gl") or layer._gl is None:
             layer._gl = self._create_buffers(layer)
             layer.dirty.gpu_dirty = True
-        
+
         if layer.dirty.gpu_dirty:
             self.update_gpu_data(layer, layer._gl)
 
@@ -179,21 +178,21 @@ class LineFamilyRenderer:
         glUniform2f(self.u_xrange, float(layer.x_range[0]), float(layer.x_range[1]))
         glUniform4f(self.u_window, *ctx.window_world)
         glUniform1i(self.u_use_color, 1 if layer._gl.has_color else 0)
-        
+
         # Style Application
         overrides = self.options.visual.overrides
         alpha = ctx.global_alpha * layer.style.alpha * overrides.alpha_multiplier
         glUniform1f(self.u_alpha, float(alpha))
-        
+
         width = layer.style.line_width * overrides.line_width_multiplier
         glUniform1f(self.u_width, float(width))
-        
+
         # LOD
         prob = ctx.lod_keep_prob
         glUniform1f(self.u_keep_prob, float(prob))
         glUniform1i(self.u_total_count, len(layer.ab))
         glUniform2f(self.u_offset, *layer.translation)
-        
+
         # Colormap
         glUniform1i(self.u_use_colormap, 1 if self.options.line_colormap_enabled else 0)
         glUniform1i(self.u_scheme, self.options.density_scheme_index)
@@ -202,20 +201,21 @@ class LineFamilyRenderer:
         # 3. Draw call (Instanced Quads)
         glBindVertexArray(layer._gl.vao)
         glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, len(layer.ab))
-        
+
         # Cleanup
         glBindVertexArray(0)
         glUseProgram(0)
 
     def draw_density(self, layer: LineFamilyLayer, ctx: RenderContext) -> None:
         """Accumulate line density into the current R32F target."""
-        if layer.ab is None or len(layer.ab) == 0: return
+        if layer.ab is None or len(layer.ab) == 0:
+            return
 
         # 1. Resource Management
         if not hasattr(layer, "_gl") or layer._gl is None:
             layer._gl = self._create_buffers(layer)
             layer.dirty.gpu_dirty = True
-        
+
         if layer.dirty.gpu_dirty:
             self.update_gpu_data(layer, layer._gl)
 
@@ -226,11 +226,11 @@ class LineFamilyRenderer:
         glUniform2f(self.u_accum_viewport, float(ctx.fb_width), float(ctx.fb_height))
         glUniform2f(self.u_accum_xrange, float(layer.x_range[0]), float(layer.x_range[1]))
         glUniform4f(self.u_accum_window, *ctx.window_world)
-        
+
         overrides = self.options.visual.overrides
         width = max(1.0, layer.style.line_width * overrides.line_width_multiplier)
         glUniform1f(self.u_accum_width, float(width))
-        
+
         if self.options.density_weighted:
             glUniform1i(self.u_accum_use_color, 1 if layer._gl.has_color else 0)
             alpha = ctx.global_alpha * layer.style.alpha * overrides.alpha_multiplier
@@ -247,7 +247,7 @@ class LineFamilyRenderer:
         # 3. Draw call
         glBindVertexArray(layer._gl.vao)
         glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, len(layer.ab))
-        
+
         # Cleanup
         glBindVertexArray(0)
         glUseProgram(0)

@@ -3,7 +3,14 @@ import ctypes as C
 import numpy as np
 from OpenGL.GL import *
 from typing import Tuple, TYPE_CHECKING
-from ..utils.shaders import EXACT_LINES_VS, EXACT_LINES_FS, SCATTER_VS, SCATTER_FS, STRIP_VS, STRIP_FS
+from ..utils.shaders import (
+    EXACT_LINES_VS,
+    EXACT_LINES_FS,
+    SCATTER_VS,
+    SCATTER_FS,
+    STRIP_VS,
+    STRIP_FS,
+)
 from ..utils.gl_utils import link_program
 from ..utils.gl_utils import link_program
 from .base import GLLineBuffers, GLScatterBuffers, GLStripBuffers
@@ -11,6 +18,7 @@ from .base import GLLineBuffers, GLScatterBuffers, GLStripBuffers
 if TYPE_CHECKING:
     from ..options import EngineOptions
     from ..core.legacy import SceneData, LineDataset, ScatterDataset, StripDataset
+
 
 class ExactLineRenderer:
     def __init__(self, options: EngineOptions):
@@ -166,7 +174,7 @@ class ExactLineRenderer:
             glUniformMatrix4fv(self.u_scat_mvp, 1, GL_TRUE, mvp)
             glUniform1f(self.u_scat_alpha, float(global_alpha))
             for scat in scene.scatters:
-                if not hasattr(scat, '_gl'):
+                if not hasattr(scat, "_gl"):
                     scat._gl = self._create_scatter_buffers(scat)
                 glUniform1f(self.u_scat_size, float(scat.size))
                 glBindVertexArray(scat._gl.vao)
@@ -180,7 +188,7 @@ class ExactLineRenderer:
             glUniformMatrix4fv(self.u_strip_mvp, 1, GL_TRUE, mvp)
             glUniform1f(self.u_strip_alpha, float(global_alpha))
             for strip in scene.strips:
-                if not hasattr(strip, '_gl'):
+                if not hasattr(strip, "_gl"):
                     strip._gl = self._create_strip_buffers(strip)
                 glUniform4f(self.u_strip_color, *strip.color)
                 glBindVertexArray(strip._gl.vao)
@@ -204,7 +212,9 @@ class ExactLineRenderer:
         glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, C.c_void_p(0))
 
         glBindVertexArray(0)
-        return GLScatterBuffers(vao=vao, vbo_pts=vbo_pts, vbo_col=vbo_col, count=len(scat.pts), size=scat.size)
+        return GLScatterBuffers(
+            vao=vao, vbo_pts=vbo_pts, vbo_col=vbo_col, count=len(scat.pts), size=scat.size
+        )
 
     def _create_strip_buffers(self, strip: StripDataset) -> GLStripBuffers:
         vao = glGenVertexArrays(1)

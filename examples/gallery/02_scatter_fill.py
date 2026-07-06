@@ -1,9 +1,8 @@
 import numpy as np
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(4)
-n = 220_000
+n = 1_220_000
 theta = rng.uniform(0, 18 * np.pi, n)
 radius = 0.025 * theta + rng.gamma(1.5, 0.08, n)
 x_cloud = radius * np.cos(theta) + rng.normal(scale=0.07, size=n)
@@ -23,5 +22,5 @@ plt.title("220k-point scatter over filled nonlinear band")
 plt.xlabel("x")
 plt.ylabel("y")
 plt.legend()
-plt.show()
+# plt.show()
 plt.savefig("examples/gallery/results/02_scatter_fill.png")

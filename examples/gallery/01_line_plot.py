@@ -1,7 +1,6 @@
 import numpy as np
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(101)
 x = np.linspace(0, 40 * np.pi, 12_000)
 base = np.sin(x) + 0.35 * np.sin(2.7 * x)
@@ -23,4 +22,3 @@ plt.grid(True)
 plt.legend()
 plt.show()
 plt.savefig("examples/gallery/results/01_line_plot.png")
-

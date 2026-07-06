@@ -3,28 +3,31 @@ from dataclasses import dataclass
 from typing import Tuple, Optional
 import numpy as np
 
+
 @dataclass
 class GLPlotSnapshot:
     """
     Serializable container for a snapshot of a GLPlot viewport.
-    This can be used to transfer high-fidelity renders to other 
+    This can be used to transfer high-fidelity renders to other
     plotting libraries like Matplotlib.
     """
-    rgba: np.ndarray                     # H x W x 4 uint8
-    extent: Tuple[float, float, float, float]   # xmin, xmax, ymin, ymax
+
+    rgba: np.ndarray  # H x W x 4 uint8
+    extent: Tuple[float, float, float, float]  # xmin, xmax, ymin, ymax
     xlim: Tuple[float, float]
     ylim: Tuple[float, float]
     width_px: int
     height_px: int
     transparent: bool
 
+
 def snapshot_to_matplotlib(
-    snapshot: GLPlotSnapshot, 
-    ax=None, 
+    snapshot: GLPlotSnapshot,
+    ax=None,
     interpolation: str = "nearest",
     preserve_aspect: bool = False,
     set_limits: bool = True,
-    zorder: float = 0.0
+    zorder: float = 0.0,
 ):
     """
     Standalone utility to embed a GLPlotSnapshot into a Matplotlib axis.
@@ -43,9 +46,9 @@ def snapshot_to_matplotlib(
     artist = ax.imshow(
         snapshot.rgba,
         extent=(xmin, xmax, ymin, ymax),
-        aspect='auto',
+        aspect="auto",
         interpolation=interpolation,
-        zorder=zorder
+        zorder=zorder,
     )
 
     if set_limits:

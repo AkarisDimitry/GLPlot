@@ -2,7 +2,6 @@ import numpy as np
 import os
 import glplot.pyplot as plt
 
-
 rng = np.random.default_rng(1919)
 elev = 27
 azim = -49
@@ -101,5 +100,5 @@ plt.ylabel("flow y")
 plt.zlabel("flow z")
 plt.legend()
 
-#plt.show(density=True)
+# plt.show()
 plt.savefig("examples/gallery/results/19_turbulent_vector_field_3d.png")

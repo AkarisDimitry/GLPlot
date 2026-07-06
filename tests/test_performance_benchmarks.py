@@ -285,7 +285,7 @@ class TestThreadingAndConcurrency:
         figs = []
         for i in range(5):
             figs.append(gplt.figure(f"fig_{i}"))
-            gplt.plot([i, i+1], [0, 1])
+            gplt.plot([i, i + 1], [0, 1])
 
         start = time.time()
         for fig in figs:

@@ -6,33 +6,35 @@ import numpy as np
 if TYPE_CHECKING:
     from ..options import EngineOptions, RenderMode
 
+
 @dataclass
 class RenderContext:
     """
     Stable rendering state provided to compilers and renderers.
     Ensures consistent projection and policy across a single frame.
     """
-    mvp: np.ndarray # 4x4 Ortho projection matrix
-    window_world: Tuple[float, float, float, float] # (l, r, b, t) in world units
-    
-    width_px: int # Screen width
-    height_px: int # Screen height
-    fb_width: int # Framebuffer width (for multisampling/HighDPI)
-    fb_height: int # Framebuffer height
-    
-    mode: RenderMode # EXACT, INTERACTIVE, or PICKING
-    is_density: bool = False # Flag for density/heatmap accumulation mode
-    
+
+    mvp: np.ndarray  # 4x4 Ortho projection matrix
+    window_world: Tuple[float, float, float, float]  # (l, r, b, t) in world units
+
+    width_px: int  # Screen width
+    height_px: int  # Screen height
+    fb_width: int  # Framebuffer width (for multisampling/HighDPI)
+    fb_height: int  # Framebuffer height
+
+    mode: RenderMode  # EXACT, INTERACTIVE, or PICKING
+    is_density: bool = False  # Flag for density/heatmap accumulation mode
+
     # Passing global settings
     global_alpha: float = 1.0
     lod_keep_prob: float = 1.0
-    
+
     # Picking context
     id_offset: int = 0
-    
+
     # Time for animated effects (grain, shimmer, etc)
     time: float = 0.0
-    
+
     # Device Pixel Ratio for HighDPI / Retina consistency
     dpr: float = 1.0
 

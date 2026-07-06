@@ -11,6 +11,7 @@ Covers:
 - WIDE_SEGMENT_INSTANCED_VS shader: u_window uniform + gl_ClipDistance writes
 - PolylineLayer NaN passthrough (GPU data prep doesn't crash on NaN input)
 """
+
 from __future__ import annotations
 
 import math
@@ -22,10 +23,10 @@ import glplot.pyplot as gplt
 from glplot.options import EngineOptions
 from glplot.utils.shaders import WIDE_SEGMENT_INSTANCED_VS
 
-
 # ---------------------------------------------------------------------------
 # Shared fixture: reset pyplot state around every test
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def clean_state():
@@ -37,6 +38,7 @@ def clean_state():
 # ---------------------------------------------------------------------------
 # quiver() batching
 # ---------------------------------------------------------------------------
+
 
 class TestQuiverBatching:
     """quiver() must create exactly 2 layers (1 polyline shaft + 1 patch head)
@@ -59,8 +61,9 @@ class TestQuiverBatching:
         vs = xx.ravel()
         artists = gplt.quiver(xx.ravel(), yy.ravel(), us, vs, scale=0.05)
         assert len(artists) == 2, f"Expected 2 layers, got {len(artists)}"
-        total_scene_quiver = [a for a in gplt.gcf().scene.layers
-                              if a.metadata.get("artist_group") == "quiver"]
+        total_scene_quiver = [
+            a for a in gplt.gcf().scene.layers if a.metadata.get("artist_group") == "quiver"
+        ]
         assert len(total_scene_quiver) == 2
 
     def test_all_artists_tagged_as_quiver(self):
@@ -70,17 +73,17 @@ class TestQuiverBatching:
     def test_shaft_layer_is_polyline_with_nan_separators(self):
         N = 4
         artists = gplt.quiver(
-            [0, 1, 2, 3], [0, 0, 0, 0],
-            [1, 1, 1, 1], [0, 0, 0, 0],
+            [0, 1, 2, 3],
+            [0, 0, 0, 0],
+            [1, 1, 1, 1],
+            [0, 0, 0, 0],
             scale=0.5,
         )
         shaft = next(a for a in artists if a.layer_type == "polyline")
         pts = shaft.pts
         # Layout: [start0, end0, NaN, start1, end1, NaN, ..., startN-1, endN-1]
         # => 3*N - 1 rows for N arrows
-        assert pts.shape == (3 * N - 1, 2), (
-            f"Expected ({3 * N - 1}, 2) pts, got {pts.shape}"
-        )
+        assert pts.shape == (3 * N - 1, 2), f"Expected ({3 * N - 1}, 2) pts, got {pts.shape}"
         # Every 3rd row starting at index 2 must be NaN (separators)
         nan_rows = pts[2::3]
         assert np.all(np.isnan(nan_rows)), "Separator rows must be NaN"
@@ -114,8 +117,10 @@ class TestQuiverBatching:
     def test_mixed_zero_and_nonzero_arrows(self):
         # 3 arrows: 2 valid, 1 zero-length; head patch should have 2*3=6 vertices
         artists = gplt.quiver(
-            [0, 1, 2], [0, 0, 0],
-            [1, 0, 1], [0, 0, 0],  # middle arrow has zero length
+            [0, 1, 2],
+            [0, 0, 0],
+            [1, 0, 1],
+            [0, 0, 0],  # middle arrow has zero length
             scale=0.3,
         )
         head = next((a for a in artists if a.layer_type == "patch"), None)
@@ -134,6 +139,7 @@ class TestQuiverBatching:
 # imshow() point size
 # ---------------------------------------------------------------------------
 
+
 class TestImshowPointSize:
     """imshow() must use max(1.0, 650/max(rows,cols)) with NO upper cap.
     The old cap of min(8.0, ...) was removed so sparse images fill their pixels."""
@@ -142,9 +148,9 @@ class TestImshowPointSize:
         matrix = np.zeros((2, 2), dtype=np.float32)
         layer = gplt.imshow(matrix)
         expected = max(1.0, 650.0 / 2)  # 325.0
-        assert math.isclose(layer.style.point_size, expected, rel_tol=1e-3), (
-            f"Expected point_size≈{expected}, got {layer.style.point_size}"
-        )
+        assert math.isclose(
+            layer.style.point_size, expected, rel_tol=1e-3
+        ), f"Expected point_size≈{expected}, got {layer.style.point_size}"
 
     def test_medium_matrix_scales_correctly(self):
         matrix = np.zeros((50, 50), dtype=np.float32)
@@ -173,6 +179,7 @@ class TestImshowPointSize:
 # ---------------------------------------------------------------------------
 # savefig() fallback path
 # ---------------------------------------------------------------------------
+
 
 class TestSavefigFallback:
     """When plot.window is None (no GL context created yet), savefig() must
@@ -204,6 +211,7 @@ class TestSavefigFallback:
 # default_global_alpha
 # ---------------------------------------------------------------------------
 
+
 class TestDefaultGlobalAlpha:
     """default_global_alpha must be 1.0.  The prior value of 0.20 caused lines
     with explicit alpha=0.17 to render at only 3.4% effective opacity."""
@@ -221,6 +229,7 @@ class TestDefaultGlobalAlpha:
 # ---------------------------------------------------------------------------
 # fill_between() vertex interleaving
 # ---------------------------------------------------------------------------
+
 
 class TestFillBetweenGeometry:
     """fill_between() must interleave top/bottom vertices for GL_TRIANGLE_STRIP.
@@ -261,6 +270,7 @@ class TestFillBetweenGeometry:
 # bar() geometry
 # ---------------------------------------------------------------------------
 
+
 class TestBarGeometry:
     """Each bar must be a 4-vertex quad with indices [0,1,2,0,2,3] forming two
     counter-clockwise triangles (lower-left → upper-left → upper-right → lower-right).
@@ -277,12 +287,15 @@ class TestBarGeometry:
         verts = self._bar_layer().vertices
         assert verts.shape == (4, 2)
         half = 0.5
-        expected = np.array([
-            [-half, 0.0],   # lower-left
-            [-half, 2.0],   # upper-left
-            [ half, 2.0],   # upper-right
-            [ half, 0.0],   # lower-right
-        ], dtype=np.float32)
+        expected = np.array(
+            [
+                [-half, 0.0],  # lower-left
+                [-half, 2.0],  # upper-left
+                [half, 2.0],  # upper-right
+                [half, 0.0],  # lower-right
+            ],
+            dtype=np.float32,
+        )
         np.testing.assert_allclose(verts, expected, atol=1e-5)
 
     def test_quad_indices_form_two_triangles(self):
@@ -308,12 +321,13 @@ class TestBarGeometry:
         gplt.bar([0.0], [1.0], width=0.4)
         verts = self._bar_layer().vertices
         assert np.isclose(verts[:, 0].min(), -0.2, atol=1e-5)
-        assert np.isclose(verts[:, 0].max(),  0.2, atol=1e-5)
+        assert np.isclose(verts[:, 0].max(), 0.2, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------
 # Shader: u_window + gl_ClipDistance
 # ---------------------------------------------------------------------------
+
 
 class TestShaderClipDistanceWrites:
     """WIDE_SEGMENT_INSTANCED_VS must declare u_window and unconditionally write
@@ -321,32 +335,34 @@ class TestShaderClipDistanceWrites:
     undefined (often negative) clip distances → random vertex culling → dotted lines."""
 
     def test_u_window_uniform_declared(self):
-        assert "uniform vec4  u_window;" in WIDE_SEGMENT_INSTANCED_VS, (
-            "u_window must be declared as a vec4 uniform"
-        )
+        assert (
+            "uniform vec4  u_window;" in WIDE_SEGMENT_INSTANCED_VS
+        ), "u_window must be declared as a vec4 uniform"
 
     def test_all_four_clip_distances_written(self):
         for i in range(4):
-            assert f"gl_ClipDistance[{i}]" in WIDE_SEGMENT_INSTANCED_VS, (
-                f"gl_ClipDistance[{i}] must be written in the vertex shader"
-            )
+            assert (
+                f"gl_ClipDistance[{i}]" in WIDE_SEGMENT_INSTANCED_VS
+            ), f"gl_ClipDistance[{i}] must be written in the vertex shader"
 
     def test_clip_distances_use_u_window_components(self):
         # Each clip distance should reference u_window (not a hardcoded value)
         lines_with_clip = [
-            line for line in WIDE_SEGMENT_INSTANCED_VS.splitlines()
+            line
+            for line in WIDE_SEGMENT_INSTANCED_VS.splitlines()
             if "gl_ClipDistance[" in line and "=" in line
         ]
         assert len(lines_with_clip) >= 4
         for line in lines_with_clip:
-            assert "u_window" in line or "-1.0" in line, (
-                f"Clip distance assignment should use u_window or be a NaN-guard: {line}"
-            )
+            assert (
+                "u_window" in line or "-1.0" in line
+            ), f"Clip distance assignment should use u_window or be a NaN-guard: {line}"
 
 
 # ---------------------------------------------------------------------------
 # PolylineLayer NaN segment passthrough
 # ---------------------------------------------------------------------------
+
 
 class TestPolylineNanSegment:
     """PolylineLayer.pts with NaN rows (from batched quiver shafts) must not
@@ -373,11 +389,13 @@ class TestPolylineNanSegment:
         # (a) when OpenGL.GL is mocked globally the symbols don't exist yet, and
         # (b) when OpenGL.GL is real they are replaced so no GL context is needed.
         # patch.object restores originals (or removes injected attrs) on exit.
-        with patch.object(polyline_mod, "glBindBuffer", MagicMock(), create=True), \
-             patch.object(polyline_mod, "glBufferData", MagicMock(), create=True), \
-             patch.object(polyline_mod, "glBufferSubData", MagicMock(), create=True), \
-             patch.object(polyline_mod, "GL_ARRAY_BUFFER", 0x8892, create=True), \
-             patch.object(polyline_mod, "GL_STREAM_DRAW", 0x88E0, create=True):
+        with (
+            patch.object(polyline_mod, "glBindBuffer", MagicMock(), create=True),
+            patch.object(polyline_mod, "glBufferData", MagicMock(), create=True),
+            patch.object(polyline_mod, "glBufferSubData", MagicMock(), create=True),
+            patch.object(polyline_mod, "GL_ARRAY_BUFFER", 0x8892, create=True),
+            patch.object(polyline_mod, "GL_STREAM_DRAW", 0x88E0, create=True),
+        ):
 
             renderer = PolylineRenderer(EngineOptions())
             layer = PolylineLayer(
