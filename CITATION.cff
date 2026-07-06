@@ -1,21 +1,34 @@
 cff-version: 1.2.0
 title: GLPlot - High-Performance GPU-Accelerated Plotting Library for Python
-message: "If you use GLPlot in your research, please cite it as below."
+message: "If you use GLPlot in your research, please cite it as below. Scientific paper with full benchmarks and technical details is in preparation."
 type: software
 authors:
   - family-names: Lombardi
     given-names: Juan Manuel
     email: lombardi@fhi-berlin.mpg.de
     affiliation: "Fritz Haber Institute of the Max Planck Society"
+    orcid: "https://orcid.org/0000-0000-0000-0000"
 identifiers:
   - type: url
     value: "https://github.com/AkarisDimitry/GLPlot"
+  - type: url
+    value: "https://gitlab.mpcdf.mpg.de/jmlombardi/glplot"
   - type: doi
-    value: "10.5281/zenodo.PLACEHOLDER"
+    description: "Zenodo deposit (pending - will be assigned upon publication)"
+    value: "10.5281/zenodo.pending"
 repository-code: "https://github.com/AkarisDimitry/GLPlot"
-url: "https://github.com/AkarisDimitry/GLPlot"
 repository: "https://github.com/AkarisDimitry/GLPlot"
-abstract: "GLPlot is a high-performance, GPU-accelerated plotting library for Python that provides a Matplotlib-compatible API with OpenGL/GLFW backend support. It efficiently handles millions of geometric primitives through instanced rendering and advanced density visualization techniques, enabling interactive scientific visualization at scale."
+url: "https://github.com/AkarisDimitry/GLPlot"
+documentation: "https://github.com/AkarisDimitry/GLPlot/blob/main/README.md"
+abstract: |
+  GLPlot is a high-performance, GPU-accelerated plotting library for Python that provides a
+  Matplotlib-compatible API with OpenGL/GLFW backend support. It efficiently handles millions
+  of geometric primitives through instanced rendering and advanced density visualization techniques,
+  enabling interactive scientific visualization at scale.
+
+  Features include viewport-relative center projection for extreme zoom precision, HDR density
+  accumulation for overlapping elements, and complete 2D/3D support with SSAO for enhanced depth
+  perception. All visualizations maintain 60fps+ performance regardless of dataset size.
 keywords:
   - plotting
   - visualization
@@ -24,6 +37,10 @@ keywords:
   - scientific computing
   - Python
   - GLSL
+  - high-performance computing
+  - data visualization
 license: MIT
+status: "active development"
 version: 0.1.2
 date-released: 2026-07-06
+development-status: "Beta"
