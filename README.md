@@ -302,11 +302,11 @@ GLPlot is particularly suited for:
 GLPlot maintains **60+ FPS** across all tested platforms with various data sizes:
 
 ### Rendering Performance
-- **1M points scatter**: 60 FPS
-- **500k line family density**: 60 FPS  
-- **1M histogram bins**: 60 FPS
-- **3D volumetric cloud (750k points)**: 60 FPS
-- **Large 3D meshes**: 60+ FPS with 100k+ vertices
+- **1M points scatter**: 60fps+
+- **500k line family density**: 60fps+  
+- **1M histogram bins**: 60fps+
+- **3D volumetric cloud (750k points)**: 60fps+
+- **Large 3D meshes**: 60fps+ with 100k+ vertices
 
 ### Scaling Efficiency
 - Linear or better scaling with dataset size
