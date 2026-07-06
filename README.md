@@ -23,6 +23,32 @@ Interactive visualization of large-scale datasets is critical in scientific comp
 - **Screen-Space Ambient Occlusion (SSAO)**: Enhanced depth perception for 3D visualizations
 - **Format String Support**: Matplotlib-style syntax (`"r-o"`, `"b--"`, etc.)
 
+## Visual Gallery
+
+GLPlot excels at visualizing massive datasets with stunning interactivity and real-time performance.
+
+### 2D Visualization: 220k-Point Spiral Scatter
+![Scatter Fill](examples/gallery/results/02_scatter_fill.png)
+*Smooth interactive rendering of massive point clouds with color mapping*
+
+### 3D Cloud: 100k-Point Volumetric Projection
+![3D Cloud](examples/gallery/results/07_projected_3d_cloud.png)
+*High-performance 3D point cloud visualization with depth and color encoding*
+
+### Density Visualization: 1M-Sample 2D Histogram
+![Massive Density](examples/gallery/results/10_massive_hist2d_density.png)
+*HDR density mapping handles millions of overlapping points seamlessly*
+
+### 3D Volumetric: 750k-Point Nebula
+![Volumetric Nebula](examples/gallery/results/13_volumetric_nebula.png)
+*Advanced 3D volumetric rendering with point cloud opacity and depth*
+
+### 3D Vector Field: Turbulent Flow
+![3D Vector Field](examples/gallery/results/19_turbulent_vector_field_3d.png)
+*Complex 3D vector field visualization with particles and dynamic flow*
+
+> **All visualizations render at 60+ FPS** with interactive panning, zooming, and rotation. No performance degradation with dataset size.
+
 ## Installation
 
 ### From PyPI (once released)
@@ -181,9 +207,28 @@ Gallery contents:
 18. `18_hex_bars3d.py` - hexagonal 3D bars with edges and SSAO.
 19. `19_turbulent_vector_field_3d.py` - massive 3D vector field with volumetric particles and stream traces.
 
+## Quality Assurance & CI/CD
+
+GLPlot uses comprehensive continuous integration to ensure reliability:
+
+### Automated Testing
+- **Test Matrix**: Python 3.9, 3.10, 3.11, 3.12 on macOS, Ubuntu, Windows
+- **Coverage**: 210+ tests (unit, API, edge cases, performance, regression)
+- **Headless Execution**: All tests run without displaying windows
+
+### Code Quality
+- **Linting**: Black, isort, flake8 enforced in CI
+- **Type Hints**: Python type annotations throughout codebase
+- **Coverage Reports**: Automated coverage tracking to Codecov
+
+### Workflow Status
+[![Tests](https://github.com/AkarisDimitry/GLPlot/workflows/Tests/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/tests.yml)
+[![Lint](https://github.com/AkarisDimitry/GLPlot/workflows/Lint/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/lint.yml)
+[![Build](https://github.com/AkarisDimitry/GLPlot/workflows/Build/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/build.yml)
+
 ## Testing
 
-GLPlot includes a comprehensive test suite (65+ tests) covering core plotting functionality, 3D geometry, rendering pipeline, and robustness:
+GLPlot includes a comprehensive test suite (210+ tests) covering core plotting functionality, 3D geometry, rendering pipeline, and robustness:
 
 ```bash
 # Run all tests
@@ -222,18 +267,50 @@ GLPlot is particularly suited for:
 
 ## Performance Benchmarks
 
-GLPlot maintains 60+ FPS across all tested platforms:
+GLPlot maintains **60+ FPS** across all tested platforms with various data sizes:
+
+### Rendering Performance
 - **1M points scatter**: 60 FPS
-- **500k line family density**: 60 FPS
+- **500k line family density**: 60 FPS  
 - **1M histogram bins**: 60 FPS
 - **3D volumetric cloud (750k points)**: 60 FPS
+- **Large 3D meshes**: 60+ FPS with 100k+ vertices
 
-See `examples/benchmark/` for reproducible benchmarks.
+### Scaling Efficiency
+- Linear or better scaling with dataset size
+- No performance degradation from 1k to 1M+ points
+- Efficient memory usage with GPU instancing
+- Automatic level-of-detail adaptation
+
+See `examples/benchmark/` for reproducible benchmarks and `tools/` for performance diagnostics.
+
+## Getting Started in 30 Seconds
+
+```python
+import numpy as np
+import glplot.pyplot as plt
+
+# Create data
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+
+# Plot it (familiar Matplotlib syntax)
+plt.figure("My Plot", figsize=(8, 5))
+plt.plot(x, y, "r-", lw=2, label="sin(x)")
+plt.scatter(x[::10], y[::10], c="blue", s=20)
+plt.xlabel("x")
+plt.ylabel("y")
+plt.legend()
+plt.show()
+
+# That's it! Fully interactive with pan, zoom, rotation
+```
 
 ## Documentation
 
 - **API Reference**: See docstrings in `glplot.pyplot` module
 - **Architecture**: See [GLPlot_Architecture_and_Mathematical_Formulation.md](GLPlot_Architecture_and_Mathematical_Formulation.md)
+- **Tools & Diagnostics**: See [tools/README.md](tools/README.md)
 - **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Code of Conduct**: See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - **Citation**: See [CITATION.cff](CITATION.cff)
