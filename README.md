@@ -49,6 +49,38 @@ GLPlot excels at visualizing massive datasets with stunning interactivity and re
 
 > **All visualizations render at 60+ FPS** with interactive panning, zooming, and rotation. No performance degradation with dataset size.
 
+## Quick Showcase - Simple & Beautiful Examples
+
+Start with these elegant examples to see GLPlot's power with minimal code:
+
+### 🚀 Run in 30 seconds
+```bash
+# 100k colorful particles
+python examples/showcase/01_colorful_particles_2d.py
+
+# Mandelbrot fractal (360k points)
+python examples/showcase/02_mandelbrot_zoom_2d.py
+
+# Spinning 3D torus
+python examples/showcase/03_spinning_torus_3d.py
+
+# Cosmic 3D sphere with noise
+python examples/showcase/04_cosmic_sphere_3d.py
+```
+
+### ✨ What You'll See
+
+| Example | Data | Colors | Interaction | Code |
+|---------|------|--------|-------------|------|
+| Particles 2D | 100k points | Rainbow gradient | Pan/Zoom | 10 lines |
+| Mandelbrot | 360k points | Psychedelic | Pan/Zoom | 15 lines |
+| Torus 3D | 50k points | HSV spectrum | Rotate/Zoom | 12 lines |
+| Cosmic Sphere | 150k points | Rainbow noise | Rotate/Zoom | 14 lines |
+
+**All run at 60+ FPS** with smooth interactive controls and vibrant colors.
+
+See [examples/showcase/README.md](examples/showcase/README.md) for detailed descriptions and how to modify them.
+
 ## Installation
 
 ### From PyPI (once released)
