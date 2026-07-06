@@ -28,14 +28,14 @@ lint:
 # Test stage - Python 3.9
 test-py39:
   stage: test
-  image: python:3.9
+  image: ubuntu:22.04
   before_script:
     - apt-get update -qq
-    - apt-get install -y -qq libgl1-mesa-glx libglu1-mesa
-    - pip install --upgrade pip
-    - pip install -e ".[test]"
+    - apt-get install -y -qq python3.9 python3.9-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
+    - python3.9 -m pip install --upgrade pip
+    - python3.9 -m pip install -e ".[test]"
   script:
-    - pytest tests/ -v --cov=glplot --cov-report=term --cov-report=xml
+    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -47,14 +47,14 @@ test-py39:
 # Test stage - Python 3.10
 test-py310:
   stage: test
-  image: python:3.10
+  image: ubuntu:22.04
   before_script:
     - apt-get update -qq
-    - apt-get install -y -qq libgl1-mesa-glx libglu1-mesa
-    - pip install --upgrade pip
-    - pip install -e ".[test]"
+    - apt-get install -y -qq python3.10 python3.10-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
+    - python3.10 -m pip install --upgrade pip
+    - python3.10 -m pip install -e ".[test]"
   script:
-    - pytest tests/ -v --cov=glplot --cov-report=term --cov-report=xml
+    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -66,14 +66,14 @@ test-py310:
 # Test stage - Python 3.11
 test-py311:
   stage: test
-  image: python:3.11
+  image: ubuntu:22.04
   before_script:
     - apt-get update -qq
-    - apt-get install -y -qq libgl1-mesa-glx libglu1-mesa
-    - pip install --upgrade pip
-    - pip install -e ".[test]"
+    - apt-get install -y -qq python3.11 python3.11-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
+    - python3.11 -m pip install --upgrade pip
+    - python3.11 -m pip install -e ".[test]"
   script:
-    - pytest tests/ -v --cov=glplot --cov-report=term --cov-report=xml
+    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -85,14 +85,14 @@ test-py311:
 # Test stage - Python 3.12 (primary)
 test-py312:
   stage: test
-  image: python:3.12
+  image: ubuntu:22.04
   before_script:
     - apt-get update -qq
-    - apt-get install -y -qq libgl1-mesa-glx libglu1-mesa
-    - pip install --upgrade pip
-    - pip install -e ".[test]"
+    - apt-get install -y -qq python3.12 python3.12-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
+    - python3.12 -m pip install --upgrade pip
+    - python3.12 -m pip install -e ".[test]"
   script:
-    - pytest tests/ -v --cov=glplot --cov-report=term --cov-report=xml
+    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
