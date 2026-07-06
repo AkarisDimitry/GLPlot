@@ -32,10 +32,12 @@ test-py310:
   stage: test
   image: python:3.10
   before_script:
+    - apt-get update
+    - apt-get install -y libgl1-mesa libglu1-mesa-glx libosmesa6
     - pip install --upgrade pip setuptools wheel
     - pip install -e ".[test]"
   script:
-    - pytest tests/ -v --cov=glplot --cov-report=xml
+    - LIBGL_ALWAYS_INDIRECT=1 pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -50,10 +52,12 @@ test-py311:
   stage: test
   image: python:3.11
   before_script:
+    - apt-get update
+    - apt-get install -y libgl1-mesa libglu1-mesa-glx libosmesa6
     - pip install --upgrade pip setuptools wheel
     - pip install -e ".[test]"
   script:
-    - pytest tests/ -v --cov=glplot --cov-report=xml
+    - LIBGL_ALWAYS_INDIRECT=1 pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -68,10 +72,12 @@ test-py312:
   stage: test
   image: python:3.12
   before_script:
+    - apt-get update
+    - apt-get install -y libgl1-mesa libglu1-mesa-glx libosmesa6
     - pip install --upgrade pip setuptools wheel
     - pip install -e ".[test]"
   script:
-    - pytest tests/ -v --cov=glplot --cov-report=xml
+    - LIBGL_ALWAYS_INDIRECT=1 pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
