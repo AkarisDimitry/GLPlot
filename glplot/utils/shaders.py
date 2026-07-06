@@ -184,6 +184,57 @@ DENSITY_SCHEMES = [
     "Cool"
 ]
 
+GEOMETRY3D_VS = r"""
+#version 330 core
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec4 a_color;
+
+uniform mat4 u_mvp;
+uniform float u_point_size;
+uniform float u_ref_w;   // clip-space w at scene centre (≈ camera distance); 0 = disable perspective sizing
+uniform vec2 u_z_range;
+
+out vec4 v_color;
+out float v_z_norm;
+
+void main() {
+    gl_Position = u_mvp * vec4(a_pos, 1.0);
+    // Perspective-correct point size: points closer than the scene centre appear
+    // proportionally larger, farther points proportionally smaller.
+    float sz = (u_ref_w > 0.0)
+        ? u_point_size * u_ref_w / max(gl_Position.w, 1e-4)
+        : u_point_size;
+    gl_PointSize = clamp(sz, 0.5, 512.0);
+    v_color = a_color;
+    v_z_norm = clamp((a_pos.z - u_z_range.x) / max(u_z_range.y - u_z_range.x, 1e-6), 0.0, 1.0);
+}
+"""
+
+GEOMETRY3D_FS = r"""
+#version 330 core
+in vec4 v_color;
+in float v_z_norm;
+uniform float u_alpha;
+uniform int u_ssao_enabled;
+uniform float u_ssao_strength;
+uniform int u_is_points;
+out vec4 fragColor;
+
+void main() {
+    if (u_is_points == 1) {
+        vec2 d = gl_PointCoord - vec2(0.5);
+        if (dot(d, d) > 0.25) discard;
+    }
+    float ao = 1.0;
+    if (u_ssao_enabled == 1) {
+        float cavity = 1.0 - smoothstep(0.10, 0.95, v_z_norm);
+        float rim = smoothstep(0.0, 0.18, v_z_norm);
+        ao = clamp(1.0 - u_ssao_strength * cavity * rim, 0.18, 1.0);
+    }
+    fragColor = vec4(v_color.rgb * ao, v_color.a * u_alpha);
+}
+"""
+
 def mix(c1, c2, x):
     return (
         c1[0] * (1.0 - x) + c2[0] * x,
@@ -517,6 +568,34 @@ void main() {
 }
 """
 
+# --- IMAGE (textured quad for imshow) ---
+
+IMAGE_VS = r"""
+#version 330 core
+layout(location=0) in vec2 a_pos;
+layout(location=1) in vec2 a_uv;
+uniform mat4 u_mvp;
+out vec2 v_uv;
+void main() {
+    gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);
+    v_uv = a_uv;
+}
+"""
+
+IMAGE_FS = r"""
+#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_alpha;
+out vec4 f_color;
+void main() {
+    vec4 col = texture(u_tex, v_uv);
+    if (col.a < 0.004) discard;
+    col.a *= u_alpha;
+    f_color = col;
+}
+"""
+
 # --- SCATTERS ---
 
 SCATTER_VS = r"""
@@ -662,21 +741,23 @@ layout(location=0) in vec2 a_corner;   // (t, side): t in {0,1}, side in {-0.5,+
 layout(location=1) in vec2 i_p0;       // segment start
 layout(location=2) in vec2 i_p1;       // segment end
 
-uniform vec2  u_ndc_scale;             // ( 2/(r-l),  2/(t-b) )
-uniform vec2  u_ndc_offset;            // (-(r+l)/(r-l), -(t+b)/(t-b))
+uniform mat4  u_mvp;                   // margin-adjusted ortho projection (matches patch/scatter)
 uniform vec2  u_viewport_size;         // framebuffer size in pixels
 uniform vec4  u_color;
 uniform float u_alpha;
 uniform float u_width;
 uniform float u_id_norm;
 uniform vec2  u_layer_offset;
+uniform vec4  u_window;                // (xmin, xmax, ymin, ymax) world space
 
 out vec4 v_col;
 flat out float v_id_norm;
 
 void main() {
-    vec2 ndc0 = (i_p0 + u_layer_offset) * u_ndc_scale + u_ndc_offset;
-    vec2 ndc1 = (i_p1 + u_layer_offset) * u_ndc_scale + u_ndc_offset;
+    // Use the same MVP as the patch renderer so shaft endpoints and arrowhead
+    // vertices are in the same coordinate space (margin-adjusted plot area).
+    vec2 ndc0 = (u_mvp * vec4(i_p0 + u_layer_offset, 0.0, 1.0)).xy;
+    vec2 ndc1 = (u_mvp * vec4(i_p1 + u_layer_offset, 0.0, 1.0)).xy;
 
     // Convert NDC delta to pixels
     vec2 dir_px = (ndc1 - ndc0) * (0.5 * u_viewport_size);
@@ -686,13 +767,32 @@ void main() {
         ? normalize(vec2(-dir_px.y, dir_px.x))
         : vec2(0.0, 1.0);
 
-    vec2 p_ndc = mix(ndc0, ndc1, a_corner.x);
+    // Extend sub-pixel segments to minimum 1px so every pixel along the
+    // path is covered.  Without this, near-horizontal segments shorter than
+    // 1px leave gaps between rasterised quads, making smooth curves appear
+    // as dotted lines at wide zoom-out.
+    float len_px = sqrt(max(len2, 0.0));
+    float draw_scale = (len_px > 1e-6) ? max(len_px, 1.0) / len_px : 1.0;
+    vec2 ndc1_draw = ndc0 + (ndc1 - ndc0) * draw_scale;
+
+    vec2 p_ndc = mix(ndc0, ndc1_draw, a_corner.x);
 
     // u_width is full width; offset from centerline is ±0.5*u_width
     vec2 offset_ndc = n_px * (u_width / u_viewport_size) * a_corner.y;
     p_ndc += offset_ndc;
 
     gl_Position = vec4(p_ndc, 0.0, 1.0);
+
+    // World-space clip distances — must always be written when the engine
+    // enables GL_CLIP_DISTANCE0-3.  Omitting them leaves the values undefined,
+    // which causes the driver to randomly cull vertices, making lines appear
+    // as dotted dashes.  We clip against the visible world window so that
+    // off-screen segments are skipped cheaply, matching the line-family optimisation.
+    vec2 world_pos = mix(i_p0, i_p1, a_corner.x) + u_layer_offset;
+    gl_ClipDistance[0] = world_pos.x - u_window.x;
+    gl_ClipDistance[1] = u_window.y - world_pos.x;
+    gl_ClipDistance[2] = world_pos.y - u_window.z;
+    gl_ClipDistance[3] = u_window.w - world_pos.y;
 
     v_col = u_color;
     v_col.a *= u_alpha;
@@ -741,9 +841,17 @@ uniform mat4  u_mvp;
 uniform vec4  u_color;
 uniform float u_alpha;
 uniform vec2  u_layer_offset;
+uniform vec4  u_window;   // (xmin, xmax, ymin, ymax) world space
 out vec4 v_col;
 void main() {
-    gl_Position = u_mvp * vec4(a_pos + u_layer_offset, 0.0, 1.0);
+    vec2 world_pos = a_pos + u_layer_offset;
+    gl_Position = u_mvp * vec4(world_pos, 0.0, 1.0);
+    // Must always write gl_ClipDistance when GL_CLIP_DISTANCE0-3 are enabled.
+    // Undefined values cause random arrowhead/patch culling on macOS Metal.
+    gl_ClipDistance[0] = world_pos.x - u_window.x;
+    gl_ClipDistance[1] = u_window.y - world_pos.x;
+    gl_ClipDistance[2] = world_pos.y - u_window.z;
+    gl_ClipDistance[3] = u_window.w - world_pos.y;
     v_col = u_color;
     v_col.a *= u_alpha;
 }

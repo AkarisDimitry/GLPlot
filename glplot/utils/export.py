@@ -2,8 +2,8 @@ from __future__ import annotations
 import time
 import numpy as np
 from OpenGL.GL import *
-from typing import Optional, Tuple, TYPE_CHECKING
-from ..options import RenderMode, BlendMode
+from typing import Optional, TYPE_CHECKING
+from ..options import RenderMode
 from ..core.context import RenderContext
 
 if TYPE_CHECKING:
@@ -39,19 +39,31 @@ class ExportManager:
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, None)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0)
         
+        rbo = glGenRenderbuffers(1)
+        glBindRenderbuffer(GL_RENDERBUFFER, rbo)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height)
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo)
+        glBindRenderbuffer(GL_RENDERBUFFER, 0)
+        
         if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
             glBindFramebuffer(GL_FRAMEBUFFER, 0)
             glDeleteFramebuffers(1, [fbo])
             glDeleteTextures(1, [tex])
+            glDeleteRenderbuffers(1, [rbo])
             raise RuntimeError("Failed to create export framebuffer")
 
         # 3. Save engine state and configure for export
         old_viewport = glGetIntegerv(GL_VIEWPORT)
         glViewport(0, 0, width, height)
         glClearColor(1.0, 1.0, 1.0, 1.0)
-        glClear(GL_COLOR_BUFFER_BIT)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         # 4. Render
+        # Auto-fit the view if no explicit limits have been set yet (mirrors the
+        # behaviour of matplotlib's savefig, which always renders the autoscaled bounds).
+        if getattr(self.engine, "_needs_initial_autoscale", False) and not self.engine._is_pure_3d_scene():
+            self.engine.autoscale()
+
         # Create a proper RenderContext for high-resolution export
         mvp = self.engine.camera_controller.mvp(width, height)
         window = self.engine.camera_controller.world_window(width, height)
@@ -109,5 +121,6 @@ class ExportManager:
         glViewport(*old_viewport)
         glDeleteFramebuffers(1, [fbo])
         glDeleteTextures(1, [tex])
+        glDeleteRenderbuffers(1, [rbo])
         
         print(f"Exported high-res image to {filename} ({width}x{height})")
