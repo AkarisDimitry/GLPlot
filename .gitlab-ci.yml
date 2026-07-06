@@ -25,17 +25,20 @@ lint:
     - flake8 glplot tests --count --select=E9,F63,F7,F82 --show-source --statistics
   allow_failure: true
 
-# Test stage - Python 3.9
+# Test stage - Python 3.9 (with deadsnakes PPA)
 test-py39:
   stage: test
   image: ubuntu:22.04
   before_script:
     - apt-get update -qq
+    - apt-get install -y -qq software-properties-common
+    - add-apt-repository -y ppa:deadsnakes/ppa
+    - apt-get update -qq
     - apt-get install -y -qq python3.9 python3.9-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
-    - python3.9 -m pip install --upgrade pip
+    - python3.9 -m pip install --upgrade pip setuptools wheel
     - python3.9 -m pip install -e ".[test]"
   script:
-    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
+    - xvfb-run -a python3.9 -m pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -51,10 +54,10 @@ test-py310:
   before_script:
     - apt-get update -qq
     - apt-get install -y -qq python3.10 python3.10-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
-    - python3.10 -m pip install --upgrade pip
+    - python3.10 -m pip install --upgrade pip setuptools wheel
     - python3.10 -m pip install -e ".[test]"
   script:
-    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
+    - xvfb-run -a python3.10 -m pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -63,17 +66,20 @@ test-py310:
         path: coverage.xml
     expire_in: 30 days
 
-# Test stage - Python 3.11
+# Test stage - Python 3.11 (with deadsnakes PPA)
 test-py311:
   stage: test
   image: ubuntu:22.04
   before_script:
     - apt-get update -qq
+    - apt-get install -y -qq software-properties-common
+    - add-apt-repository -y ppa:deadsnakes/ppa
+    - apt-get update -qq
     - apt-get install -y -qq python3.11 python3.11-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
-    - python3.11 -m pip install --upgrade pip
+    - python3.11 -m pip install --upgrade pip setuptools wheel
     - python3.11 -m pip install -e ".[test]"
   script:
-    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
+    - xvfb-run -a python3.11 -m pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -88,11 +94,14 @@ test-py312:
   image: ubuntu:22.04
   before_script:
     - apt-get update -qq
+    - apt-get install -y -qq software-properties-common
+    - add-apt-repository -y ppa:deadsnakes/ppa
+    - apt-get update -qq
     - apt-get install -y -qq python3.12 python3.12-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
-    - python3.12 -m pip install --upgrade pip
+    - python3.12 -m pip install --upgrade pip setuptools wheel
     - python3.12 -m pip install -e ".[test]"
   script:
-    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
+    - xvfb-run -a python3.12 -m pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
