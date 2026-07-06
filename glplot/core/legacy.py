@@ -83,12 +83,14 @@ class InteractionState:
     ctrl_down: bool = False
     alt_down: bool = False
 
-    drag_mode: str = "pan"            # "pan", "move", "ratio"
+    drag_mode: str = "pan"            # "pan", "move", "ratio", "rotate3d"
     selected_layer_id: Optional[int] = None
     drag_start_world: Tuple[float, float] = (0.0, 0.0)
     drag_start_translation: Optional[Tuple[float, float]] = None
     drag_start_zoom_x: float = 1.0
     drag_start_zoom_y: float = 1.0
+    drag_start_azim: float = 0.0
+    drag_start_elev: float = 0.0
     explicit_pick_requested: bool = False  # Set on Shift+Click; bypasses the shift_down gate
 
     hover_idx: int = -1

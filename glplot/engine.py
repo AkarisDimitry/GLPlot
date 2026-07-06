@@ -1,7 +1,7 @@
 from __future__ import annotations
 import math
 import time
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, Dict
 import numpy as np
 import glfw
 from OpenGL.GL import *
@@ -13,7 +13,7 @@ from .core.legacy import (
     CacheState, FrameState, LineDataset, 
     ScatterDataset, StripDataset
 )
-from .core.layers import BaseLayer, LineFamilyLayer, ScatterLayer, PolylineLayer, PatchLayer, TextLayer
+from .core.layers import BaseLayer, LineFamilyLayer, ScatterLayer, PolylineLayer, PatchLayer, TextLayer, Layer3D
 from .core.context import RenderContext
 from .controllers import CameraController
 from .renderers.exact import ExactLineRenderer
@@ -43,6 +43,7 @@ class GPULinePlot:
         self.height = self.options.window_height
         self.fb_width = self.options.window_width
         self.fb_height = self.options.window_height
+        self.title = title
 
         self.camera_controller = CameraController(self.camera, self.options)
         self.exact_renderer = ExactLineRenderer(self.options)
@@ -55,8 +56,19 @@ class GPULinePlot:
 
         self._cpu_line_copy: Optional[np.ndarray] = None
         self._is_test_mode: bool = False
+        self._needs_initial_autoscale: bool = True
         self.display_density: bool = False
         self.density_renderer = DensityRenderer(self)
+        self.global_alpha = float(self.options.default_global_alpha)
+        self.enable_subsample = bool(self.options.lod_enabled)
+        self.max_lines_per_px = int(self.options.default_line_budget_per_px)
+        self.view3d = {
+            "elev": 28.0,
+            "azim": -45.0,
+            "fov": 42.0,
+            "distance": None,
+            "show_axes": True,
+        }
         
         self.picked_info: Optional[dict] = None
         self.mouse_world: Optional[Tuple[float, float]] = None
@@ -69,6 +81,246 @@ class GPULinePlot:
     # --------------------------------------------------------
     # Public API
     # --------------------------------------------------------
+
+    @property
+    def show_density(self) -> bool:
+        return self.display_density
+
+    @show_density.setter
+    def show_density(self, enabled: bool) -> None:
+        self.set_density_enabled(enabled)
+
+    @property
+    def N(self) -> int:
+        return self.scene.lines.count
+
+    @property
+    def _xrange(self) -> Tuple[float, float]:
+        return self.scene.lines.x_range
+
+    @property
+    def _scatters(self):
+        return [layer for layer in self.scene.layers if layer.layer_type == "scatter"]
+
+    @property
+    def _line_strips(self):
+        return [layer for layer in self.scene.layers if layer.layer_type == "polyline"]
+
+    @property
+    def _text_annotations(self):
+        return [layer for layer in self.scene.layers if layer.layer_type == "text"]
+
+    def set_title(self, title: str) -> None:
+        self.title = str(title)
+        self.options.title = str(title)
+        self.frame.dirty_ui = True
+
+    def set_global_alpha(self, alpha: float) -> None:
+        self.global_alpha = float(alpha)
+        self.options.default_global_alpha = float(alpha)
+        self.frame.dirty_scene = True
+
+    def set_lod(self, enabled: bool = True, max_lines_per_px: int = 8) -> None:
+        self.enable_subsample = bool(enabled)
+        self.max_lines_per_px = max(1, int(max_lines_per_px))
+        self.options.lod_enabled = bool(enabled)
+        self.options.default_line_budget_per_px = float(self.max_lines_per_px)
+        self.frame.dirty_scene = True
+
+    def is_3d_scene(self) -> bool:
+        return any(getattr(layer, "layer_type", "").endswith("3d") for layer in self.scene.layers)
+
+    _SYSTEM_3D_ARTISTS = frozenset({"axis3d", "floor3d"})
+
+    def _is_pure_3d_scene(self) -> bool:
+        """True when all visible data layers are 3D — no 2D axis overlay should be drawn."""
+        data_layers = [l for l in self.scene.layers
+                       if l.metadata.get("artist") not in self._SYSTEM_3D_ARTISTS]
+        return bool(data_layers) and all(
+            getattr(l, "layer_type", "").endswith("3d") for l in data_layers
+        )
+
+    def get_3d_layers(self) -> list[Layer3D]:
+        return [
+            layer for layer in self.scene.layers
+            if isinstance(layer, Layer3D)
+            and layer.metadata.get("artist") not in self._SYSTEM_3D_ARTISTS
+        ]
+
+    def get_3d_bounds(self) -> Optional[Tuple[float, float, float, float, float, float]]:
+        bounds = [layer.get_bounds_3d() for layer in self.get_3d_layers()]
+        bounds = [b for b in bounds if b is not None and all(np.isfinite(b))]
+        if not bounds:
+            return None
+        arr = np.asarray(bounds, dtype=np.float32)
+        return (
+            float(np.min(arr[:, 0])),
+            float(np.max(arr[:, 1])),
+            float(np.min(arr[:, 2])),
+            float(np.max(arr[:, 3])),
+            float(np.min(arr[:, 4])),
+            float(np.max(arr[:, 5])),
+        )
+
+    def set_3d_view(
+        self,
+        *,
+        elev: Optional[float] = None,
+        azim: Optional[float] = None,
+        fov: Optional[float] = None,
+        distance: Optional[float] = None,
+        show_axes: Optional[bool] = None,
+    ) -> None:
+        if elev is not None:
+            self.view3d["elev"] = float(elev)
+        if azim is not None:
+            self.view3d["azim"] = float(azim)
+        if fov is not None:
+            self.view3d["fov"] = float(fov)
+        if distance is not None:
+            self.view3d["distance"] = float(distance)
+        if show_axes is not None:
+            self.view3d["show_axes"] = bool(show_axes)
+
+        bounds = self.get_3d_bounds()
+        padded_bounds = None
+        if bounds is not None:
+            xmin, xmax, ymin, ymax, zmin, zmax = bounds
+            pad = 0.08
+            dx = max(xmax - xmin, 1e-6)
+            dy = max(ymax - ymin, 1e-6)
+            dz = max(zmax - zmin, 1e-6)
+            xmin, xmax = xmin - pad * dx, xmax + pad * dx
+            ymin, ymax = ymin - pad * dy, ymax + pad * dy
+            zmin, zmax = zmin - pad * dz, zmax + pad * dz
+            padded_bounds = (xmin, xmax, ymin, ymax, zmin, zmax)
+
+        for layer in self.scene.layers:
+            if isinstance(layer, Layer3D):
+                camera = dict(layer.metadata.get("camera", {}))
+                camera.update({k: v for k, v in self.view3d.items() if k in {"elev", "azim", "fov", "distance"} and v is not None})
+                if bounds is not None:
+                    dx = max(bounds[1] - bounds[0], 1e-6)
+                    dy = max(bounds[3] - bounds[2], 1e-6)
+                    dz = max(bounds[5] - bounds[4], 1e-6)
+                    camera.setdefault("distance", max(dx, dy, dz) * 3.0)
+                layer.metadata["camera"] = camera
+                if padded_bounds is not None:
+                    layer.metadata["scene_bounds"] = padded_bounds
+                layer.dirty.style_dirty = True
+
+        if self.view3d["show_axes"]:
+            self.ensure_3d_axes()
+        else:
+            self.scene.layers = [l for l in self.scene.layers
+                                  if l.metadata.get("artist") not in self._SYSTEM_3D_ARTISTS]
+        self.frame.dirty_scene = True
+        self.cache.refresh_requested = True
+
+    def reset_3d_view(self) -> None:
+        self.view3d["distance"] = None
+        for layer in self.get_3d_layers():
+            cam = layer.metadata.get("camera", {})
+            cam.pop("distance", None)
+            layer.metadata["camera"] = cam
+        self.set_3d_view(elev=28.0, azim=-45.0, fov=42.0)
+
+    def _zoom_3d(self, factor: float) -> None:
+        dist = self.view3d.get("distance")
+        if dist is None:
+            bounds = self.get_3d_bounds()
+            if bounds is None:
+                return
+            xmin, xmax, ymin, ymax, zmin, zmax = bounds
+            radius = max(xmax - xmin, ymax - ymin, zmax - zmin) / 2.0
+            dist = radius * 3.2
+        dist = float(np.clip(dist * factor, 0.001, 1e6))
+        self.set_3d_view(distance=dist)
+
+    def ensure_3d_axes(self) -> Optional[Layer3D]:
+        bounds = self.get_3d_bounds()
+        if bounds is None:
+            return None
+        xmin, xmax, ymin, ymax, zmin, zmax = bounds
+        pad = 0.08
+        dx = max(xmax - xmin, 1e-6)
+        dy = max(ymax - ymin, 1e-6)
+        dz = max(zmax - zmin, 1e-6)
+        xmin, xmax = xmin - pad * dx, xmax + pad * dx
+        ymin, ymax = ymin - pad * dy, ymax + pad * dy
+        zmin, zmax = zmin - pad * dz, zmax + pad * dz
+        padded_bounds = (xmin, xmax, ymin, ymax, zmin, zmax)
+
+        vertices = np.array(
+            [
+                [xmin, ymin, zmin], [xmax, ymin, zmin],
+                [xmin, ymin, zmin], [xmin, ymax, zmin],
+                [xmin, ymin, zmin], [xmin, ymin, zmax],
+                [xmax, ymin, zmin], [xmax, ymax, zmin],
+                [xmax, ymin, zmin], [xmax, ymin, zmax],
+                [xmin, ymax, zmin], [xmax, ymax, zmin],
+                [xmin, ymax, zmin], [xmin, ymax, zmax],
+                [xmin, ymin, zmax], [xmax, ymin, zmax],
+                [xmin, ymin, zmax], [xmin, ymax, zmax],
+                [xmax, ymax, zmin], [xmax, ymax, zmax],
+                [xmax, ymin, zmax], [xmax, ymax, zmax],
+                [xmin, ymax, zmax], [xmax, ymax, zmax],
+            ],
+            dtype=np.float32,
+        )
+        box_col = np.array([0.82, 0.88, 1.0, 0.50], dtype=np.float32)
+        colors = np.tile(box_col, (len(vertices), 1))
+
+        camera = {k: v for k, v in self.view3d.items() if k in {"elev", "azim", "fov", "distance"} and v is not None}
+        camera.setdefault("distance", max(dx, dy, dz) * 3.0)
+
+        # --- Floor plane (drawn first, behind all data) ---
+        floor_verts = np.array([
+            [xmin, ymin, zmin], [xmax, ymin, zmin], [xmax, ymax, zmin],
+            [xmin, ymin, zmin], [xmax, ymax, zmin], [xmin, ymax, zmin],
+        ], dtype=np.float32)
+        floor_color = np.tile(np.array([0.58, 0.64, 0.76, 0.09], dtype=np.float32), (6, 1))
+        existing_floor = next((l for l in self.scene.layers if l.metadata.get("artist") == "floor3d"), None)
+        if existing_floor is None:
+            existing_floor = Layer3D(vertices=floor_verts, colors=floor_color,
+                                     primitive="triangles", label="3D floor", layer_type="wireframe3d")
+            existing_floor.metadata["artist"] = "floor3d"
+            self.scene.layers.insert(0, existing_floor)
+        else:
+            existing_floor.vertices = floor_verts
+            existing_floor.colors = floor_color
+            existing_floor.dirty.gpu_dirty = True
+        existing_floor.metadata["camera"] = camera
+        existing_floor.metadata["scene_bounds"] = padded_bounds
+
+        # --- Bounding-box wireframe (drawn last, always on top) ---
+        existing = next((l for l in self.scene.layers if l.metadata.get("artist") == "axis3d"), None)
+        if existing is None:
+            existing = Layer3D(vertices=vertices, colors=colors, primitive="lines",
+                               label="3D axes", layer_type="wireframe3d")
+            existing.metadata["artist"] = "axis3d"
+            existing.style.line_width = 2.2
+            self.scene.layers.append(existing)
+        else:
+            existing.vertices = vertices
+            existing.colors = colors
+            existing.dirty.gpu_dirty = True
+            self.scene.layers = [l for l in self.scene.layers if l is not existing]
+            self.scene.layers.append(existing)
+        existing.metadata["camera"] = camera
+        existing.metadata["scene_bounds"] = padded_bounds
+        existing.style.line_width = 2.2
+
+        # Sync all 3D layers in the scene with the unified padded_bounds and camera settings
+        for layer in self.scene.layers:
+            if isinstance(layer, Layer3D):
+                layer.metadata["scene_bounds"] = padded_bounds
+                layer_camera = dict(layer.metadata.get("camera", {}))
+                layer_camera.update(camera)
+                layer.metadata["camera"] = layer_camera
+                layer.dirty.style_dirty = True
+
+        return existing
 
     def set_lines_ab(self, ab: np.ndarray, x_range=(-3.0, 3.0), colors: Optional[np.ndarray] = None, label: Optional[str] = None) -> None:
         ab   = np.ascontiguousarray(ab, np.float32)
@@ -110,6 +362,7 @@ class GPULinePlot:
         layer.style.text_size_px = fontsize
         if color is not None: layer.style.color = color
         self.scene.layers.append(layer)
+        self.scene.texts.append({"x": x, "y": y, "str": text, "fontsize": fontsize, "color": color})
         self.frame.dirty_ui = True
 
     def add_scatter(self, x: np.ndarray, y: np.ndarray, colors: np.ndarray, size: float = 6.0, label: Optional[str] = None) -> None:
@@ -118,6 +371,7 @@ class GPULinePlot:
         layer_label = label or f"Scatter {len(self.scene.layers)}"
         layer = ScatterLayer(pts=pts, colors=cols, size=size, label=layer_label)
         self.scene.layers.append(layer)
+        self.scene.scatters.append(ScatterDataset(pts=pts, colors=cols, size=size))
         self.frame.dirty_scene = True
 
     def add_line_strip(self, x: np.ndarray, y: np.ndarray, color: Tuple[float, float, float, float] = (0,0,0,1), width: float = 1.0, label: Optional[str] = None) -> None:
@@ -125,6 +379,7 @@ class GPULinePlot:
         layer_label = label or f"Polyline {len(self.scene.layers)}"
         layer = PolylineLayer(pts=pts, color=color, width=width, label=layer_label)
         self.scene.layers.append(layer)
+        self.scene.strips.append(StripDataset(pts=pts, color=color))
         self.frame.dirty_scene = True
 
     def add_patch(self, vertices: np.ndarray, indices: Optional[np.ndarray] = None, mode: str = "strip", face_color: Optional[Tuple] = None, edge_color: Optional[Tuple] = None, label: Optional[str] = None) -> None:
@@ -190,6 +445,7 @@ class GPULinePlot:
             self.width, self.height
         )
         
+        self._needs_initial_autoscale = False
         # Flush interaction cache on manual view changes
         self.cache.active = False
         self.cache.capture_window = None
@@ -310,6 +566,7 @@ class GPULinePlot:
             axes=axes
         )
         
+        self._needs_initial_autoscale = False
         self.cache.active = False
         self.frame.dirty_scene = True
 
@@ -329,6 +586,8 @@ class GPULinePlot:
         self._init_window()
         self._init_gl()
         self._init_modules()
+        if self._needs_initial_autoscale and not self._is_pure_3d_scene():
+            self.autoscale()
         if self._is_test_mode:
             self._update_runtime_policy()
             glViewport(0, 0, self.fb_width, self.fb_height)
@@ -370,6 +629,12 @@ class GPULinePlot:
     def _init_window(self) -> None:
         if not glfw.init():
             raise RuntimeError("Failed to initialize GLFW")
+
+        # Destroy any existing window (e.g. a previous headless context created
+        # by savefig()) so we don't leak GLFW resources.
+        if self.window is not None:
+            glfw.destroy_window(self.window)
+            self.window = None
 
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
@@ -413,11 +678,23 @@ class GPULinePlot:
             glDisable(GL_MULTISAMPLE)
 
     def _init_modules(self) -> None:
+        # When a new GL context is created (e.g. show() after a headless savefig()),
+        # any per-layer VAO/VBO handles from the previous context are invalid.
+        # Reset them so renderers re-upload data into the new context on first draw.
+        for layer in self.scene.layers:
+            if hasattr(layer, "_gl"):
+                layer._gl = None
+            layer.dirty.gpu_dirty = True
+
         self.exact_renderer.initialize()
         self.interaction_renderer.initialize(self.fb_width, self.fb_height)
         self.density_renderer.initialize(self.fb_width, self.fb_height)
         self.hud.initialize(self.window)
         self.picking.initialize(self.fb_width, self.fb_height)
+        # A new GL context was created (e.g. show() after a headless savefig()). The
+        # EffectManager's FBO/program IDs from the old context are stale, so force it
+        # to rebuild all resources in the current context.
+        self.effects.initialized = False
         self.effects.ensure_resources()
         self.renderer_manager.initialize()
 
@@ -568,14 +845,15 @@ class GPULinePlot:
 
         # 2. Draw using the new RendererManager (Modular Architecture)
         layers = self._get_all_layers()
-        self.axis_manager.update(ctx)
-        
-        # Always draw Axes/Framework first (unless hidden via HUD)
-        self.renderer_manager.draw_axes(self.axis_manager, ctx)
+
+        # Skip 2D axis overlay for pure 3D scenes — 3D bounding box from ensure_3d_axes() takes its place
+        if not self._is_pure_3d_scene():
+            self.axis_manager.update(ctx)
+            self.renderer_manager.draw_axes(self.axis_manager, ctx)
         
         if self.display_density:
              # Modular Density Pass (Lines, Scatters)
-             current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
+             current_fbo = int(glGetIntegerv(GL_FRAMEBUFFER_BINDING))
              self.renderer_manager.draw_density(layers, ctx, target_fbo=current_fbo)
         else:
              # Standard Pass
@@ -595,7 +873,7 @@ class GPULinePlot:
             for i in range(4): glDisable(GL_CLIP_DISTANCE0 + i)
             
         current_window = self.camera_controller.world_window(self.width, self.height)
-        if self.options.enable_cache_interaction_path and self.cache.capture_window is not None:
+        if self.options.enable_cache_interaction_path and self.cache.capture_window is not None and not self.is_3d_scene():
             current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
             self.interaction_renderer.draw_cached_impostor(self.cache.capture_window, current_window, target_fbo=current_fbo)
         else:
@@ -619,8 +897,9 @@ class GPULinePlot:
 
         glBindFramebuffer(GL_FRAMEBUFFER, target_fbo)
         glViewport(0, 0, self.fb_width, self.fb_height)
-        # Transparent background for the cache to allow blending during interaction
-        glClearColor(1.0, 1.0, 1.0, 0.0)
+        # Transparent BLACK — premultiplied alpha so that blending src*A + 0*(1-A)
+        # stores src.RGB*A in the cache instead of mixing with white.
+        glClearColor(0.0, 0.0, 0.0, 0.0)
         glClear(GL_COLOR_BUFFER_BIT)
 
         prob = self._compute_lod_keep_prob()
@@ -680,6 +959,8 @@ class GPULinePlot:
 
     def _service_deferred_cache_refresh(self) -> None:
         if not self.cache.active:
+            return
+        if self.is_3d_scene():
             return
         if not self.cache.refresh_requested:
             return
@@ -796,8 +1077,9 @@ class GPULinePlot:
                     is_density=self.display_density,
                     time=time.perf_counter()
                 )
-                self.axis_manager.update(ctx_labels)
-                self.renderer_manager.renderers["axis"]._draw_labels(self.axis_manager, ctx_labels)
+                if not self._is_pure_3d_scene():
+                    self.axis_manager.update(ctx_labels)
+                    self.renderer_manager.renderers["axis"]._draw_labels(self.axis_manager, ctx_labels)
 
             # HUD panels are only updated if HUD is enabled, but begin/end must wrap all
             if self.policy.runtime.hud_enabled_this_frame:
@@ -912,9 +1194,13 @@ class GPULinePlot:
         self.cache.refresh_requested = True
         self.cache.release_deadline = glfw.get_time() + 0.20
 
-        factor = self.options.zoom_scroll_factor if dy > 0 else 1.0 / self.options.zoom_scroll_factor
-        mx, my = glfw.get_cursor_pos(self.window)
-        self.camera_controller.apply_zoom_at_cursor(factor, mx, my, self.width, self.height)
+        if self.is_3d_scene():
+            factor = 0.9 if dy > 0 else 1.0 / 0.9
+            self._zoom_3d(factor)
+        else:
+            factor = self.options.zoom_scroll_factor if dy > 0 else 1.0 / self.options.zoom_scroll_factor
+            mx, my = glfw.get_cursor_pos(self.window)
+            self.camera_controller.apply_zoom_at_cursor(factor, mx, my, self.width, self.height)
 
         self.frame.dirty_scene = True
         self.frame.dirty_pick = True
@@ -966,7 +1252,12 @@ class GPULinePlot:
                         if layer:
                             self.interaction.drag_start_translation = layer.translation
                 else:
-                    self.interaction.drag_mode = "pan"
+                    if self.is_3d_scene():
+                        self.interaction.drag_mode = "rotate3d"
+                        self.interaction.drag_start_azim = self.view3d["azim"]
+                        self.interaction.drag_start_elev = self.view3d["elev"]
+                    else:
+                        self.interaction.drag_mode = "pan"
 
             elif action == glfw.RELEASE:
                 self.interaction.drag_active = False
@@ -1029,15 +1320,32 @@ class GPULinePlot:
                 # RATIO MODE: Exponential Anisotropic Scaling
                 dx = x - px
                 dy = y - py
-                
+
                 # Base-2 Exponential Law (100px = factor of 2.0 change)
-                sensitivity = 0.01 
+                sensitivity = 0.01
                 self.camera.zoom_x = self.interaction.drag_start_zoom_x * (2.0 ** (dx * sensitivity))
-                self.camera.zoom_y = self.interaction.drag_start_zoom_y * (2.0 ** (-dy * sensitivity)) 
-                
+                self.camera.zoom_y = self.interaction.drag_start_zoom_y * (2.0 ** (-dy * sensitivity))
+
                 # Clamp to safe camera limits
                 self.camera.zoom_x = float(np.clip(self.camera.zoom_x, self.camera.zoom_min, self.camera.zoom_max))
                 self.camera.zoom_y = float(np.clip(self.camera.zoom_y, self.camera.zoom_min, self.camera.zoom_max))
+                self.cache.refresh_requested = True
+            elif self.interaction.drag_mode == "rotate3d":
+                # ROTATE3D MODE: horizontal drag → azimuth, vertical drag → elevation
+                dx = x - px
+                dy = y - py
+                # Normalize by viewport size so rotation feels similar on laptop
+                # and external displays, with a gentle cubic easing near zero.
+                span = max(float(min(self.width, self.height)), 1.0)
+                nx = float(np.clip(dx / span, -1.0, 1.0))
+                ny = float(np.clip(dy / span, -1.0, 1.0))
+                eased_x = nx * (0.55 + 0.45 * abs(nx))
+                eased_y = ny * (0.55 + 0.45 * abs(ny))
+                new_azim = self.interaction.drag_start_azim - eased_x * 180.0
+                new_elev = float(np.clip(
+                    self.interaction.drag_start_elev + eased_y * 120.0, -89.0, 89.0
+                ))
+                self.set_3d_view(azim=new_azim, elev=new_elev)
                 self.cache.refresh_requested = True
             else:
                 # PAN MODE: Translate the camera

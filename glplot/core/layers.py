@@ -161,3 +161,50 @@ class TextLayer(BaseLayer):
     def get_intrinsic_bounds(self) -> Optional[Tuple[float, float, float, float]]:
         # Text does not participate in autoscale by default
         return None
+
+
+@dataclass
+class Layer3D(BaseLayer):
+    """Generic GPU 3D geometry layer."""
+    vertices: Optional[np.ndarray] = None  # (N, 3)
+    colors: Optional[np.ndarray] = None    # (N, 4)
+    indices: Optional[np.ndarray] = None
+    primitive: str = "points"              # points, lines, triangles
+
+    def __init__(
+        self,
+        vertices: Optional[np.ndarray] = None,
+        colors: Optional[np.ndarray] = None,
+        indices: Optional[np.ndarray] = None,
+        primitive: str = "points",
+        label: str = "",
+        layer_type: str = "geometry3d",
+    ):
+        super().__init__(layer_type=layer_type, label=label)
+        self.vertices = vertices
+        self.colors = colors
+        self.indices = indices
+        self.primitive = primitive
+        self.style.point_size = 3.0
+
+    def get_intrinsic_bounds(self) -> Optional[Tuple[float, float, float, float]]:
+        if self.vertices is None or len(self.vertices) == 0:
+            return None
+        return (
+            float(np.min(self.vertices[:, 0])),
+            float(np.max(self.vertices[:, 0])),
+            float(np.min(self.vertices[:, 1])),
+            float(np.max(self.vertices[:, 1])),
+        )
+
+    def get_bounds_3d(self) -> Optional[Tuple[float, float, float, float, float, float]]:
+        if self.vertices is None or len(self.vertices) == 0:
+            return None
+        return (
+            float(np.min(self.vertices[:, 0])),
+            float(np.max(self.vertices[:, 0])),
+            float(np.min(self.vertices[:, 1])),
+            float(np.max(self.vertices[:, 1])),
+            float(np.min(self.vertices[:, 2])),
+            float(np.max(self.vertices[:, 2])),
+        )
