@@ -15,7 +15,7 @@ Interactive visualization of large-scale datasets is critical in scientific comp
 - **Matplotlib API Compatibility**: Familiar function signatures (`figure`, `plot`, `scatter`, `bar`, `hist`, `imshow`, `quiver`, etc.) reduce adoption friction
 - **Massive Dataset Support**: Efficiently renders millions of geometric primitives through GPU instancing and density visualization
 - **Novel GPU Algorithms**:
-  - Analytical line-family shader expansion for phase diagrams (millions of lines from $(a_i, b_i)$ coefficients)
+  - Analytical line-family shader expansion (millions of lines from $(a_i, b_i)$ coefficients)
   - Viewport-relative center projection preventing floating-point precision loss at extreme zoom levels
   - HDR density accumulation for statistical visualization of overlapping elements
 - **Complete 2D/3D Support**: Lines, scatter plots, filled regions, bars, histograms, matrices, surfaces, wireframes, 3D bars, vector fields
@@ -208,14 +208,13 @@ All tests run **headless without displaying windows**, enabling CI/CD integratio
 | **Millions of Points** | ✓ | ✗ | Limited | ✓ | ✓ |
 | **Interactive 3D** | ✓ | Limited | ✓ | Limited | ✓ |
 | **Density Visualization** | ✓ (HDR) | Basic | Limited | ✓ | ✗ |
-| **Phase Diagrams** | ✓ (specialized) | ✗ | ✗ | ✗ | ✗ |
 | **Zoom Precision** | ✓ (double precision) | ✓ | Basic | ✓ | ✗ |
 
 ## Scientific Applications
 
 GLPlot is particularly suited for:
 - **High-energy physics**: Visualizing detector event data and particle trajectories
-- **Computational chemistry**: Phase diagrams with millions of line families
+- **Computational chemistry**: Molecular visualization and spectroscopic data
 - **Climate science**: Large-scale gridded data visualization
 - **Bioinformatics**: Single-cell RNA-seq and genomic visualization
 - **Materials science**: Volumetric simulations and 3D material structures
