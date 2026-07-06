@@ -5,6 +5,7 @@ stages:
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  DEBIAN_FRONTEND: noninteractive
 
 cache:
   paths:
@@ -13,7 +14,7 @@ cache:
 # Lint stage
 lint:
   stage: lint
-  image: python:3.12
+  image: python:3.12-slim
   script:
     - pip install --upgrade pip
     - pip install black isort flake8
@@ -24,40 +25,19 @@ lint:
     - echo "Running flake8..."
     - flake8 glplot tests --count --select=E9,F63,F7,F82 --show-source --statistics
   allow_failure: true
-
-# Test stage - Python 3.9 (with deadsnakes PPA)
-test-py39:
-  stage: test
-  image: ubuntu:22.04
-  before_script:
-    - apt-get update -qq
-    - apt-get install -y -qq software-properties-common
-    - add-apt-repository -y ppa:deadsnakes/ppa
-    - apt-get update -qq
-    - apt-get install -y -qq python3.9 python3.9-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
-    - python3.9 -m pip install --upgrade pip setuptools wheel
-    - python3.9 -m pip install -e ".[test]"
-  script:
-    - xvfb-run -a python3.9 -m pytest tests/ -v --cov=glplot --cov-report=xml
-  coverage: '/TOTAL.*\s+(\d+%)$/'
-  artifacts:
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
-    expire_in: 30 days
+  timeout: 10m
 
 # Test stage - Python 3.10
 test-py310:
   stage: test
-  image: ubuntu:22.04
+  image: python:3.10-slim
   before_script:
-    - apt-get update -qq
-    - apt-get install -y -qq python3.10 python3.10-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
-    - python3.10 -m pip install --upgrade pip setuptools wheel
-    - python3.10 -m pip install -e ".[test]"
+    - apt-get update -qq --fix-missing
+    - apt-get install -y -qq --no-install-recommends libgl1-mesa-glx libglu1-mesa xvfb
+    - pip install --upgrade pip setuptools wheel
+    - pip install -e ".[test]"
   script:
-    - xvfb-run -a python3.10 -m pytest tests/ -v --cov=glplot --cov-report=xml
+    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -65,21 +45,19 @@ test-py310:
         coverage_format: cobertura
         path: coverage.xml
     expire_in: 30 days
+  timeout: 20m
 
-# Test stage - Python 3.11 (with deadsnakes PPA)
+# Test stage - Python 3.11
 test-py311:
   stage: test
-  image: ubuntu:22.04
+  image: python:3.11-slim
   before_script:
-    - apt-get update -qq
-    - apt-get install -y -qq software-properties-common
-    - add-apt-repository -y ppa:deadsnakes/ppa
-    - apt-get update -qq
-    - apt-get install -y -qq python3.11 python3.11-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
-    - python3.11 -m pip install --upgrade pip setuptools wheel
-    - python3.11 -m pip install -e ".[test]"
+    - apt-get update -qq --fix-missing
+    - apt-get install -y -qq --no-install-recommends libgl1-mesa-glx libglu1-mesa xvfb
+    - pip install --upgrade pip setuptools wheel
+    - pip install -e ".[test]"
   script:
-    - xvfb-run -a python3.11 -m pytest tests/ -v --cov=glplot --cov-report=xml
+    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -87,21 +65,19 @@ test-py311:
         coverage_format: cobertura
         path: coverage.xml
     expire_in: 30 days
+  timeout: 20m
 
 # Test stage - Python 3.12 (primary)
 test-py312:
   stage: test
-  image: ubuntu:22.04
+  image: python:3.12-slim
   before_script:
-    - apt-get update -qq
-    - apt-get install -y -qq software-properties-common
-    - add-apt-repository -y ppa:deadsnakes/ppa
-    - apt-get update -qq
-    - apt-get install -y -qq python3.12 python3.12-dev python3-pip libgl1-mesa-glx libglu1-mesa xvfb
-    - python3.12 -m pip install --upgrade pip setuptools wheel
-    - python3.12 -m pip install -e ".[test]"
+    - apt-get update -qq --fix-missing
+    - apt-get install -y -qq --no-install-recommends libgl1-mesa-glx libglu1-mesa xvfb
+    - pip install --upgrade pip setuptools wheel
+    - pip install -e ".[test]"
   script:
-    - xvfb-run -a python3.12 -m pytest tests/ -v --cov=glplot --cov-report=xml
+    - xvfb-run -a pytest tests/ -v --cov=glplot --cov-report=xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
     reports:
@@ -109,11 +85,12 @@ test-py312:
         coverage_format: cobertura
         path: coverage.xml
     expire_in: 30 days
+  timeout: 20m
 
 # Build stage
 build:
   stage: build
-  image: python:3.12
+  image: python:3.12-slim
   before_script:
     - pip install --upgrade pip
     - pip install build twine
@@ -127,3 +104,4 @@ build:
   only:
     - main
     - tags
+  timeout: 15m
