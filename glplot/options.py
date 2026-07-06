@@ -29,6 +29,13 @@ class GradientBackgroundOptions:
     bottom_color: tuple = (0.95, 0.97, 1.0)
 
 @dataclass
+class SSAOOptions:
+    """Lightweight screen-space-style ambient occlusion controls for 3D layers."""
+    enabled: bool = False
+    strength: float = 0.45
+    radius: float = 1.0
+
+@dataclass
 class GlobalStyleOverrides:
     """Centralized multipliers to adjust the entire scene at once."""
     enabled: bool = True
@@ -41,6 +48,7 @@ class VisualOptions:
     background_color: tuple = (0.0, 0.0, 0.0)
     glow: GlowOptions = field(default_factory=GlowOptions)
     gradient_background: GradientBackgroundOptions = field(default_factory=GradientBackgroundOptions)
+    ssao: SSAOOptions = field(default_factory=SSAOOptions)
     overrides: GlobalStyleOverrides = field(default_factory=GlobalStyleOverrides)
 
 @dataclass
@@ -52,7 +60,7 @@ class EngineOptions:
     # Quality / scale policy
     lod_enabled: bool = True
     lod_target_coverage: float = 0.35
-    default_global_alpha: float = 0.20
+    default_global_alpha: float = 1.0
     default_line_budget_per_px: int = 8
     global_line_width: float = 1.0
     interaction_budget_lines_per_screen_px: int = 2
