@@ -8,7 +8,7 @@ import glplot.pyplot as gplt
 factor = 1000
 
 # Generate 10 million lines y = a*x + b
-N = 1_000_000
+N = 10_000_000
 print(f"Generating {N} lines. This tests memory throughput and GPU geometry performance.")
 a = np.random.randn(N) * 2.0
 b = np.random.randn(N) * 0.5 * factor

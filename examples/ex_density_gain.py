@@ -2,7 +2,7 @@ import numpy as np
 import glplot.pyplot as gplt
 
 def demo_density_gain():
-    n = 1000000
+    n = 1_000_000
     a = np.random.randn(n) * 0.1
     b = np.random.randn(n) * 0.1
     
