@@ -284,8 +284,8 @@ def pipeline_2d(ax, x0):
         y_blend,
         branch_w,
         h,
-        "Additive Accum.",
-        "D(p) += coverage\nR32F + GL_ONE",
+        "Additive Blend",
+        "D(p) += coverage\nGL_ONE -> R32F FBO",
         "density",
         8.8,
         6.6,
@@ -371,7 +371,7 @@ def pipeline_3d(ax, x0):
     )
     rail(ax, x0 - 0.05, 0.66, 0.77, "CPU", COLORS["cpu"][0])
     rail(ax, x0 - 0.05, 0.18, 0.615, "GPU", COLORS["fixed"][0])
-    rail(ax, x0 - 0.05, 0.075, 0.11, "CPU", COLORS["cpu"][0])
+    rail(ax, x0 - 0.05, 0.055, 0.095, "CPU", COLORS["cpu"][0])
 
     add_box(
         ax, x0, ys[0], w, h, "INPUT: 3D geometry", "bars / surface / wireframe / scatter3d", "input"
@@ -442,7 +442,9 @@ def pipeline_3d(ax, x0):
 
     ssao_y = 0.215
     blend_y = 0.145
-    hud_y = 0.075
+    hud_y = 0.095
+    read_y = 0.035
+    save_y = -0.025
     add_box(ax, x0, ssao_y, w, h, "SSAO / rim shading  [GPU]", "ao = (1 - cavity) * rim", "resolve")
     add_box(ax, x0, blend_y, w, h, "Alpha Blending  [GPU]", "src_alpha / 1-src_alpha", "fixed")
     add_box(ax, x0, hud_y, w, h, "HUD / Axis Guides  [GPU]", "ImGui + guide lines", "fixed")
@@ -453,8 +455,10 @@ def pipeline_3d(ax, x0):
         ax, cx, ssao_y + h + 0.012, "ao = clamp(1 - cavity + rim, 0.18, 1.0)", COLORS["cpu"][1], 5.2
     )
 
-    add_box(ax, x0, 0.015, w, h, "savefig() / screen", "PNG 800x600 + 2x supersampling", "export")
-    arrow(ax, cx, hud_y, cx, 0.015 + h)
+    add_box(ax, x0, read_y, w, h, "glReadPixels -> CPU", "only for savefig/readback", "cpu")
+    add_box(ax, x0, save_y, w, h, "savefig() / screen", "PNG 800x600 + 2x supersampling", "export")
+    arrow(ax, cx, hud_y, cx, read_y + h)
+    arrow(ax, cx, read_y, cx, save_y + h)
 
 
 def main() -> None:
@@ -463,7 +467,7 @@ def main() -> None:
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(BG)
     ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
+    ax.set_ylim(-0.04, 1)
     ax.axis("off")
 
     ax.text(

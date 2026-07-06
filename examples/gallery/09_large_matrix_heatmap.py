@@ -1,4 +1,5 @@
 import numpy as np
+
 import glplot.pyplot as plt
 
 n = 700

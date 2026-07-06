@@ -1,14 +1,16 @@
 from __future__ import annotations
-import numpy as np
-from OpenGL.GL import *
+
 from typing import TYPE_CHECKING, Optional
 
-from ..utils.shaders import STRIP_VS, STRIP_FS
+import numpy as np
+from OpenGL.GL import *
+
 from ..utils.gl_utils import link_program
+from ..utils.shaders import STRIP_FS, STRIP_VS
 
 if TYPE_CHECKING:
-    from ..managers.axis import AxisManager
     from ..core.context import RenderContext
+    from ..managers.axis import AxisManager
     from ..options import EngineOptions
 
 

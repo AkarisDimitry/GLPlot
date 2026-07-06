@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
+
 from .layers import BaseLayer
 
 

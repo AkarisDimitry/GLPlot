@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import runpy
 import os
+import runpy
 from pathlib import Path
 
 from glplot.engine import GPULinePlot

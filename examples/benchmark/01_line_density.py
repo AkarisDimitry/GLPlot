@@ -1,8 +1,9 @@
-import time
 import os
 import sys
-import numpy as np
+import time
 import warnings
+
+import numpy as np
 
 # Force local glplot import
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -12,6 +13,7 @@ import matplotlib
 matplotlib.use("Agg")  # Force non-GUI backend
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+
 import glplot.pyplot as gplt
 
 # Suppress warnings for clean output

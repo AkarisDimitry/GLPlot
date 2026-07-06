@@ -1,6 +1,8 @@
-import numpy as np
-import glplot.pyplot as gplt
 import time
+
+import numpy as np
+
+import glplot.pyplot as gplt
 
 
 def demo_viewports_and_performance():

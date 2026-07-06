@@ -1,6 +1,8 @@
-import numpy as np
-from glplot import GPULinePlot
 import time
+
+import numpy as np
+
+from glplot import GPULinePlot
 
 
 def run_verification():

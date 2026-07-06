@@ -4,9 +4,10 @@ import sys
 # Force current directory into path
 sys.path.insert(0, os.path.abspath("."))
 
+import inspect
+
 import glplot
 from glplot.controllers import CameraController
-import inspect
 
 print("--- ENVIRONMENT INFO ---")
 print(f"glplot file: {glplot.__file__}")

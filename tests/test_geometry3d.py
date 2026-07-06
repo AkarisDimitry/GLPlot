@@ -1,9 +1,9 @@
 import numpy as np
 
-from glplot.core.layers import Layer3D
-from glplot.renderers.geometry3d import _look_at, _perspective, _bounds_3d
 import glplot.pyplot as gplt
+from glplot.core.layers import Layer3D
 from glplot.managers.hud import HudManager
+from glplot.renderers.geometry3d import _bounds_3d, _look_at, _perspective
 
 
 def test_3d_layers_auto_create_axes_and_sync_global_view():

@@ -1,6 +1,7 @@
 """Performance and benchmark tests."""
 
 import time
+
 import numpy as np
 import pytest
 

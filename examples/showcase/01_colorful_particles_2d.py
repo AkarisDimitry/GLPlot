@@ -9,6 +9,7 @@ Controls: Pan with mouse drag, zoom with scroll wheel
 """
 
 import numpy as np
+
 import glplot.pyplot as plt
 
 # Create colorful particle burst

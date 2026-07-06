@@ -9,6 +9,7 @@ Controls: Click & drag to pan, scroll to zoom infinitely
 """
 
 import numpy as np
+
 import glplot.pyplot as plt
 
 

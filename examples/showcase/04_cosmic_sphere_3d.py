@@ -9,6 +9,7 @@ Controls: Click & drag to rotate, scroll to zoom
 """
 
 import numpy as np
+
 import glplot.pyplot as plt
 
 # Create sphere with noise perturbation

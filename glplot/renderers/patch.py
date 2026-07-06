@@ -1,15 +1,17 @@
 from __future__ import annotations
+
 import ctypes as C
-import numpy as np
-from OpenGL.GL import *
 from typing import TYPE_CHECKING, Optional, Tuple
 
-from ..utils.shaders import PATCH_VS, PATCH_FS, DENSITY_ACCUM_FS
+import numpy as np
+from OpenGL.GL import *
+
 from ..utils.gl_utils import link_program
+from ..utils.shaders import DENSITY_ACCUM_FS, PATCH_FS, PATCH_VS
 
 if TYPE_CHECKING:
-    from ..core.layers import PatchLayer
     from ..core.context import RenderContext
+    from ..core.layers import PatchLayer
     from ..options import EngineOptions
 
 

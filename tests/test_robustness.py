@@ -15,9 +15,10 @@ Covers:
 from __future__ import annotations
 
 import math
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pytest
-from unittest.mock import patch, MagicMock
 
 import glplot.pyplot as gplt
 from glplot.options import EngineOptions
@@ -381,9 +382,9 @@ class TestPolylineNanSegment:
 
     def test_update_gpu_data_does_not_crash_on_nan(self):
         import glplot.renderers.polyline as polyline_mod
-        from glplot.renderers.polyline import PolylineRenderer, GLWideSegmentBuffers
-        from glplot.options import EngineOptions
         from glplot.core.layers import PolylineLayer
+        from glplot.options import EngineOptions
+        from glplot.renderers.polyline import GLWideSegmentBuffers, PolylineRenderer
 
         # Always replace GL calls with no-ops using create=True so that:
         # (a) when OpenGL.GL is mocked globally the symbols don't exist yet, and

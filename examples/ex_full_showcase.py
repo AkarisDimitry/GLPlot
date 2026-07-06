@@ -1,6 +1,8 @@
-import numpy as np
-import time
 import math
+import time
+
+import numpy as np
+
 import glplot.pyplot as gplt
 
 

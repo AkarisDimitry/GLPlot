@@ -7,6 +7,7 @@ os.environ.setdefault("MPLCONFIGDIR", str(_CACHE / "matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE / "xdg"))
 
 import numpy as np
+
 import glplot.pyplot as plt
 
 try:

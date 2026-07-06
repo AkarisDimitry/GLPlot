@@ -8,15 +8,16 @@ Comparative benchmark: GLPlot vs VisPy vs fastplotlib vs Datashader vs hvPlot
 - Statistics  : mean, std, min, max over the remaining runs
 """
 
-import time
+import dataclasses
+import gc
 import os
 import sys
-import gc
+import time
 import tracemalloc
-import dataclasses
-from typing import List, Optional
-import numpy as np
 import warnings
+from typing import List, Optional
+
+import numpy as np
 from PIL import Image
 
 # Force local glplot import
@@ -26,6 +27,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
 import glplot.pyplot as gplt
 
 # Optional: psutil for RSS
@@ -70,8 +72,8 @@ except Exception as e:
 
 # hvplot
 try:
-    import hvplot.pandas
     import holoviews as hv
+    import hvplot.pandas
 
     hv.extension("matplotlib")
     hvplot_available = True

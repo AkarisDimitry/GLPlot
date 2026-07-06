@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import time
+from typing import TYPE_CHECKING, Optional
+
 import numpy as np
 from OpenGL.GL import *
-from typing import Optional, TYPE_CHECKING
-from ..options import RenderMode
+
 from ..core.context import RenderContext
+from ..options import RenderMode
 
 if TYPE_CHECKING:
     from ..engine import GPULinePlot

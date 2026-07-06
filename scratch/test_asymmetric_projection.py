@@ -1,8 +1,9 @@
 import numpy as np
+
 from glplot.controllers import CameraController
+from glplot.core.context import RenderContext
 from glplot.core.legacy import CameraState
 from glplot.managers.axis import AxisManager
-from glplot.core.context import RenderContext
 
 
 def test_math():

@@ -1,6 +1,9 @@
 from __future__ import annotations
-from typing import Tuple, Optional, TYPE_CHECKING
+
+from typing import TYPE_CHECKING, Optional, Tuple
+
 import numpy as np
+
 from .utils.gl_utils import ortho
 
 if TYPE_CHECKING:

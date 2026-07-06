@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, Optional
+
 import numpy as np
 
 try:
@@ -10,8 +12,8 @@ except ImportError:
     IMGUI_AVAILABLE = False
 
 if TYPE_CHECKING:
-    from ..core.layers import TextLayer
     from ..core.context import RenderContext
+    from ..core.layers import TextLayer
     from ..options import EngineOptions
 
 

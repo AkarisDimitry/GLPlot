@@ -1,6 +1,8 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, List, Dict, Optional, Type, Tuple, Any, Iterable
+
 from enum import Flag, auto
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Type
+
 import numpy as np
 
 if TYPE_CHECKING:
@@ -8,13 +10,13 @@ if TYPE_CHECKING:
     from ..core.layers import BaseLayer
     from ..options import EngineOptions
 
-from ..renderers.line_family import LineFamilyRenderer
-from ..renderers.polyline import PolylineRenderer
-from ..renderers.scatter import ScatterRenderer
-from ..renderers.patch import PatchRenderer
-from ..renderers.text import TextRenderer
 from ..renderers.axis import AxisRenderer
 from ..renderers.geometry3d import Geometry3DRenderer
+from ..renderers.line_family import LineFamilyRenderer
+from ..renderers.patch import PatchRenderer
+from ..renderers.polyline import PolylineRenderer
+from ..renderers.scatter import ScatterRenderer
+from ..renderers.text import TextRenderer
 
 
 class LayerCapability(Flag):

@@ -1,8 +1,11 @@
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Tuple
+
 from OpenGL.GL import *
-from typing import Tuple, TYPE_CHECKING
-from ..utils.shaders import INTERACTION_FULLSCREEN_VS, CACHE_IMPOSTOR_FS
+
 from ..utils.gl_utils import link_program
+from ..utils.shaders import CACHE_IMPOSTOR_FS, INTERACTION_FULLSCREEN_VS
 from .base import GLOffscreenTarget
 
 if TYPE_CHECKING:

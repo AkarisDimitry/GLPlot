@@ -1,23 +1,25 @@
 from __future__ import annotations
+
 import ctypes as C
+from typing import TYPE_CHECKING, Tuple
+
 import numpy as np
 from OpenGL.GL import *
-from typing import Tuple, TYPE_CHECKING
+
+from ..utils.gl_utils import link_program
 from ..utils.shaders import (
-    EXACT_LINES_VS,
     EXACT_LINES_FS,
-    SCATTER_VS,
+    EXACT_LINES_VS,
     SCATTER_FS,
-    STRIP_VS,
+    SCATTER_VS,
     STRIP_FS,
+    STRIP_VS,
 )
-from ..utils.gl_utils import link_program
-from ..utils.gl_utils import link_program
 from .base import GLLineBuffers, GLScatterBuffers, GLStripBuffers
 
 if TYPE_CHECKING:
+    from ..core.legacy import LineDataset, ScatterDataset, SceneData, StripDataset
     from ..options import EngineOptions
-    from ..core.legacy import SceneData, LineDataset, ScatterDataset, StripDataset
 
 
 class ExactLineRenderer:

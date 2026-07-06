@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -12,7 +13,7 @@ class GLLineBuffers:
     has_color: bool = False
 
     def render(self, count: int) -> None:
-        from OpenGL.GL import glBindVertexArray, glDrawArraysInstanced, GL_LINES
+        from OpenGL.GL import GL_LINES, glBindVertexArray, glDrawArraysInstanced
 
         if self.vao and count > 0:
             glBindVertexArray(self.vao)

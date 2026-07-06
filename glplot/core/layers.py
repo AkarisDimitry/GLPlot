@@ -1,8 +1,10 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Optional, Tuple, List, Any, Protocol, TYPE_CHECKING
-import numpy as np
+
 import uuid
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, List, Optional, Protocol, Tuple
+
+import numpy as np
 
 if TYPE_CHECKING:
     from .context import RenderContext

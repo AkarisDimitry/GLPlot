@@ -1,20 +1,22 @@
 from __future__ import annotations
+
 import ctypes as C
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 import numpy as np
 from OpenGL.GL import *
-from typing import TYPE_CHECKING
-from dataclasses import dataclass
 
 from ..utils.gl_utils import link_program
 from ..utils.shaders import (
-    WIDE_SEGMENT_INSTANCED_VS,
-    WIDE_SEGMENT_INSTANCED_FS,
     WIDE_SEGMENT_DENSITY_FS,
+    WIDE_SEGMENT_INSTANCED_FS,
+    WIDE_SEGMENT_INSTANCED_VS,
 )
 
 if TYPE_CHECKING:
-    from ..core.layers import PolylineLayer
     from ..core.context import RenderContext
+    from ..core.layers import PolylineLayer
     from ..options import EngineOptions
 
 

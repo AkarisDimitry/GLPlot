@@ -4,8 +4,9 @@ import sys
 # Force local glplot import
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import glplot.pyplot as gplt
 import numpy as np
+
+import glplot.pyplot as gplt
 
 
 def test_aspect_ratio():

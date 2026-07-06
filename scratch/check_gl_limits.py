@@ -1,6 +1,6 @@
 import glfw
-from OpenGL.GL import *
 import numpy as np
+from OpenGL.GL import *
 
 
 def check_gl_limits():

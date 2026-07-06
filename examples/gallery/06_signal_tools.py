@@ -1,4 +1,5 @@
 import numpy as np
+
 import glplot.pyplot as plt
 
 rng = np.random.default_rng(606)

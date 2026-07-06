@@ -1,13 +1,14 @@
 from __future__ import annotations
-import typing
-from typing import TYPE_CHECKING, Optional, Tuple, Any
 
-from .hud_state import HudState, HudController
+import typing
+from typing import TYPE_CHECKING, Any, Optional, Tuple
+
+from .hud_state import HudController, HudState
 
 if TYPE_CHECKING:
-    from ..options import EngineOptions, BlendMode
     from ..core import CameraState, FrameState
     from ..engine import GPULinePlot
+    from ..options import BlendMode, EngineOptions
 
 try:
     import imgui

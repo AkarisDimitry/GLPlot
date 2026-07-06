@@ -1,5 +1,5 @@
-import numpy as np
 import glfw
+import numpy as np
 from vispy import app, scene
 
 # Force GLFW backend to match GLPlot and our known working setup

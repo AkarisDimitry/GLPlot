@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import atexit
 import time
-from typing import Optional, Tuple, Sequence, Union, Literal, Iterable, Any
+from typing import Any, Iterable, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from .engine import GPULinePlot
 from .core.layers import Layer3D
+from .engine import GPULinePlot
 
 ColorLike = Union[
     Tuple[float, float, float, float],

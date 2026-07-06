@@ -1,7 +1,8 @@
-import pytest
-from unittest.mock import MagicMock
-import numpy as np
 import sys
+from unittest.mock import MagicMock
+
+import numpy as np
+import pytest
 
 # Mocking OpenGL and GLFW before importing glplot
 mock_gl = MagicMock()

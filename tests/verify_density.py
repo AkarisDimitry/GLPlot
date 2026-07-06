@@ -1,6 +1,8 @@
-import numpy as np
-import glplot.pyplot as plt
 import os
+
+import numpy as np
+
+import glplot.pyplot as plt
 
 # Generate some data
 n = 1_000_000

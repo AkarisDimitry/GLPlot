@@ -1,12 +1,15 @@
 from __future__ import annotations
-import numpy as np
+
 from typing import TYPE_CHECKING, Tuple
+
+import numpy as np
+
 from .options import RenderMode
 
 if TYPE_CHECKING:
-    from .options import EngineOptions
-    from .core.legacy import SceneData, InteractionState, CacheState
     from .core.context import RenderContext
+    from .core.legacy import CacheState, InteractionState, SceneData
+    from .options import EngineOptions
 
 
 class RenderPolicyManager:

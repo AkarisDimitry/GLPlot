@@ -4,8 +4,9 @@ New code should import from glplot or specific modules.
 """
 
 import warnings
+
 from .engine import GPULinePlot
-from .options import EngineOptions, RenderMode, BlendMode
+from .options import BlendMode, EngineOptions, RenderMode
 
 warnings.warn(
     "Importing from glplot.backend is deprecated. " "Please import from 'glplot' directly.",

@@ -1,6 +1,8 @@
-import numpy as np
-import glplot.pyplot as gplt
 import time
+
+import numpy as np
+
+import glplot.pyplot as gplt
 
 # Stress Test: 50,000,000 lines
 N = 50_000_000

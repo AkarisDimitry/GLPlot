@@ -24,7 +24,7 @@ Repository: https://github.com/AkarisDimitry/GLPlot
 """
 
 from .engine import GPULinePlot
-from .options import EngineOptions, RenderMode, BlendMode
+from .options import BlendMode, EngineOptions, RenderMode
 
 __version__ = "0.1.2"
 __author__ = "Juan Manuel Lombardi"

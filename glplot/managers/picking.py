@@ -1,23 +1,26 @@
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional, Tuple
+
 import numpy as np
 from OpenGL.GL import *
-from typing import Optional, TYPE_CHECKING, Tuple
+
 from ..renderers.base import GLOffscreenTarget
 from ..utils.gl_utils import link_program
 from ..utils.shaders import (
-    PICKING_LINES_VS,
     PICKING_LINES_FS,
-    PICKING_SCATTER_VS,
-    PICKING_SCATTER_FS,
-    PICKING_STRIP_VS,
-    PICKING_STRIP_FS,
-    PICKING_PATCH_VS,
+    PICKING_LINES_VS,
     PICKING_PATCH_FS,
+    PICKING_PATCH_VS,
+    PICKING_SCATTER_FS,
+    PICKING_SCATTER_VS,
+    PICKING_STRIP_FS,
+    PICKING_STRIP_VS,
 )
 
 if TYPE_CHECKING:
-    from ..options import EngineOptions
     from ..core import SceneData
+    from ..options import EngineOptions
     from ..renderers.exact import GLLineBuffers
 
 

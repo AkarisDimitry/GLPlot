@@ -1,44 +1,46 @@
 from __future__ import annotations
+
 import math
 import time
-from typing import Optional, Tuple, Any, Dict
-import numpy as np
+from typing import Any, Dict, Optional, Tuple
+
 import glfw
+import numpy as np
 from OpenGL.GL import *
 
-from .options import EngineOptions, RenderMode, BlendMode
-from .policy import RenderPolicyManager
-from .core.legacy import (
-    SceneData,
-    CameraState,
-    InteractionState,
-    CacheState,
-    FrameState,
-    LineDataset,
-    ScatterDataset,
-    StripDataset,
-)
+from .controllers import CameraController
+from .core.context import RenderContext
 from .core.layers import (
     BaseLayer,
-    LineFamilyLayer,
-    ScatterLayer,
-    PolylineLayer,
-    PatchLayer,
-    TextLayer,
     Layer3D,
+    LineFamilyLayer,
+    PatchLayer,
+    PolylineLayer,
+    ScatterLayer,
+    TextLayer,
 )
-from .core.context import RenderContext
-from .controllers import CameraController
-from .renderers.exact import ExactLineRenderer
-from .renderers.interaction import InteractionRenderer
-from .renderers.density import DensityRenderer
+from .core.legacy import (
+    CacheState,
+    CameraState,
+    FrameState,
+    InteractionState,
+    LineDataset,
+    ScatterDataset,
+    SceneData,
+    StripDataset,
+)
+from .managers.axis import AxisManager
+from .managers.effects import EffectManager
 from .managers.hud import HudManager
 from .managers.picking import PickingManager
+from .managers.renderer_manager import RendererManager
+from .options import BlendMode, EngineOptions, RenderMode
+from .policy import RenderPolicyManager
+from .renderers.density import DensityRenderer
+from .renderers.exact import ExactLineRenderer
+from .renderers.interaction import InteractionRenderer
 from .utils.export import ExportManager
 from .utils.shaders import DENSITY_SCHEMES
-from .managers.effects import EffectManager
-from .managers.renderer_manager import RendererManager
-from .managers.axis import AxisManager
 
 
 class GPULinePlot:

@@ -1,15 +1,17 @@
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional, Tuple
+
 import numpy as np
 from OpenGL.GL import *
-from typing import Tuple, Optional, TYPE_CHECKING
 
-from ..utils.shaders import INTERACTION_FULLSCREEN_VS, DENSITY_RESOLVE_FS
 from ..utils.gl_utils import link_program
+from ..utils.shaders import DENSITY_RESOLVE_FS, INTERACTION_FULLSCREEN_VS
 from .base import GLOffscreenTarget
 
 if TYPE_CHECKING:
-    from ..options import EngineOptions
     from ..core.context import RenderContext
+    from ..options import EngineOptions
 
 
 class DensityRenderer:

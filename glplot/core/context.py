@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Tuple, TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
+
 import numpy as np
 
 if TYPE_CHECKING:

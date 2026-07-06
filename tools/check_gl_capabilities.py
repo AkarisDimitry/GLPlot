@@ -8,9 +8,10 @@ Usage:
     python tools/check_gl_capabilities.py
 """
 
+import sys
+
 import glfw
 from OpenGL.GL import *
-import sys
 
 
 def check_gl_capabilities():

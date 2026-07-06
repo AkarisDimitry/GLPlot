@@ -1,6 +1,8 @@
-import numpy as np
-import glplot.pyplot as gplt
 import time
+
+import numpy as np
+
+import glplot.pyplot as gplt
 from glplot.options import BlendMode
 
 

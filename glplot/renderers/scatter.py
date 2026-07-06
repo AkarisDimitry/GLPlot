@@ -1,23 +1,25 @@
 from __future__ import annotations
+
 import ctypes as C
-import numpy as np
-from OpenGL.GL import *
 from typing import TYPE_CHECKING, Optional, Tuple
 
-from .base import GLScatterBuffers
-from ..utils.shaders import (
-    SCATTER_VS,
-    SCATTER_FS,
-    DENSITY_POINTS_VS,
-    DENSITY_POINTS_FS,
-    IMAGE_VS,
-    IMAGE_FS,
-)
+import numpy as np
+from OpenGL.GL import *
+
 from ..utils.gl_utils import link_program
+from ..utils.shaders import (
+    DENSITY_POINTS_FS,
+    DENSITY_POINTS_VS,
+    IMAGE_FS,
+    IMAGE_VS,
+    SCATTER_FS,
+    SCATTER_VS,
+)
+from .base import GLScatterBuffers
 
 if TYPE_CHECKING:
-    from ..core.layers import ScatterLayer
     from ..core.context import RenderContext
+    from ..core.layers import ScatterLayer
     from ..options import EngineOptions
 
 

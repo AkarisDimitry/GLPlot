@@ -8,17 +8,18 @@ Usage:
     python tools/validate_runtime_math.py
 """
 
-import sys
 import os
+import sys
 
 # Ensure GLPlot is in path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
+
+import inspect
 
 import glplot
 from glplot.controllers import CameraController
 from glplot.core.legacy import CameraState
 from glplot.options import EngineOptions
-import inspect
 
 
 def validate_math():

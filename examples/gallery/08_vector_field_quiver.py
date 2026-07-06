@@ -1,4 +1,5 @@
 import numpy as np
+
 import glplot.pyplot as plt
 
 grid = np.linspace(-3.0, 3.0, 31)

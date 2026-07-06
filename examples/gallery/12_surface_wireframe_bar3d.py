@@ -1,4 +1,5 @@
 import numpy as np
+
 import glplot.pyplot as plt
 
 axis = np.linspace(-3.5, 3.5, 155)

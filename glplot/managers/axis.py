@@ -1,11 +1,13 @@
 from __future__ import annotations
-import numpy as np
+
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional, Tuple
+
+import numpy as np
 
 if TYPE_CHECKING:
-    from ..engine import GPULinePlot
     from ..core.context import RenderContext
+    from ..engine import GPULinePlot
 
 
 @dataclass

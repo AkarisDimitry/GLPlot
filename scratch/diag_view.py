@@ -1,7 +1,9 @@
-import numpy as np
-import glplot.pyplot as gplt
 import time
+
 import glfw
+import numpy as np
+
+import glplot.pyplot as gplt
 
 
 def diagnostic_view_persistence():

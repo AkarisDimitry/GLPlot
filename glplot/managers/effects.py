@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-import glfw
-from OpenGL.GL import *
 from typing import TYPE_CHECKING
 
+import glfw
+from OpenGL.GL import *
+
+from ..renderers.base import GLOffscreenTarget
 from ..utils.gl_utils import link_program
 from ..utils.shaders import (
-    POST_FX_VS,
-    GRADIENT_BG_FS,
     BLOOM_EXTRACT_FS,
     GAUSSIAN_BLUR_FS,
+    GRADIENT_BG_FS,
     POST_COMPOSITE_FS,
+    POST_FX_VS,
 )
-from ..renderers.base import GLOffscreenTarget
 
 if TYPE_CHECKING:
     from ..engine import GPULinePlot

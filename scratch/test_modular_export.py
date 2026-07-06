@@ -1,6 +1,8 @@
-import numpy as np
-import glplot.pyplot as gplt
 import os
+
+import numpy as np
+
+import glplot.pyplot as gplt
 
 
 def test_export():

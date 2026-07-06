@@ -1,4 +1,5 @@
 import numpy as np
+
 from glplot.engine import GPULinePlot
 from glplot.options import EngineOptions
 

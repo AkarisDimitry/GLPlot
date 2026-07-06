@@ -1,6 +1,7 @@
-import numpy as np
-import glplot.pyplot as gplt
 import matplotlib.pyplot as plt
+import numpy as np
+
+import glplot.pyplot as gplt
 
 
 def run_bridge_example():
