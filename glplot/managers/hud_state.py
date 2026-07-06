@@ -93,3 +93,11 @@ class HudController:
     def set_density_resolution(self, val: float):
         self.options.density_resolution_scale = val
         self.plot.rebuild_density_renderer()
+
+    def set_3d_view(self, **kwargs):
+        if hasattr(self.plot, "set_3d_view"):
+            self.plot.set_3d_view(**kwargs)
+
+    def reset_3d_view(self):
+        if hasattr(self.plot, "reset_3d_view"):
+            self.plot.reset_3d_view()

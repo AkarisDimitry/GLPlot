@@ -27,6 +27,41 @@ class HudManager:
         self.imgui_ctx = None
         self.imgui_impl = None
 
+    def _is_3d_layer(self, layer) -> bool:
+        return getattr(layer, "layer_type", "").endswith("3d")
+
+    def _scene_3d_stats(self) -> dict[str, Any]:
+        layers = [layer for layer in self.plot.scene.layers if self._is_3d_layer(layer)]
+        data_layers = [layer for layer in layers if layer.metadata.get("artist") != "axis3d"]
+        vertices = sum(0 if getattr(layer, "vertices", None) is None else len(layer.vertices) for layer in data_layers)
+        triangles = 0
+        for layer in data_layers:
+            if getattr(layer, "primitive", None) == "triangles":
+                if getattr(layer, "indices", None) is not None:
+                    triangles += len(layer.indices) // 3
+                elif getattr(layer, "vertices", None) is not None:
+                    triangles += len(layer.vertices) // 3
+        return {
+            "layers": len(data_layers),
+            "vertices": int(vertices),
+            "triangles": int(triangles),
+            "has_3d": bool(data_layers),
+        }
+
+    @staticmethod
+    def _is_3d_layer(layer) -> bool:
+        return getattr(layer, "layer_type", "").endswith("3d")
+
+    @staticmethod
+    def _layer_size_text(layer) -> str:
+        if hasattr(layer, "vertices") and layer.vertices is not None:
+            return f"{len(layer.vertices):,} verts"
+        if hasattr(layer, "pts") and layer.pts is not None:
+            return f"{len(layer.pts):,} pts"
+        if hasattr(layer, "ab") and layer.ab is not None:
+            return f"{len(layer.ab):,} lines"
+        return ""
+
     def initialize(self, window) -> None:
         if not IMGUI_AVAILABLE:
             return
@@ -154,8 +189,10 @@ class HudManager:
         
         fps = 1.0 / max(0.0001, self.state.cpu_frame_times[-1]) if self.state.cpu_frame_times else 0.0
         n_lines = self.plot.scene.lines.count
+        n_3d_layers = len(self.plot.get_3d_layers()) if hasattr(self.plot, "get_3d_layers") else 0
+        n_3d_vertices = sum(len(layer.vertices) for layer in self.plot.get_3d_layers() if getattr(layer, "vertices", None) is not None) if n_3d_layers else 0
         
-        imgui.text(f"FPS: {fps:4.1f} | Lines: {n_lines:,} | Mode: {'Density' if self.plot.display_density else 'Exact'} | ")
+        imgui.text(f"FPS: {fps:4.1f} | Lines: {n_lines:,} | 3D Layers: {n_3d_layers:,} ({n_3d_vertices:,} verts) | Mode: {'Density' if self.plot.display_density else 'Exact'} | ")
         imgui.same_line()
         if self.plot.mouse_world:
             imgui.text(f"Mouse: ({self.plot.mouse_world[0]:.4f}, {self.plot.mouse_world[1]:.4f}) | ")
@@ -194,7 +231,13 @@ class HudManager:
             
             # Layer Selectable (Drag Source/Target)
             is_selected = (self.state.selected_layer_id == layer.layer_id)
-            _, selected = imgui.selectable(f"{layer.label}##{i}", is_selected)
+            layer_name = layer.label or layer.layer_type
+            size_text = self._layer_size_text(layer)
+            suffix = f" [{layer.layer_type}"
+            if size_text:
+                suffix += f", {size_text}"
+            suffix += "]"
+            _, selected = imgui.selectable(f"{layer_name}{suffix}##{i}", is_selected)
             if selected:
                 self.state.selected_layer_id = layer.layer_id
             
@@ -260,12 +303,12 @@ class HudManager:
                 if changed: style.color = color; _mark_dirty()
                 
             # Line Width
-            if layer.layer_type in ["polyline"]:
+            if layer.layer_type in ["polyline", "wireframe3d"]:
                 changed, lw = imgui.slider_float("Line Width", style.line_width, 0.1, 10.0)
                 if changed: style.line_width = lw; _mark_dirty()
                 
             # Point Size
-            if layer.layer_type == "scatter":
+            if layer.layer_type in ["scatter", "scatter3d", "volume3d"]:
                 changed, ps = imgui.slider_float("Point Size", style.point_size, 1.0, 100.0)
                 if changed: style.point_size = ps; _mark_dirty()
                 
@@ -279,6 +322,26 @@ class HudManager:
                 
                 changed, out_w = imgui.slider_float("Outline Width", style.point_outline_width, 0.1, 5.0)
                 if changed: style.point_outline_width = out_w; _mark_dirty()
+
+            if self._is_3d_layer(layer):
+                imgui.separator()
+                imgui.text("3D Camera")
+                camera = dict(layer.metadata.get("camera", {}))
+                changed, elev = imgui.slider_float("Elev", float(camera.get("elev", self.plot.view3d.get("elev", 28.0))), -90.0, 90.0)
+                if changed:
+                    camera["elev"] = elev
+                    layer.metadata["camera"] = camera
+                    _mark_dirty()
+                changed, azim = imgui.slider_float("Azim", float(camera.get("azim", self.plot.view3d.get("azim", -45.0))), -180.0, 180.0)
+                if changed:
+                    camera["azim"] = azim
+                    layer.metadata["camera"] = camera
+                    _mark_dirty()
+                changed, fov = imgui.slider_float("FOV", float(camera.get("fov", self.plot.view3d.get("fov", 42.0))), 15.0, 90.0)
+                if changed:
+                    camera["fov"] = fov
+                    layer.metadata["camera"] = camera
+                    _mark_dirty()
 
         if imgui.collapsing_header("Transformation", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
             imgui.text("World space offset")
@@ -431,6 +494,61 @@ class HudManager:
                 draw_list.add_rect_filled(pos.x + i*(w/20), pos.y, pos.x + (i+1)*(w/20), pos.y + h, color)
             
             imgui.dummy(w, h + 5)
+
+        if hasattr(self.plot, "is_3d_scene") and self.plot.is_3d_scene():
+            if imgui.collapsing_header("3D Camera", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+                imgui.text_disabled("Drag: rotate   Scroll: zoom   Reset: button below")
+                imgui.separator()
+
+                view = self.plot.view3d
+                changed, elev = imgui.slider_float("Elevation", float(view.get("elev", 28.0)), -90.0, 90.0)
+                if changed: self.controller.set_3d_view(elev=elev)
+                changed, azim = imgui.slider_float("Azimuth", float(view.get("azim", -45.0)), -180.0, 180.0)
+                if changed: self.controller.set_3d_view(azim=azim)
+                changed, fov = imgui.slider_float("FOV", float(view.get("fov", 42.0)), 15.0, 90.0)
+                if changed: self.controller.set_3d_view(fov=fov)
+
+                dist = view.get("distance")
+                if dist is None:
+                    imgui.text_disabled("Distance: auto  (scroll to control)")
+                else:
+                    dist_max = max(float(dist) * 8.0, 10.0)
+                    changed, dist_val = imgui.slider_float("Distance##3d", float(dist), 0.001, dist_max)
+                    if changed:
+                        self.controller.set_3d_view(distance=max(0.001, dist_val))
+                    imgui.same_line()
+                    if imgui.button("Auto##3ddist"):
+                        self.plot.view3d["distance"] = None
+                        for layer in self.plot.get_3d_layers():
+                            cam = layer.metadata.get("camera", {})
+                            cam.pop("distance", None)
+                            layer.metadata["camera"] = cam
+                            layer.dirty.style_dirty = True
+                        self.plot.frame.dirty_scene = True
+
+                changed, show_axes = imgui.checkbox("Show 3D Axes", bool(view.get("show_axes", True)))
+                if changed: self.controller.set_3d_view(show_axes=show_axes)
+                if imgui.button("Reset 3D View"):
+                    self.controller.reset_3d_view()
+                imgui.same_line()
+                if imgui.button("Refresh 3D Axes"):
+                    self.plot.ensure_3d_axes()
+                    self.plot.frame.dirty_scene = True
+
+                imgui.separator()
+                ssao = self.options.visual.ssao
+                changed, ssao_enabled = imgui.checkbox("SSAO / Ambient Occlusion", ssao.enabled)
+                if changed:
+                    ssao.enabled = ssao_enabled
+                    self.plot.frame.dirty_scene = True
+                changed, strength = imgui.slider_float("SSAO Strength", ssao.strength, 0.0, 1.5)
+                if changed:
+                    ssao.strength = strength
+                    self.plot.frame.dirty_scene = True
+                changed, radius = imgui.slider_float("SSAO Radius", ssao.radius, 0.1, 5.0)
+                if changed:
+                    ssao.radius = radius
+                    self.plot.frame.dirty_scene = True
 
         if imgui.collapsing_header("Plot Framework", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
             _, self.options.axis_show_grid = imgui.checkbox("Show Grid", self.options.axis_show_grid)

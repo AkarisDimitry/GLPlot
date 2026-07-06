@@ -152,7 +152,7 @@ class EffectManager:
         glBindFramebuffer(GL_FRAMEBUFFER, self.scene_fbo.fbo)
         glViewport(0, 0, self.scene_fbo.width, self.scene_fbo.height)
         glClearColor(0.0, 0.0, 0.0, 0.0)
-        glClear(GL_COLOR_BUFFER_BIT)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
     def end_scene(self) -> None:
         """
@@ -300,8 +300,8 @@ class EffectManager:
         self._destroy_target(self.ping_fbo)
         self._destroy_target(self.pong_fbo)
 
-        # Scene target: full res, float
-        self.scene_fbo = self._create_target(w, h, GL_RGBA16F)
+        # Scene target: full res, float, needs depth buffer
+        self.scene_fbo = self._create_target(w, h, GL_RGBA16F, with_depth=True)
 
         # Bloom chain: half res
         bw = max(1, int(round(w * 0.5)))
@@ -310,7 +310,7 @@ class EffectManager:
         self.ping_fbo = self._create_target(bw, bh, GL_RGBA8)
         self.pong_fbo = self._create_target(bw, bh, GL_RGBA8)
 
-    def _create_target(self, w: int, h: int, internal_format: int) -> GLOffscreenTarget:
+    def _create_target(self, w: int, h: int, internal_format: int, with_depth: bool = False) -> GLOffscreenTarget:
         tex = glGenTextures(1)
         glBindTexture(GL_TEXTURE_2D, tex)
 
@@ -339,19 +339,30 @@ class EffectManager:
         glBindFramebuffer(GL_FRAMEBUFFER, fbo)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0)
 
+        depth_rbo = 0
+        if with_depth:
+            depth_rbo = glGenRenderbuffers(1)
+            glBindRenderbuffer(GL_RENDERBUFFER, depth_rbo)
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h)
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_rbo)
+            glBindRenderbuffer(GL_RENDERBUFFER, 0)
+
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if status != GL_FRAMEBUFFER_COMPLETE:
             raise RuntimeError(f"Framebuffer incomplete: {status}")
 
-        return GLOffscreenTarget(fbo=fbo, tex=tex, width=w, height=h)
+        return GLOffscreenTarget(fbo=fbo, tex=tex, width=w, height=h, depth_rbo=depth_rbo)
 
     def _destroy_target(self, target: GLOffscreenTarget) -> None:
         if target.fbo:
             glDeleteFramebuffers(1, [target.fbo])
         if target.tex:
             glDeleteTextures(1, [target.tex])
+        if getattr(target, "depth_rbo", 0):
+            glDeleteRenderbuffers(1, [target.depth_rbo])
         target.fbo = 0
         target.tex = 0
+        target.depth_rbo = 0
         target.width = 0
         target.height = 0

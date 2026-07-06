@@ -14,6 +14,7 @@ from ..renderers.scatter import ScatterRenderer
 from ..renderers.patch import PatchRenderer
 from ..renderers.text import TextRenderer
 from ..renderers.axis import AxisRenderer
+from ..renderers.geometry3d import Geometry3DRenderer
 
 class LayerCapability(Flag):
     """Flags defining what a layer can participate in."""
@@ -49,7 +50,17 @@ class RendererManager:
         self.renderers["patch"] = PatchRenderer(self.options)
         self.renderers["text"] = TextRenderer(self.options)
         self.renderers["axis"] = AxisRenderer(self.options)
+        geometry3d = Geometry3DRenderer(self.options)
+        self.renderers["scatter3d"] = geometry3d
+        self.renderers["mesh3d"] = geometry3d
+        self.renderers["wireframe3d"] = geometry3d
+        self.renderers["bars3d"] = geometry3d
+        self.renderers["volume3d"] = geometry3d
+        initialized = set()
         for renderer in self.renderers.values():
+            if id(renderer) in initialized:
+                continue
+            initialized.add(id(renderer))
             renderer.initialize()
 
     def filter_layers(self, layers: Iterable[BaseLayer], capability: LayerCapability) -> List[BaseLayer]:
@@ -99,22 +110,33 @@ class RendererManager:
     def draw_exact(self, layers: List[BaseLayer], context: Any) -> None:
         """Main EXACT pass render loop."""
         sorted_layers = self.filter_layers(layers, LayerCapability.EXACT)
-        
-        # Pre-count types for normalization
+
+        # Separate system overlay layers so they render in the correct order:
+        #   1. floor3d  — behind all data (semi-transparent floor plane)
+        #   2. data     — user geometry
+        #   3. axis3d   — bounding-box wireframe always on top
+        floor_layers  = [l for l in sorted_layers if l.metadata.get("artist") == "floor3d"]
+        axis_layers   = [l for l in sorted_layers if l.metadata.get("artist") == "axis3d"]
+        data_layers   = [l for l in sorted_layers
+                         if l.metadata.get("artist") not in ("floor3d", "axis3d")]
+
+        # Pre-count types for colourmap normalisation (data layers only)
         type_totals = {}
-        for l in sorted_layers:
+        for l in data_layers:
             type_totals[l.layer_type] = type_totals.get(l.layer_type, 0) + 1
-            
-        type_counters = {}
-        for layer in sorted_layers:
-            total = type_totals[layer.layer_type]
-            current = type_counters.get(layer.layer_type, 0)
-            
-            # Calculate normalized ID for colormapping (sequential across layers of same type)
-            id_norm = float(current) / float(max(1, total - 1)) if total > 1 else 0.5
-            
-            self._dispatch_draw(layer, context, id_norm=id_norm)
-            type_counters[layer.layer_type] = current + 1
+
+        def _draw_batch(batch):
+            type_counters = {}
+            for layer in batch:
+                total   = type_totals.get(layer.layer_type, 1)
+                current = type_counters.get(layer.layer_type, 0)
+                id_norm = float(current) / float(max(1, total - 1)) if total > 1 else 0.5
+                self._dispatch_draw(layer, context, id_norm=id_norm)
+                type_counters[layer.layer_type] = current + 1
+
+        _draw_batch(floor_layers)
+        _draw_batch(data_layers)
+        _draw_batch(axis_layers)
 
     def draw_axes(self, axis_manager: Any, context: Any) -> None:
         """Draw the coordinate framework."""
