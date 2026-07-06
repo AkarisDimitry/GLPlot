@@ -12,31 +12,28 @@ sys.modules['glfw'] = MagicMock()
 import glplot.pyplot as gplt
 
 @pytest.fixture(autouse=True)
-def mock_glfw_opengl(mocker):
+def mock_glfw_opengl(monkeypatch):
     # Mock OpenGL and GLFW completely for the pyplot wrapper tests
-    mocker.patch('glplot.engine.glfw', create=True)
-    mocker.patch('glplot.engine.glViewport', create=True)
-    mocker.patch('glplot.engine.glClearColor', create=True)
-    mocker.patch('glplot.engine.glEnable', create=True)
-    mocker.patch('glplot.engine.glGenFramebuffers', create=True)
-    mocker.patch('glplot.engine.glGenTextures', create=True)
-    mocker.patch('glplot.engine.glBindTexture', create=True)
-    mocker.patch('glplot.engine.glTexImage2D', create=True)
-    mocker.patch('glplot.engine.glTexParameteri', create=True)
-    mocker.patch('glplot.engine.glBindFramebuffer', create=True)
-    mocker.patch('glplot.engine.glFramebufferTexture2D', create=True)
-    mocker.patch('glplot.engine.glBlitFramebuffer', create=True)
-    mocker.patch('glplot.engine.glCheckFramebufferStatus', return_value=0x8CD5, create=True) # GL_FRAMEBUFFER_COMPLETE
+    import glplot.engine as engine
+    import glplot.renderers.line_family as line_family
+
+    for name in [
+        "glfw", "glViewport", "glClearColor", "glEnable", "glGenFramebuffers",
+        "glGenTextures", "glBindTexture", "glTexImage2D", "glTexParameteri",
+        "glBindFramebuffer", "glFramebufferTexture2D", "glBlitFramebuffer",
+    ]:
+        monkeypatch.setattr(engine, name, MagicMock(), raising=False)
+    monkeypatch.setattr(engine, "glCheckFramebufferStatus", MagicMock(return_value=0x8CD5), raising=False)
     
     # We patch engine initialization to avoid shader compilation
-    mocker.patch('glplot.engine.GPULinePlot._init_shaders', create=True)
-    mocker.patch('glplot.engine.GPULinePlot._init_buffers', create=True)
-    mocker.patch('glplot.renderers.line_family.LineFamilyRenderer._init_shaders', create=True)
-    mocker.patch('glplot.renderers.line_family.LineFamilyRenderer._init_buffers', create=True)
+    monkeypatch.setattr(engine.GPULinePlot, "_init_shaders", MagicMock(), raising=False)
+    monkeypatch.setattr(engine.GPULinePlot, "_init_buffers", MagicMock(), raising=False)
+    monkeypatch.setattr(line_family.LineFamilyRenderer, "_init_shaders", MagicMock(), raising=False)
+    monkeypatch.setattr(line_family.LineFamilyRenderer, "_init_buffers", MagicMock(), raising=False)
 
     # Automatically clean up plots between tests
     yield
-    gplt.cla()
+    gplt._cleanup_pyplot_state()
 
 
 def test_decoupled_limits():
