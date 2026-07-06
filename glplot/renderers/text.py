@@ -13,7 +13,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from ..core.context import RenderContext
-    from ..core.layers import TextLayer
+    from ..core.layers import BaseLayer, TextLayer
     from ..options import EngineOptions
 
 
