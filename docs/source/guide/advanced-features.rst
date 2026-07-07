@@ -507,7 +507,7 @@ Exporting for Publication
 
 
 Exporting High-Resolution Images
----------------------------------
+--------------------------------
 
 GLPlot uses off-screen rendering (FBO) to export images at arbitrary resolutions. The ``scale`` parameter multiplies internal render resolution.
 
@@ -808,7 +808,7 @@ This avoids loading the entire dataset into memory upfront.
 
 
 Real-Time Plotting and Animation Patterns
-------------------------------------------
+-----------------------------------------
 
 GLPlot supports dynamic updates for real-time data streaming and animation. The window remains interactive during updates.
 
