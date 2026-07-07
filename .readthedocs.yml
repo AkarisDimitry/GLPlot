@@ -1,0 +1,43 @@
+# Read the Docs configuration file
+# Reference: https://docs.readthedocs.io/en/stable/config-file/v2/
+
+version: 2
+
+# Build documentation in the docs/ directory with Sphinx
+build:
+  os: ubuntu-22.04
+  tools:
+    python: "3.11"
+
+# Explicitly set the version of Python and its requirements
+python:
+  version: 3.11
+  install:
+    - requirements: docs/requirements.txt
+    - method: pip
+      path: .
+
+# Build HTML and PDF documentation
+formats:
+  - pdf
+  - epub
+
+# Specify the root directory containing conf.py
+sphinx:
+  configuration: docs/source/conf.py
+  fail_on_warning: false
+
+# Optionally declare the Python requirements required to build your docs
+# See `python.install` for more information.
+# requirements:
+#    - docs/requirements.txt
+
+# Optionally build your docs in additional formats such as PDF and ePub
+# formats:
+#    - pdf
+#    - epub
+
+# Optional but recommended, declare the version numbers you support by default
+# Setting this to make old versions of your docs available.
+# python:
+#    version: 3.11

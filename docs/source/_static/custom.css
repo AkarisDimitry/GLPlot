@@ -1,0 +1,119 @@
+/* Custom CSS for GLPlot documentation */
+
+/* Improve code block styling */
+.highlight {
+    background-color: #f8f9fa;
+    border-left: 4px solid #2c3e50;
+    padding: 10px;
+}
+
+/* Improve table styling */
+table {
+    border-collapse: collapse;
+}
+
+table th, table td {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+}
+
+table th {
+    background-color: #2c3e50;
+    color: white;
+}
+
+/* Improve heading styling */
+h1, h2, h3 {
+    color: #2c3e50;
+}
+
+/* Improve parameter list styling */
+dl.py {
+    margin-bottom: 1.5em;
+}
+
+/* Add spacing to sections */
+.section {
+    margin-bottom: 2em;
+}
+
+/* Improve example code blocks */
+.literal-block-wrapper {
+    margin: 1em 0;
+}
+
+/* Link styling */
+a {
+    color: #3498db;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* Sidebar improvements */
+.sphinxsidebar {
+    background-color: #ecf0f1;
+}
+
+/* Note/Warning/Tip blocks */
+.admonition {
+    padding: 12px;
+    border-left: 4px solid #3498db;
+    background-color: #ecf0f1;
+    margin: 1em 0;
+}
+
+.admonition.warning {
+    border-left-color: #e74c3c;
+    background-color: #fadbd8;
+}
+
+.admonition.tip {
+    border-left-color: #2ecc71;
+    background-color: #d5f4e6;
+}
+
+.admonition.note {
+    border-left-color: #f39c12;
+    background-color: #fdebd0;
+}
+
+/* Improve API documentation */
+.field-list {
+    margin: 1em 0;
+}
+
+/* Better line spacing for documentation */
+.body p {
+    line-height: 1.6;
+}
+
+/* Code literal improvements */
+code.literal {
+    background-color: #f5f5f5;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+}
+
+/* Improve TOC styling */
+.toctree-wrapper > ul {
+    list-style: none;
+    padding-left: 1em;
+}
+
+.toctree-wrapper li {
+    margin: 0.5em 0;
+}
+
+/* Improve function/class reference */
+.descclassname {
+    color: #7f8c8d;
+}
+
+.descname {
+    font-weight: bold;
+    color: #2c3e50;
+}

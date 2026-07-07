@@ -1,0 +1,7 @@
+# Documentation build requirements
+sphinx>=5.0
+sphinx-rtd-theme>=1.2
+sphinx-autodoc-typehints>=1.19
+sphinxcontrib-autodoc-pydantic>=1.8.0
+sphinx-gallery>=0.13.0
+numpydoc>=1.5.0
