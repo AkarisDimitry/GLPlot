@@ -2,24 +2,30 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
+from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
 
 MAX_LEGEND_ITEMS = 5
 
 
-def _rgba(color, default=(0, 0, 0, 1)):
+def _rgba(
+    color: Optional[Union[Tuple[float, float, float, float], Sequence[float], np.ndarray]],
+    default: Tuple[float, float, float, float] = (0, 0, 0, 1),
+) -> Tuple[float, float, float, float]:
     if color is None:
         return default
     arr = np.asarray(color, dtype=float)
     if arr.shape == (4,):
-        return tuple(arr)
+        return tuple(arr)  # type: ignore
     if arr.shape == (3,):
-        return tuple(np.r_[arr, 1.0])
+        return tuple(np.r_[arr, 1.0])  # type: ignore
     return default
 
 
-def _apply_preview_ssao(colors, z_values, strength):
+def _apply_preview_ssao(
+    colors: np.ndarray, z_values: np.ndarray, strength: float
+) -> np.ndarray:
     cols = np.asarray(colors, dtype=float).copy()
     if cols.ndim == 1:
         cols = np.tile(cols, (len(z_values), 1))
@@ -31,7 +37,7 @@ def _apply_preview_ssao(colors, z_values, strength):
     return cols
 
 
-def render_preview(engine, filename: str, scale: float = 1.0) -> None:
+def render_preview(engine: object, filename: str, scale: float = 1.0) -> None:
     import matplotlib
 
     matplotlib.use("Agg", force=True)

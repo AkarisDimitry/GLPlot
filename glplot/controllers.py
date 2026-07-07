@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class CameraController:
-    def __init__(self, camera: CameraState, options: EngineOptions):
+    def __init__(self, camera: CameraState, options: EngineOptions) -> None:
         self.camera = camera
         self.options = options
 

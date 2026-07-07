@@ -22,7 +22,7 @@ except (ImportError, Exception):
 
 
 class HudManager:
-    def __init__(self, plot: GPULinePlot):
+    def __init__(self, plot: GPULinePlot) -> None:
         self.plot = plot
         self.options = plot.options
         self.state = HudState()
@@ -30,7 +30,7 @@ class HudManager:
         self.imgui_ctx = None
         self.imgui_impl = None
 
-    def _is_3d_layer(self, layer) -> bool:
+    def _is_3d_layer(self, layer: Any) -> bool:
         return getattr(layer, "layer_type", "").endswith("3d")
 
     def _scene_3d_stats(self) -> dict[str, Any]:
@@ -55,11 +55,11 @@ class HudManager:
         }
 
     @staticmethod
-    def _is_3d_layer(layer) -> bool:
+    def _is_3d_layer(layer: Any) -> bool:
         return getattr(layer, "layer_type", "").endswith("3d")
 
     @staticmethod
-    def _layer_size_text(layer) -> str:
+    def _layer_size_text(layer: Any) -> str:
         if hasattr(layer, "vertices") and layer.vertices is not None:
             return f"{len(layer.vertices):,} verts"
         if hasattr(layer, "pts") and layer.pts is not None:
@@ -68,7 +68,8 @@ class HudManager:
             return f"{len(layer.ab):,} lines"
         return ""
 
-    def initialize(self, window) -> None:
+    def initialize(self, window: Any) -> None:
+        # opaque GLFW window handle (glfw._GLFWwindow*, no public stub type)
         if not IMGUI_AVAILABLE:
             return
         self.imgui_ctx = imgui.create_context()
@@ -83,19 +84,19 @@ class HudManager:
         if self.imgui_impl:
             self.imgui_impl.process_inputs()
 
-    def on_scroll(self, window, dx, dy) -> None:
+    def on_scroll(self, window: Any, dx: float, dy: float) -> None:
         if self.imgui_impl:
             self.imgui_impl.scroll_callback(window, dx, dy)
 
-    def on_mouse_button(self, window, button, action, mods) -> None:
+    def on_mouse_button(self, window: Any, button: int, action: int, mods: int) -> None:
         if self.imgui_impl:
             self.imgui_impl.mouse_callback(window, button, action, mods)
 
-    def on_key(self, window, key, sc, action, mods) -> None:
+    def on_key(self, window: Any, key: int, sc: int, action: int, mods: int) -> None:
         if self.imgui_impl:
             self.imgui_impl.keyboard_callback(window, key, sc, action, mods)
 
-    def on_char(self, window, char) -> None:
+    def on_char(self, window: Any, char: int) -> None:
         if self.imgui_impl:
             self.imgui_impl.char_callback(window, char)
 
@@ -103,12 +104,6 @@ class HudManager:
         if not IMGUI_AVAILABLE or not self.imgui_impl:
             return False
         return imgui.get_io().want_capture_mouse
-
-    def get_draw_list(self):
-        """Returns the ImGui background draw list if available."""
-        if not IMGUI_AVAILABLE:
-            return None
-        return imgui.get_background_draw_list()
 
     def wants_keyboard(self) -> bool:
         if not IMGUI_AVAILABLE or not self.imgui_impl:
@@ -119,7 +114,7 @@ class HudManager:
         if self.imgui_impl:
             imgui.new_frame()
 
-    def update(self):
+    def update(self) -> None:
         """Main draw orchestration for all HUD components."""
         if not self.imgui_impl or not self.options.enable_hud:
             return
@@ -162,7 +157,7 @@ class HudManager:
 
         self._draw_layer_inspector()
 
-    def _draw_main_menu(self):
+    def _draw_main_menu(self) -> None:
         if imgui.begin_main_menu_bar():
             if imgui.begin_menu("View"):
                 _, self.state.show_status_overlay = imgui.menu_item(
@@ -197,7 +192,7 @@ class HudManager:
 
             imgui.end_main_menu_bar()
 
-    def _draw_status_overlay(self):
+    def _draw_status_overlay(self) -> None:
         # Transparent overlay strip at the top (below menu)
         imgui.set_next_window_position(0, 20)
         imgui.set_next_window_size(self.plot.width, 30)
@@ -244,7 +239,7 @@ class HudManager:
 
         imgui.end()
 
-    def _draw_layers_panel(self):
+    def _draw_layers_panel(self) -> None:
         imgui.set_next_window_size(300, 400, imgui.FIRST_USE_EVER)
         imgui.begin("Layers & Stacking", True)
 
@@ -307,7 +302,7 @@ class HudManager:
 
         imgui.end()
 
-    def _draw_layer_inspector(self):
+    def _draw_layer_inspector(self) -> None:
         if self.state.selected_layer_id is None:
             return
 
@@ -430,7 +425,7 @@ class HudManager:
 
         imgui.end()
 
-    def _draw_render_panel(self):
+    def _draw_render_panel(self) -> None:
         imgui.set_next_window_size(300, 450, imgui.FIRST_USE_EVER)
         imgui.begin("Render & Style", True)
 
@@ -726,7 +721,7 @@ class HudManager:
 
         imgui.end()
 
-    def _draw_profiler_panel(self):
+    def _draw_profiler_panel(self) -> None:
         imgui.set_next_window_size(350, 420, imgui.FIRST_USE_EVER)
         expanded, opened = imgui.begin("Profiler", True)
         if not opened:
@@ -783,7 +778,7 @@ class HudManager:
 
         imgui.end()
 
-    def _draw_selection_panel(self):
+    def _draw_selection_panel(self) -> None:
         imgui.set_next_window_size(250, 180, imgui.FIRST_USE_EVER)
         imgui.begin("Selection Info", True)
 
@@ -804,7 +799,7 @@ class HudManager:
 
         imgui.end()
 
-    def _draw_analysis_panel(self):
+    def _draw_analysis_panel(self) -> None:
         imgui.set_next_window_size(400, 300, imgui.FIRST_USE_EVER)
         imgui.begin("Analysis (Sampled)", True)
 

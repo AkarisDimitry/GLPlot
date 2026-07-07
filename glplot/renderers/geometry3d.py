@@ -73,7 +73,7 @@ def _bounds_3d(layer: Layer3D) -> tuple[np.ndarray, float]:
 class Geometry3DRenderer:
     """GPU renderer for large 3D point clouds, meshes, wireframes, volumes, and bars."""
 
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
         self.prog = 0
         self.u_mvp = -1

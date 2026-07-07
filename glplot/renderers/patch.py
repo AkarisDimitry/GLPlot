@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 class GLPatchBuffers:
-    def __init__(self, vao: int, vbo: int, ebo: Optional[int] = None):
+    def __init__(self, vao: int, vbo: int, ebo: Optional[int] = None) -> None:
         self.vao = vao
         self.vbo = vbo
         self.ebo = ebo
@@ -29,7 +29,7 @@ class PatchRenderer:
     Specialized for area fills, bars, and bands using GL_TRIANGLE_STRIP/TRIANGLES.
     """
 
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
         self.prog = 0
         self.u_mvp = -1

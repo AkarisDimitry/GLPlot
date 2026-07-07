@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 
@@ -25,12 +25,12 @@ class GLPlotSnapshot:
 
 def snapshot_to_matplotlib(
     snapshot: GLPlotSnapshot,
-    ax=None,
+    ax: Optional[Any] = None,
     interpolation: str = "nearest",
     preserve_aspect: bool = False,
     set_limits: bool = True,
     zorder: float = 0.0,
-):
+) -> tuple[Any, Any, Any]:
     """
     Standalone utility to embed a GLPlotSnapshot into a Matplotlib axis.
     Does not require a live OpenGL context.

@@ -22,7 +22,7 @@ class AxisManager:
     Generates 'nice' ticks and labels based on the visible data range.
     """
 
-    def __init__(self, plot: GPULinePlot):
+    def __init__(self, plot: GPULinePlot) -> None:
         self.plot = plot
         self.options = plot.options
         self.ticks_x = AxisTicks()

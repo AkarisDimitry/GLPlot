@@ -33,7 +33,7 @@ class EffectManager:
         end_scene()
     """
 
-    def __init__(self, plot: "GPULinePlot"):
+    def __init__(self, plot: "GPULinePlot") -> None:
         self.plot = plot
         self.options = plot.options
 

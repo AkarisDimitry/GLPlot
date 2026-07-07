@@ -36,7 +36,7 @@ class RendererManager:
     and dispatching to specialized primitive renderers.
     """
 
-    def __init__(self, plot: GPULinePlot):
+    def __init__(self, plot: GPULinePlot) -> None:
         self.plot = plot
         self.options = plot.options
 
@@ -143,7 +143,7 @@ class RendererManager:
         for l in data_layers:
             type_totals[l.layer_type] = type_totals.get(l.layer_type, 0) + 1
 
-        def _draw_batch(batch):
+        def _draw_batch(batch: list) -> None:
             type_counters = {}
             for layer in batch:
                 total = type_totals.get(layer.layer_type, 1)

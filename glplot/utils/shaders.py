@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Tuple
+
 # --- SHARED UTILS ---
 
 HEATMAP_FUNCS = r"""
@@ -236,7 +240,7 @@ void main() {
 """
 
 
-def mix(c1, c2, x):
+def mix(c1: Tuple[float, float, float], c2: Tuple[float, float, float], x: float) -> Tuple[float, float, float]:
     return (
         c1[0] * (1.0 - x) + c2[0] * x,
         c1[1] * (1.0 - x) + c2[1] * x,

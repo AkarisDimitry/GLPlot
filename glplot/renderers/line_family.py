@@ -23,7 +23,7 @@ class LineFamilyRenderer:
     Uses optimized orthographic shaders for maximum throughput.
     """
 
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
         self.prog = 0
 

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 class ExactLineRenderer:
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
         self.prog = 0
         self.u_mvp = -1

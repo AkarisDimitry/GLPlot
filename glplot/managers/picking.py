@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 
 class PickingManager:
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
         self.target = GLOffscreenTarget()
         self.pid_lines = -1

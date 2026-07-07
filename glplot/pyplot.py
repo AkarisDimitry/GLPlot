@@ -6,7 +6,7 @@ from typing import Any, Iterable, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from .core.layers import Layer3D
+from .core.layers import BaseLayer, Layer3D
 from .engine import GPULinePlot
 
 ColorLike = Union[
@@ -14,6 +14,8 @@ ColorLike = Union[
     Sequence[float],
     np.ndarray,
 ]
+
+ArrayLike = Union[Sequence[float], np.ndarray]
 
 BlendMode = Literal["auto", "on", "off"]
 
@@ -31,7 +33,7 @@ _ALL_PLOTS: list[GPULinePlot] = []
 # ------------------------------------------------------------------
 
 
-def _as_float_array(x, ndim: Optional[int] = None, name: str = "array") -> np.ndarray:
+def _as_float_array(x: ArrayLike, ndim: Optional[int] = None, name: str = "array") -> np.ndarray:
     arr = np.asarray(x, dtype=np.float32)
     if ndim is not None and arr.ndim != ndim:
         raise ValueError(f"{name} must have ndim={ndim}, got {arr.ndim}")
@@ -186,7 +188,7 @@ def _parse_plot_format(fmt: Optional[str]) -> dict[str, Any]:
     return out
 
 
-def _plot_single(x, y=None, fmt: Optional[str] = None, **kwargs):
+def _plot_single(x: ArrayLike, y: Optional[ArrayLike] = None, fmt: Optional[str] = None, **kwargs: Any) -> BaseLayer:
     style = _parse_plot_format(fmt)
     style.update({k: v for k, v in kwargs.items() if v is not None})
     if y is None:
@@ -199,9 +201,9 @@ def _plot_single(x, y=None, fmt: Optional[str] = None, **kwargs):
 
 
 def _project_3d(
-    x,
-    y,
-    z,
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
     *,
     elev: float = 30.0,
     azim: float = -60.0,
@@ -226,7 +228,7 @@ def _project_3d(
 
 
 def _colormap_values(
-    values, cmap: Optional[str] = None, vmin: Optional[float] = None, vmax: Optional[float] = None
+    values: ArrayLike, cmap: Optional[str] = None, vmin: Optional[float] = None, vmax: Optional[float] = None
 ) -> np.ndarray:
     from matplotlib import colormaps
 
@@ -239,10 +241,10 @@ def _colormap_values(
 
 
 def _add_3d_layer(
-    vertices,
+    vertices: np.ndarray,
     *,
-    colors=None,
-    indices=None,
+    colors: Optional[np.ndarray] = None,
+    indices: Optional[np.ndarray] = None,
     primitive: str = "points",
     layer_type: str = "scatter3d",
     label: Optional[str] = None,
@@ -756,7 +758,7 @@ def plot_lines(
     return plot
 
 
-def plot(*args, **kwargs):
+def plot(*args: Any, **kwargs: Any) -> list[BaseLayer]:
     """Plot one or more connected polylines with optional markers.
 
     Supports matplotlib-style flexible argument parsing for easy line plotting.
@@ -828,7 +830,7 @@ def plot(*args, **kwargs):
     return artists
 
 
-def plot3d(x, y, z, *args, elev: float = 30.0, azim: float = -60.0, scale_z: float = 0.7, **kwargs):
+def plot3d(x: ArrayLike, y: ArrayLike, z: ArrayLike, *args: Any, elev: float = 30.0, azim: float = -60.0, scale_z: float = 0.7, **kwargs: Any) -> BaseLayer:
     """Plot a 3D line in 3D space.
 
     Renders a connected line in 3D using native 3D geometry shader pipeline.
@@ -904,7 +906,7 @@ def scatter(
     y: Sequence[float],
     color: Optional[ColorLike] = None,
     size: float = 10.0,
-    c: Optional[ColorLike] = None,
+    c: Optional[Union[ColorLike, ArrayLike]] = None,
     s: Optional[float] = None,
     cmap: Optional[str] = None,
     vmin: Optional[float] = None,
@@ -912,7 +914,7 @@ def scatter(
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     marker: Optional[str] = None,
-):
+) -> BaseLayer:
     """Create a scatter plot with points at given (x, y) coordinates.
 
     Plots individual points with optional per-point coloring via colormap.
@@ -1005,17 +1007,17 @@ def scatter(
 
 
 def scatter3d(
-    x,
-    y,
-    z,
-    *args,
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
+    *args: Any,
     elev: float = 30.0,
     azim: float = -60.0,
     scale_z: float = 0.7,
-    c: Optional[ColorLike] = None,
+    c: Optional[Union[ColorLike, ArrayLike]] = None,
     cmap: Optional[str] = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> BaseLayer:
     """Scatter plot in 3D space.
 
     Renders points at 3D coordinates with optional per-point colormapping.
@@ -1384,7 +1386,7 @@ def hist2d(
 
 
 def imshow(
-    X,
+    X: ArrayLike,
     cmap: str = "viridis",
     origin: str = "upper",
     extent: Optional[Tuple[float, float, float, float]] = None,
@@ -1392,8 +1394,8 @@ def imshow(
     vmax: Optional[float] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> BaseLayer:
     """Display a 2D array as an image with colormap.
 
     Renders a 2D matrix as a colored image by mapping values through a
@@ -2086,12 +2088,12 @@ def _bar3d_hex_geometry(x_arr, y_arr, z_arr, dx_arr, dy_arr, dz_arr, bar_colors,
 
 
 def bar3d(
-    x,
-    y,
-    z,
-    dx,
-    dy,
-    dz,
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
+    dx: Union[ArrayLike, float],
+    dy: Union[ArrayLike, float],
+    dz: Union[ArrayLike, float],
     *,
     color: ColorLike = "tab:blue",
     alpha: Optional[float] = None,
@@ -2100,7 +2102,7 @@ def bar3d(
     scale_z: float = 0.7,
     label: Optional[str] = None,
     shape: str = "box",
-    c: Optional[ColorLike] = None,
+    c: Optional[Union[ColorLike, ArrayLike]] = None,
     cmap: str = "viridis",
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
@@ -2109,8 +2111,8 @@ def bar3d(
     edge_width: float = 0.8,
     ssao: Optional[bool] = None,
     ssao_strength: Optional[float] = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> BaseLayer:
     """Create a 3D bar chart.
 
     Renders rectangular bars or hexagonal prisms at 3D positions with
@@ -2285,10 +2287,10 @@ def arrow(
 
 
 def quiver(
-    x,
-    y,
-    u,
-    v,
+    x: ArrayLike,
+    y: ArrayLike,
+    u: ArrayLike,
+    v: ArrayLike,
     *,
     color: ColorLike = "k",
     scale: float = 1.0,
@@ -2296,8 +2298,8 @@ def quiver(
     head_width: float = 0.08,
     head_length: float = 0.12,
     label: Optional[str] = None,
-    **kwargs,
-) -> list:
+    **kwargs: Any,
+) -> list[BaseLayer]:
     """Create a 2D vector field plot.
 
     Renders arrows representing 2D vector field (u, v) at each point (x, y).
@@ -2415,12 +2417,12 @@ def quiver(
 
 
 def quiver3d(
-    x,
-    y,
-    z,
-    u,
-    v,
-    w,
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
+    u: ArrayLike,
+    v: ArrayLike,
+    w: ArrayLike,
     *,
     color: ColorLike = "C0",
     scale: float = 1.0,
@@ -2431,8 +2433,8 @@ def quiver3d(
     elev: float = 30.0,
     azim: float = -60.0,
     label: Optional[str] = None,
-    **kwargs,
-) -> list:
+    **kwargs: Any,
+) -> list[BaseLayer]:
     """Create a 3D vector field plot.
 
     Renders arrows in 3D space representing vector field (u, v, w) at each
@@ -2545,13 +2547,13 @@ def quiver3d(
 
 def annotate(
     text_value: str,
-    xy,
-    xytext=None,
+    xy: Tuple[float, float],
+    xytext: Optional[Tuple[float, float]] = None,
     arrowprops: Optional[dict[str, Any]] = None,
     fontsize: int = 12,
     color: ColorLike = "k",
-    **kwargs,
-):
+    **kwargs: Any,
+) -> list[BaseLayer]:
     tx, ty = xy if xytext is None else xytext
     text_layer = text(tx, ty, text_value, fontsize=fontsize, color=color)
     text_layer.scene.layers[-1].metadata["artist"] = "annotate_text"
@@ -2823,7 +2825,7 @@ def text(
     fontsize: int = 12,
     color: ColorLike = (0.0, 0.0, 0.0, 1.0),
     label: Optional[str] = None,
-):
+) -> GPULinePlot:
     """Add a text string at specified plot coordinates.
 
     Renders text at data coordinates (x, y). Useful for annotations,

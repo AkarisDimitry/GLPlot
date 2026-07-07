@@ -35,7 +35,7 @@ class PolylineRenderer:
     Replaces the older CPU-side expansion logic.
     """
 
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
 
         self.prog = 0

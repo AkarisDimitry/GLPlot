@@ -21,7 +21,7 @@ class InteractionRenderer:
     2. density/aggregate interaction image (placeholder for expansion)
     """
 
-    def __init__(self, plot: "GPULinePlot"):
+    def __init__(self, plot: "GPULinePlot") -> None:
         self.plot = plot
         self.options = plot.options
         self.cache_prog = 0

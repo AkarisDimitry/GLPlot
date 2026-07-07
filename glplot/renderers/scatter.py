@@ -29,7 +29,7 @@ class ScatterRenderer:
     Specialized for point clouds (GL_POINTS).
     """
 
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
         self.prog = 0
 

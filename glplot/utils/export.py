@@ -18,7 +18,7 @@ class ExportManager:
     Handles offscreen rendering for high-resolution exports.
     """
 
-    def __init__(self, engine: GPULinePlot):
+    def __init__(self, engine: GPULinePlot) -> None:
         self.engine = engine
 
     def savefig(

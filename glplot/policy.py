@@ -18,7 +18,7 @@ class RenderPolicyManager:
     Implements 'Width-Aware' scaling to protect against fill-rate bottlenecks.
     """
 
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         from .options import RuntimePolicy
 
         self.options = options

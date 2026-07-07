@@ -50,7 +50,7 @@ class GPULinePlot:
         height: int = 800,
         title: str = "GLPlot",
         options: Optional[EngineOptions] = None,
-    ):
+    ) -> None:
         self.options = options or EngineOptions(
             window_width=width, window_height=height, title=title
         )
@@ -122,15 +122,15 @@ class GPULinePlot:
         return self.scene.lines.x_range
 
     @property
-    def _scatters(self):
+    def _scatters(self) -> list:
         return [layer for layer in self.scene.layers if layer.layer_type == "scatter"]
 
     @property
-    def _line_strips(self):
+    def _line_strips(self) -> list:
         return [layer for layer in self.scene.layers if layer.layer_type == "polyline"]
 
     @property
-    def _text_annotations(self):
+    def _text_annotations(self) -> list:
         return [layer for layer in self.scene.layers if layer.layer_type == "text"]
 
     def set_title(self, title: str) -> None:
@@ -1259,7 +1259,7 @@ class GPULinePlot:
             self.hud.state.last_slow_update = now
             self._update_slow_analysis()
 
-    def _update_slow_analysis(self):
+    def _update_slow_analysis(self) -> None:
         # Sampled histograms for performance
         if self.scene.lines.ab is not None:
             n = self.scene.lines.count
@@ -1304,13 +1304,13 @@ class GPULinePlot:
     # Callbacks
     # --------------------------------------------------------
 
-    def _on_resize(self, window, w, h) -> None:
+    def _on_resize(self, window: Any, w: int, h: int) -> None:
         self.width = max(1, int(w))
         self.height = max(1, int(h))
         self.frame.dirty_scene = True
         self.frame.dirty_pick = True
 
-    def _on_fb_resize(self, window, w, h) -> None:
+    def _on_fb_resize(self, window: Any, w: int, h: int) -> None:
         self.fb_width = max(1, int(w))
         self.fb_height = max(1, int(h))
         glViewport(0, 0, self.fb_width, self.fb_height)
@@ -1321,7 +1321,7 @@ class GPULinePlot:
         self.frame.dirty_scene = True
         self.frame.dirty_pick = True
 
-    def _on_scroll(self, window, dx, dy) -> None:
+    def _on_scroll(self, window: Any, dx: float, dy: float) -> None:
         self.hud.on_scroll(window, dx, dy)
         if self.hud.wants_mouse():
             return
@@ -1344,7 +1344,7 @@ class GPULinePlot:
         self.frame.dirty_scene = True
         self.frame.dirty_pick = True
 
-    def _on_mouse_button(self, window, button, action, mods) -> None:
+    def _on_mouse_button(self, window: Any, button: int, action: int, mods: int) -> None:
         self.frame.dirty_ui = True
         self.hud.on_mouse_button(window, button, action, mods)
         if self.hud.wants_mouse():
@@ -1441,7 +1441,7 @@ class GPULinePlot:
                 self.interaction.right_drag_active = False
                 self.frame.dirty_scene = True
 
-    def _on_cursor(self, window, x, y) -> None:
+    def _on_cursor(self, window: Any, x: float, y: float) -> None:
         if (x, y) == self.interaction.last_mouse:
             return
 
@@ -1729,19 +1729,19 @@ class GPULinePlot:
             transparent=transparent,
         )
 
-    def to_matplotlib(self, ax: Optional[Axes] = None, mpl_kwargs: dict = {}, **kwargs):
+    def to_matplotlib(self, ax: Optional[Any] = None, mpl_kwargs: dict = {}, **kwargs: Any) -> tuple[Any, Any, Any]:
         """Level 2 API: Render and embed directly into Matplotlib."""
         from .utils.mpl_bridge import snapshot_to_matplotlib
 
         snap = self.capture_snapshot(**kwargs)
         return snapshot_to_matplotlib(snap, ax=ax, **mpl_kwargs)
 
-    def set_matplotlib_transfer_target(self, ax=None, callback=None):
+    def set_matplotlib_transfer_target(self, ax: Optional[Any] = None, callback: Optional[Any] = None) -> None:
         """Level 3 API Setup: Redirect 'M' key transfers."""
         self._mpl_transfer_ax = ax
         self._mpl_transfer_callback = callback
 
-    def transfer_to_matplotlib_default(self):
+    def transfer_to_matplotlib_default(self) -> None:
         """Default action for Key 'M'."""
         if hasattr(self, "_mpl_transfer_callback") and self._mpl_transfer_callback:
             snap = self.capture_snapshot(scale=2.0)
@@ -1759,7 +1759,7 @@ class GPULinePlot:
         self.options.line_colormap_enabled = not self.options.line_colormap_enabled
         self.frame.dirty_scene = True
 
-    def _on_key(self, window, key, sc, action, mods) -> None:
+    def _on_key(self, window: Any, key: int, sc: int, action: int, mods: int) -> None:
         self.frame.dirty_ui = True
         self.hud.on_key(window, key, sc, action, mods)
 
@@ -1866,6 +1866,6 @@ class GPULinePlot:
             if key in (glfw.KEY_LEFT_SHIFT, glfw.KEY_RIGHT_SHIFT):
                 self.interaction.shift_down = False
 
-    def _on_char(self, window, char) -> None:
+    def _on_char(self, window: Any, char: int) -> None:
         self.frame.dirty_ui = True
         self.hud.on_char(window, char)

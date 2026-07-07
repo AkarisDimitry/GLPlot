@@ -23,7 +23,7 @@ class TextRenderer:
     Uses ImGui's background draw list to render proyected labels.
     """
 
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
 
     def initialize(self) -> None:

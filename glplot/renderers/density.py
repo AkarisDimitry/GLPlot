@@ -22,7 +22,7 @@ class DensityRenderer:
     renderers into a shared R32F texture, then resolves it into a heatmap.
     """
 
-    def __init__(self, plot: "GPULinePlot"):
+    def __init__(self, plot: "GPULinePlot") -> None:
         self.plot = plot
         self.options = plot.options
 

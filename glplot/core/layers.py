@@ -52,7 +52,7 @@ class LayerDirtyState:
     gpu_dirty: bool = True
     bounds_dirty: bool = True
 
-    def clear(self):
+    def clear(self) -> None:
         self.data_dirty = False
         self.style_dirty = False
         self.gpu_dirty = False
@@ -62,7 +62,7 @@ class LayerDirtyState:
 class CompiledLayer:
     """GPU-ready geometry and cached bounds."""
 
-    def __init__(self, layer_id: int):
+    def __init__(self, layer_id: int) -> None:
         self.layer_id = layer_id
         self.bounds_world: Optional[Tuple[float, float, float, float]] = None
         self.gpu_initialized: bool = False
@@ -71,7 +71,7 @@ class CompiledLayer:
 class BaseLayer:
     """Abstract base for all visual primitives."""
 
-    def __init__(self, layer_type: str, label: str = ""):
+    def __init__(self, layer_type: str, label: str = "") -> None:
         self.layer_id = uuid.uuid4().int & (1 << 31) - 1
         self.layer_type = layer_type
         self.label = label
@@ -99,7 +99,7 @@ class LineFamilyLayer(BaseLayer):
         colors: Optional[np.ndarray] = None,
         x_range: Tuple[float, float] = (-1.0, 1.0),
         label: str = "",
-    ):
+    ) -> None:
         super().__init__(layer_type="line_family", label=label)
         self.ab = ab
         self.colors = colors
@@ -132,7 +132,7 @@ class ScatterLayer(BaseLayer):
         colors: Optional[np.ndarray] = None,
         size: float = 6.0,
         label: str = "",
-    ):
+    ) -> None:
         super().__init__(layer_type="scatter", label=label)
         self.pts = pts
         self.colors = colors
@@ -161,7 +161,7 @@ class PolylineLayer(BaseLayer):
         color: Optional[Tuple[float, float, float, float]] = None,
         width: float = 1.0,
         label: str = "",
-    ):
+    ) -> None:
         super().__init__(layer_type="polyline", label=label)
         self.pts = pts
         if color:
@@ -193,7 +193,7 @@ class PatchLayer(BaseLayer):
         indices: Optional[np.ndarray] = None,
         mode: str = "strip",
         label: str = "",
-    ):
+    ) -> None:
         super().__init__(layer_type="patch", label=label)
         self.vertices = vertices
         self.indices = indices
@@ -218,7 +218,7 @@ class TextLayer(BaseLayer):
     y: float = 0.0
     text: str = ""
 
-    def __init__(self, x: float = 0.0, y: float = 0.0, text: str = "", label: str = ""):
+    def __init__(self, x: float = 0.0, y: float = 0.0, text: str = "", label: str = "") -> None:
         super().__init__(layer_type="text", label=label)
         self.x = x
         self.y = y
@@ -246,7 +246,7 @@ class Layer3D(BaseLayer):
         primitive: str = "points",
         label: str = "",
         layer_type: str = "geometry3d",
-    ):
+    ) -> None:
         super().__init__(layer_type=layer_type, label=label)
         self.vertices = vertices
         self.colors = colors

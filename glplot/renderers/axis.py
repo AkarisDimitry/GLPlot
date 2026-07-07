@@ -19,7 +19,7 @@ class AxisRenderer:
     Specialized renderer for the plot framework: grid, spines, and ticks.
     """
 
-    def __init__(self, options: EngineOptions):
+    def __init__(self, options: EngineOptions) -> None:
         self.options = options
         self.prog = 0
         self.u_mvp = -1
