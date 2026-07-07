@@ -13,9 +13,9 @@ This document serves as the technical specification and mathematical reference f
 | **Developers** | Core Visualization & Engineering Team |
 | **Contact** | dimitry@glplot.org |
 | **Year Released** | 2026 |
-| **Software Version** | 1.0.0 |
+| **Software Version** | 0.1.3 |
 | **Programming Language** | Python (3.9+), GLSL (Core Profile 330) |
-| **Key Dependencies** | ModernGL/PyOpenGL, GLFW, NumPy, SciPy, ImGui (optional) |
+| **Key Dependencies** | PyOpenGL >= 3.1.6, GLFW >= 2.5, NumPy >= 1.23, SciPy >= 1.9, Matplotlib >= 3.6, ImGui >= 2.0 |
 | **Software License** | MIT License |
 | **Code Repository** | [https://github.com/AkarisDimitry/GLPlot](https://github.com/AkarisDimitry/GLPlot) |
 

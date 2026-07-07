@@ -97,8 +97,8 @@ pip install -e .
 
 ### Requirements
 - **Python**: 3.9 or later
-- **Core Dependencies**: numpy, scipy, matplotlib, glfw, PyOpenGL
-- **Optional**: imgui for advanced HUD features
+- **Core Dependencies**: numpy >= 1.23, scipy >= 1.9, matplotlib >= 3.6, glfw >= 2.5, PyOpenGL >= 3.1.6
+- **HUD Dependency**: imgui[glfw] >= 2.0
 
 ### Clean Environment Testing
 ```bash

@@ -348,7 +348,28 @@ def _add_plot_primitive(
 
 
 def get_engine() -> GPULinePlot:
-    """Returns the current active GPULinePlot engine, or creates one if it doesn't exist."""
+    """Get the current active plot engine.
+
+    Returns the current GPULinePlot instance, creating one if none exists.
+    Useful for direct engine manipulation or introspection of internal state.
+    Most users should use the pyplot API functions instead of the engine
+    directly.
+
+    Returns:
+        GPULinePlot: The active plot engine instance.
+
+    Examples:
+        Get current engine:
+
+        >>> engine = gplt.get_engine()
+        >>> engine.set_view(xlim=(0, 10), ylim=(0, 10))
+
+        Access plot properties directly:
+
+        >>> engine = gplt.get_engine()
+        >>> print(engine.title)
+        >>> engine.title = "New Title"
+    """
     return _get_or_create_plot()
 
 
@@ -463,8 +484,58 @@ def figure(
     clipping: bool = True,
     ssao: bool = False,
 ) -> GPULinePlot:
-    """
-    Create a new figure and make it current.
+    """Create a new figure and set it as current.
+
+    Creates a new GPULinePlot figure window with specified dimensions and
+    optimization settings. If figsize is provided, it takes precedence over
+    width and height. The created figure becomes the current figure for
+    subsequent plotting operations.
+
+    Args:
+        title (str, optional): Window title. Defaults to "GLPlot".
+        width (int, optional): Window width in pixels. Defaults to 1280.
+        height (int, optional): Window height in pixels. Defaults to 800.
+        figsize (tuple[float, float], optional): Figure size as (width, height)
+            in inches. When provided, pixels are computed as figsize * dpi.
+            Defaults to None (use width/height directly).
+        dpi (int, optional): Dots per inch for figsize computation.
+            Defaults to 100.
+        hud (bool, optional): Enable heads-up display with statistics.
+            Defaults to False.
+        density (bool, optional): Enable density visualization for 2D layers.
+            Defaults to False.
+        blending (str, optional): Blending mode: 'auto', 'on', or 'off'.
+            Controls transparency blending. Defaults to 'auto'.
+        lod (bool, optional): Enable level-of-detail optimization for large
+            line datasets. Reduces visible lines above threshold. Defaults to True.
+        budget (int, optional): LOD budget (1-8): ratio of visible to total lines.
+            Higher values show more lines but slower rendering. Defaults to 8.
+        multisample (bool, optional): Enable multisample anti-aliasing.
+            Defaults to False.
+        cache (bool, optional): Cache interaction path for better responsiveness.
+            Defaults to True.
+        clipping (bool, optional): Enable clipping optimization. Defaults to True.
+        ssao (bool, optional): Enable screen-space ambient occlusion for 3D depth.
+            Defaults to False.
+
+    Returns:
+        GPULinePlot: The created figure object, now current.
+
+    Examples:
+        Create a basic figure:
+
+        >>> import glplot.pyplot as gplt
+        >>> fig = gplt.figure(title="My Plot", width=800, height=600)
+        >>> gplt.plot([1, 2, 3], [1, 4, 2])
+        >>> gplt.show()
+
+        Create with figsize (matplotlib style):
+
+        >>> fig = gplt.figure(figsize=(10, 6), dpi=100)
+
+        Create with optimization flags for large datasets:
+
+        >>> fig = gplt.figure(lod=True, budget=4, cache=True)
     """
     global _CURRENT_PLOT
     if figsize is not None:
@@ -497,9 +568,48 @@ def gcf() -> GPULinePlot:
 
 
 def options(**kwargs):
-    """
-    Update EngineOptions for the current figure.
-    Example: gplt.options(density_resolution_scale=0.5, cache_refresh_hz=60)
+    """Configure rendering and optimization options.
+
+    Updates EngineOptions for the current figure. Allows fine-grained control
+    over performance, quality, and visual settings. Option names correspond
+    directly to EngineOptions attributes.
+
+    Keyword Arguments:
+        **kwargs: EngineOptions attributes to update. Common options include:
+            - density_resolution_scale (float): Scale for density maps (0.1-1.0)
+            - cache_refresh_hz (float): Cache refresh rate in Hz
+            - lod_enabled (bool): Enable level-of-detail
+            - lod_target_coverage (float): LOD target ratio
+            - enable_hud (bool): Enable statistics HUD
+            - enable_multisample (bool): Enable MSAA
+            See EngineOptions documentation for complete list.
+
+    Returns:
+        None
+
+    Raises:
+        AttributeError: If an invalid option name is provided.
+
+    Examples:
+        Basic option setting:
+
+        >>> gplt.options(density_resolution_scale=0.5)
+
+        Multiple options:
+
+        >>> gplt.options(
+        ...     lod_enabled=True,
+        ...     enable_hud=True,
+        ...     cache_refresh_hz=60
+        ... )
+
+        Performance tuning for large datasets:
+
+        >>> gplt.options(
+        ...     lod_enabled=True,
+        ...     lod_target_coverage=0.25,
+        ...     enable_cache_interaction_path=True
+        ... )
     """
     plot = _get_or_create_plot()
     for k, v in kwargs.items():
@@ -647,10 +757,57 @@ def plot_lines(
 
 
 def plot(*args, **kwargs):
-    """
-    Plot one or more traditional connected polylines.
-    Supports Matplotlib-style forms: plot(y), plot(x, y), plot(x, y, "ro-"),
-    and repeated groups such as plot(x1, y1, "r-", x2, y2, "bo").
+    """Plot one or more connected polylines with optional markers.
+
+    Supports matplotlib-style flexible argument parsing for easy line plotting.
+    Accepts single or multiple datasets with optional format strings controlling
+    color, line style, and marker style. Format strings follow matplotlib
+    conventions: 'r-' for red line, 'bo' for blue circles, 'g--' for green dashes.
+
+    Args:
+        *args: Variable length argument list supporting:
+            - plot(y): Plot y vs auto-generated x indices
+            - plot(x, y): Plot y vs x
+            - plot(x, y, fmt): Plot with format string
+            - plot(x1, y1, fmt1, x2, y2, fmt2, ...): Multiple datasets
+
+    Keyword Arguments:
+        color (str or tuple): RGBA color. Named colors ('red', 'blue'),
+            hex strings, or (r, g, b) / (r, g, b, a) tuples. Defaults to black.
+        linestyle (str, optional): Line style: '-' (solid), '--' (dashes),
+            '-.' (dash-dot), ':' (dots). Defaults to '-'.
+        marker (str, optional): Marker style: 'o' (circle), 's' (square),
+            '^' (triangle), '+' (plus), 'x' (cross), etc. Defaults to None.
+        linewidth, lw (float, optional): Line width in pixels. Defaults to 1.0.
+        markersize, ms (float, optional): Marker size in pixels. Defaults to 6.0.
+        alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
+        label (str, optional): Legend label for this line. Defaults to None.
+
+    Returns:
+        list: Layer objects added to the plot.
+
+    Raises:
+        TypeError: If no data arguments provided.
+        ValueError: If x and y have different lengths.
+
+    Examples:
+        Simple line plot:
+
+        >>> gplt.plot([1, 2, 3, 4], [1, 4, 2, 3])
+        >>> gplt.show()
+
+        Using format string (matplotlib style):
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2], 'r--', label='Data')
+
+        Multiple datasets on same plot:
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2], 'b-', [1, 2, 3], [3, 1, 2], 'r:')
+
+        With custom styling:
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2], color='purple', linewidth=2.5,
+        ...           marker='o', markersize=8, label='Values')
     """
     if not args:
         raise TypeError("plot() missing data")
@@ -672,7 +829,47 @@ def plot(*args, **kwargs):
 
 
 def plot3d(x, y, z, *args, elev: float = 30.0, azim: float = -60.0, scale_z: float = 0.7, **kwargs):
-    """Plot a 3D line using the native 3D geometry shader path."""
+    """Plot a 3D line in 3D space.
+
+    Renders a connected line in 3D using native 3D geometry shader pipeline.
+    Supports format strings and style options similar to plot(). Camera is
+    automatically oriented with specified elevation and azimuth angles.
+
+    Args:
+        x (array-like): X-coordinates. Shape (N,).
+        y (array-like): Y-coordinates. Shape (N,).
+        z (array-like): Z-coordinates. Shape (N,).
+        *args: Format string and optional additional arguments (parsed by
+            _parse_plot_format).
+        elev (float, optional): Camera elevation angle in degrees. Higher
+            values look down from above. Defaults to 30.0.
+        azim (float, optional): Camera azimuth angle in degrees. Rotation
+            around vertical axis. Defaults to -60.0.
+        scale_z (float, optional): Z-axis scale factor (affects aspect ratio).
+            Defaults to 0.7.
+        **kwargs: Additional keyword arguments including:
+            color (str): Line color
+            linewidth, lw (float): Line width
+            label (str): Legend label
+            alpha (float): Transparency
+
+    Returns:
+        list: Layer objects added to plot.
+
+    Examples:
+        Simple 3D line:
+
+        >>> t = np.linspace(0, 2*np.pi, 100)
+        >>> x = np.cos(t)
+        >>> y = np.sin(t)
+        >>> z = t / (2*np.pi)
+        >>> gplt.plot3d(x, y, z, 'b-', linewidth=2)
+        >>> gplt.show()
+
+        With camera control:
+
+        >>> gplt.plot3d(x, y, z, 'r-', elev=45, azim=120, scale_z=1.0)
+    """
     style = _parse_plot_format(args[0] if args and isinstance(args[0], str) else None)
     style.update(kwargs)
     verts = np.column_stack(
@@ -716,8 +913,57 @@ def scatter(
     label: Optional[str] = None,
     marker: Optional[str] = None,
 ):
-    """
-    Scatter plot.
+    """Create a scatter plot with points at given (x, y) coordinates.
+
+    Plots individual points with optional per-point coloring via colormap.
+    Supports both uniform coloring and value-based colormapping for
+    scientific visualization. High-performance rendering optimized for
+    thousands to millions of points.
+
+    Args:
+        x (array-like): X coordinates of points. Shape (N,).
+        y (array-like): Y coordinates of points. Shape (N,).
+        color (str or tuple, optional): Single color for all points. Named
+            colors, hex strings, or (r, g, b) / (r, g, b, a) tuples.
+            Ignored if c is provided. Defaults to black.
+        size (float, optional): Point size in pixels. Defaults to 10.0.
+        c (array-like or str, optional): Per-point colors. If 1D array of
+            length N with numeric values, maps values to colormap. If 2D
+            (N, 4) RGBA array, uses as direct colors. Defaults to None.
+        s (float, optional): Alias for size. Overrides size if provided.
+        cmap (str, optional): Colormap name ('viridis', 'plasma', 'cool',
+            etc.). Used when c is numeric. Defaults to 'viridis'.
+        vmin (float, optional): Minimum value for colormap normalization.
+            If None, uses data minimum. Defaults to None.
+        vmax (float, optional): Maximum value for colormap normalization.
+            If None, uses data maximum. Defaults to None.
+        alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
+        label (str, optional): Legend label. Defaults to None.
+        marker (str, optional): Marker style (stored in metadata but visual
+            rendering uses circles). Defaults to None.
+
+    Returns:
+        Layer: The scatter layer added to plot.
+
+    Raises:
+        ValueError: If x and y have different lengths.
+
+    Examples:
+        Basic scatter plot:
+
+        >>> x = [1, 2, 3, 4, 5]
+        >>> y = [2, 4, 5, 4, 6]
+        >>> gplt.scatter(x, y)
+        >>> gplt.show()
+
+        With colormap based on values:
+
+        >>> values = [10, 20, 15, 30, 25]
+        >>> gplt.scatter(x, y, c=values, cmap='plasma', s=20)
+
+        With custom single color:
+
+        >>> gplt.scatter(x, y, color='red', size=15, alpha=0.7)
     """
     plot_obj = _get_or_create_plot()
     x_arr = _as_float_array(x, ndim=1, name="x")
@@ -770,7 +1016,50 @@ def scatter3d(
     cmap: Optional[str] = None,
     **kwargs,
 ):
-    """Scatter a 3D point cloud using the native 3D geometry shader path."""
+    """Scatter plot in 3D space.
+
+    Renders points at 3D coordinates with optional per-point colormapping.
+    Supports both uniform coloring and value-based color mapping. Native 3D
+    rendering with optimized GPU pipeline for large point clouds.
+
+    Args:
+        x (array-like): X-coordinates. Shape (N,).
+        y (array-like): Y-coordinates. Shape (N,).
+        z (array-like): Z-coordinates. Shape (N,).
+        *args: Format string and additional arguments (for compatibility).
+        elev (float, optional): Camera elevation angle in degrees. Defaults to 30.0.
+        azim (float, optional): Camera azimuth angle in degrees. Defaults to -60.0.
+        scale_z (float, optional): Z-axis scale factor. Defaults to 0.7.
+        c (array-like or str, optional): Per-point colors. If 1D numeric array,
+            maps to colormap. If 2D (N, 4), direct RGBA colors. Defaults to None.
+        cmap (str, optional): Colormap name when c is numeric. Defaults to 'viridis'.
+        **kwargs: Additional keyword arguments including:
+            color (str): Single color for all points
+            s, size (float): Point size
+            label (str): Legend label
+            alpha (float): Transparency
+            vmin, vmax (float): Colormap normalization range
+
+    Returns:
+        Layer: The 3D scatter layer added to plot.
+
+    Examples:
+        Simple 3D scatter:
+
+        >>> x = np.random.randn(1000)
+        >>> y = np.random.randn(1000)
+        >>> z = np.random.randn(1000)
+        >>> gplt.scatter3d(x, y, z, s=5)
+        >>> gplt.show()
+
+        With colormap based on z-values:
+
+        >>> gplt.scatter3d(x, y, z, c=z, cmap='plasma', s=8)
+
+        Custom camera angle:
+
+        >>> gplt.scatter3d(x, y, z, c=z, elev=60, azim=45)
+    """
     x_arr = _as_float_array(x, ndim=1, name="x")
     y_arr = _as_float_array(y, ndim=1, name="y")
     z_arr = _as_float_array(z, ndim=1, name="z")
@@ -812,6 +1101,45 @@ def fill_between(
     alpha: Optional[float] = None,
     label: Optional[str] = None,
 ):
+    """Fill the area between two curves or a curve and baseline.
+
+    Renders a filled region (band) between two y-value curves as a function
+    of x. Useful for uncertainty bands, confidence intervals, or area-fill
+    plots. Can be stacked by calling multiple times with different baselines.
+
+    Args:
+        x (array-like): X-coordinates. Shape (N,).
+        y1 (array-like): Upper boundary y-values. Shape (N,).
+        y2 (float or array-like, optional): Lower boundary y-values.
+            If scalar, applies to all x. If array, per-x values. Defaults to 0.
+        color (str or tuple, optional): Fill color. Defaults to light blue
+            with transparency (0.2, 0.4, 0.8, 0.35).
+        alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
+        label (str, optional): Legend label. Defaults to None.
+
+    Returns:
+        Layer: The filled region patch layer added to plot.
+
+    Examples:
+        Simple area fill:
+
+        >>> x = np.linspace(0, 10, 100)
+        >>> y = np.sin(x)
+        >>> gplt.fill_between(x, y, 0)
+        >>> gplt.show()
+
+        Confidence interval:
+
+        >>> y_mean = np.sin(x)
+        >>> y_lower = y_mean - 0.1
+        >>> y_upper = y_mean + 0.1
+        >>> gplt.fill_between(x, y_upper, y_lower, alpha=0.3)
+
+        Stacked areas:
+
+        >>> gplt.fill_between(x, y1, 0, color='blue', label='A')
+        >>> gplt.fill_between(x, y1 + y2, y1, color='red', label='B')
+    """
     x_arr = _as_float_array(x, ndim=1, name="x")
     y1_arr = _as_float_array(y1, ndim=1, name="y1")
     y2_arr = (
@@ -845,7 +1173,50 @@ def bar(
     color: ColorLike = (0.2, 0.4, 0.8, 1.0),
     alpha: Optional[float] = None,
     label: Optional[str] = None,
-):
+) -> list:
+    """Create a bar chart.
+
+    Draws rectangular bars at specified x positions with given heights.
+    Supports uniform bar width, per-bar baseline offsets for stacked bars,
+    and custom colors. Each bar is rendered as an individual patch for
+    efficient rendering.
+
+    Args:
+        x (array-like): Bar x-positions. Shape (N,).
+        height (array-like): Bar heights. Shape (N,).
+        width (float, optional): Bar width in data coordinates. Defaults to 0.8.
+        bottom (float or array-like, optional): Baseline y position(s) for bars.
+            If scalar, applies to all bars (enables stacked effect when changed
+            between calls). If array, per-bar baselines. Defaults to 0.
+        color (str or tuple, optional): Bar color. Named colors, hex, or RGBA.
+            Defaults to (0.2, 0.4, 0.8, 1.0) (blue).
+        alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
+        label (str, optional): Legend label (only first bar labeled for
+            efficiency). Defaults to None.
+
+    Returns:
+        list: Patch layers (one per bar) added to plot.
+
+    Raises:
+        ValueError: If x, height, and bottom do not have compatible shapes.
+
+    Examples:
+        Simple bar chart:
+
+        >>> categories = [0, 1, 2, 3]
+        >>> values = [10, 24, 36, 18]
+        >>> gplt.bar(categories, values)
+        >>> gplt.show()
+
+        Stacked bars (multiple calls):
+
+        >>> gplt.bar([0, 1, 2], [10, 20, 15], label='First')
+        >>> gplt.bar([0, 1, 2], [5, 10, 8], bottom=[10, 20, 15], label='Second')
+
+        Custom styling:
+
+        >>> gplt.bar([0, 1, 2], [10, 20, 15], width=0.5, color='red', alpha=0.7)
+    """
     x_arr = _as_float_array(x, ndim=1, name="x")
     h_arr = _as_float_array(height, ndim=1, name="height")
     b_arr = (
@@ -888,6 +1259,46 @@ def hist(
     alpha: Optional[float] = None,
     label: Optional[str] = None,
 ):
+    """Create a histogram from data values.
+
+    Computes a histogram by binning data and rendering bars for each bin.
+    Supports both uniform bins (specified by count) and custom bin edges.
+    Can normalize to probability density for comparison of datasets with
+    different sample sizes.
+
+    Args:
+        x (array-like): Data values to histogram. Shape (N,).
+        bins (int or array-like, optional): Bin specification.
+            If int, number of equal-width bins. If array, bin edges
+            (len(bins) - 1 bins created). Defaults to 10.
+        density (bool, optional): If True, normalize histogram so that
+            bar area sums to 1. If False, counts per bin. Defaults to False.
+        color (str or tuple, optional): Bar color. Defaults to blue.
+        alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
+        label (str, optional): Legend label. Defaults to None.
+
+    Returns:
+        tuple: (counts, bin_edges, patches) where:
+            - counts: Histogram counts (or densities) per bin
+            - bin_edges: N+1 bin edge values
+            - patches: Patch layers for rendering
+
+    Examples:
+        Simple histogram:
+
+        >>> data = [1.2, 1.5, 2.1, 2.3, 2.5, 3.1, 3.2, 3.5, 4.0]
+        >>> counts, edges, _ = gplt.hist(data, bins=5)
+        >>> gplt.show()
+
+        With density normalization:
+
+        >>> counts, edges, _ = gplt.hist(data, bins=10, density=True)
+
+        With custom bin edges:
+
+        >>> custom_bins = [0, 1, 2, 3, 4, 5]
+        >>> gplt.hist(data, bins=custom_bins, color='green')
+    """
     values = _as_float_array(x, ndim=1, name="x")
     counts, edges = np.histogram(values, bins=bins, density=density)
     centers = 0.5 * (edges[:-1] + edges[1:])
@@ -907,6 +1318,46 @@ def hist2d(
     s: Optional[float] = None,
     label: Optional[str] = None,
 ):
+    """Create a 2D histogram heatmap of bivariate data.
+
+    Bins 2D scattered data into a regular grid and displays as colored
+    heatmap. Useful for visualizing density distributions and correlations
+    in large datasets where scatter plots would be overplotted.
+
+    Args:
+        x (array-like): X-coordinates of points. Shape (N,).
+        y (array-like): Y-coordinates of points. Shape (N,).
+        bins (int or array-like, optional): Bin specification.
+            If int, creates bins x bins grid. If 2-tuple, (xbins, ybins).
+            If array, bin edges for both axes. Defaults to 100.
+        range (tuple, optional): ((xmin, xmax), (ymin, ymax)) data range
+            for binning. If None, uses data extrema. Defaults to None.
+        density (bool, optional): Normalize by total count. Defaults to False.
+        cmap (str, optional): Colormap name. Defaults to 'magma'.
+        s (float, optional): Point size for display. Auto-computed if None.
+            Defaults to None.
+        label (str, optional): Legend label. Defaults to None.
+
+    Returns:
+        tuple: (counts, xedges, yedges, layer) where:
+            - counts: 2D histogram counts (shape: (nbins_x, nbins_y))
+            - xedges: N+1 x-axis bin edges
+            - yedges: M+1 y-axis bin edges
+            - layer: The scatter layer rendering the heatmap
+
+    Examples:
+        Simple 2D histogram:
+
+        >>> x = np.random.normal(0, 1, 10000)
+        >>> y = np.random.normal(0, 1, 10000)
+        >>> counts, xe, ye, _ = gplt.hist2d(x, y, bins=50)
+        >>> gplt.show()
+
+        With custom range and colormap:
+
+        >>> _, _, _, _ = gplt.hist2d(x, y, bins=40, range=[[-3,3],[-3,3]],
+        ...                           density=True, cmap='hot')
+    """
     x_arr = _as_float_array(x, ndim=1, name="x")
     y_arr = _as_float_array(y, ndim=1, name="y")
     if len(x_arr) != len(y_arr):
@@ -943,6 +1394,52 @@ def imshow(
     label: Optional[str] = None,
     **kwargs,
 ):
+    """Display a 2D array as an image with colormap.
+
+    Renders a 2D matrix as a colored image by mapping values through a
+    colormap and displaying as scattered points. Useful for visualizing
+    heatmaps, scientific data, or general 2D fields.
+
+    Args:
+        X (array-like): 2D data matrix to display. Shape (M, N).
+        cmap (str, optional): Colormap name ('viridis', 'plasma', 'cool',
+            'hot', 'gray', etc.). Defaults to 'viridis'.
+        origin (str, optional): 'upper' places origin at top-left (image coords),
+            'lower' at bottom-left (standard math coords). Defaults to 'upper'.
+        extent (tuple, optional): (left, right, bottom, top) in data coordinates.
+            If None, uses matrix indices as coordinates. Defaults to None.
+        vmin (float, optional): Minimum value for colormap normalization.
+            If None, uses data minimum. Defaults to None.
+        vmax (float, optional): Maximum value for colormap normalization.
+            If None, uses data maximum. Defaults to None.
+        alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
+        label (str, optional): Legend label. Defaults to None.
+        **kwargs: Additional keyword arguments including:
+            s (float): Point size. Auto-computed if not provided.
+
+    Returns:
+        Layer: The image layer added to plot.
+
+    Examples:
+        Display a random matrix:
+
+        >>> import numpy as np
+        >>> data = np.random.rand(50, 50)
+        >>> gplt.imshow(data)
+        >>> gplt.show()
+
+        With custom extent and colormap:
+
+        >>> x = np.linspace(-1, 1, 100)
+        >>> y = np.linspace(-1, 1, 100)
+        >>> X, Y = np.meshgrid(x, y)
+        >>> Z = X**2 + Y**2
+        >>> gplt.imshow(Z, extent=[-1, 1, -1, 1], cmap='hot', origin='lower')
+
+        With normalization:
+
+        >>> gplt.imshow(data, vmin=0.2, vmax=0.8, cmap='plasma')
+    """
     matrix = _as_float_array(X, ndim=2, name="X")
     rows, cols = matrix.shape
     if extent is None:
@@ -995,6 +1492,50 @@ def pcolormesh(
     label: Optional[str] = None,
     **kwargs,
 ):
+    """Display a colored mesh/grid from coordinate and value arrays.
+
+    Creates a colored pseudocolor plot where each grid cell is colored
+    according to values in C (or X if C is None). Supports non-uniform
+    grids and custom extent definitions. Useful for visualizing scattered
+    data on a regular or irregular mesh.
+
+    Args:
+        X (array-like): 2D array of x-coordinates, or values if C=None.
+            Shape (M, N).
+        Y (array-like, optional): 2D array of y-coordinates. Required if C
+            is provided. Shape (M, N). Defaults to None.
+        C (array-like, optional): 2D array of values to color. Shape (M, N).
+            If None, X is used as values. Defaults to None.
+        cmap (str, optional): Colormap name. Defaults to 'viridis'.
+        shading (str, optional): 'auto' or 'flat' (affects interpolation).
+            Defaults to 'auto'.
+        vmin (float, optional): Minimum value for colormap. Defaults to None.
+        vmax (float, optional): Maximum value for colormap. Defaults to None.
+        alpha (float, optional): Transparency. Defaults to 1.0.
+        label (str, optional): Legend label. Defaults to None.
+        **kwargs: Additional arguments including s (point size).
+
+    Returns:
+        Layer: The mesh layer added to plot.
+
+    Raises:
+        ValueError: If X, Y, and C shapes don't match.
+
+    Examples:
+        Simple colored grid:
+
+        >>> C = np.random.rand(20, 20)
+        >>> gplt.pcolormesh(C, cmap='cool')
+        >>> gplt.show()
+
+        With explicit coordinates:
+
+        >>> x = np.linspace(0, 10, 25)
+        >>> y = np.linspace(-5, 5, 25)
+        >>> X, Y = np.meshgrid(x, y)
+        >>> Z = np.sin(X) * np.cos(Y)
+        >>> gplt.pcolormesh(X, Y, Z, cmap='RdBu')
+    """
     if C is None:
         matrix = _as_float_array(X, ndim=2, name="C")
         yy, xx = np.indices(matrix.shape, dtype=np.float32)
@@ -1040,6 +1581,46 @@ def contour(
     label: Optional[str] = None,
     **kwargs,
 ):
+    """Draw contour lines for a 2D field.
+
+    Renders contour lines (level curves) of a 2D scalar field. Useful for
+    visualizing 2D functions, topography, or field data. Supports both
+    regular and irregular meshes with custom level specifications.
+
+    Args:
+        X (array-like): 2D x-coordinates array, or values if Z=None.
+            Shape (M, N).
+        Y (array-like, optional): 2D y-coordinates. Required if Z provided.
+            Shape (M, N). Defaults to None.
+        Z (array-like, optional): 2D values for contours. Required if X and Y
+            provided separately. Shape (M, N). Defaults to None.
+        levels (int or array-like, optional): Number of contour levels or
+            explicit level values. Defaults to 10.
+        colors (str or tuple, optional): Color specification (currently
+            stored in metadata). Defaults to None.
+        cmap (str, optional): Colormap for level colors. Defaults to 'viridis'.
+        linewidths (float, optional): Width of contour lines. Defaults to 1.0.
+        label (str, optional): Legend label. Defaults to None.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        Layer: The contour layer added to plot.
+
+    Examples:
+        Simple contour plot:
+
+        >>> Z = np.random.rand(30, 30)
+        >>> gplt.contour(Z, levels=10)
+        >>> gplt.show()
+
+        With custom mesh and levels:
+
+        >>> x = np.linspace(-3, 3, 50)
+        >>> y = np.linspace(-3, 3, 50)
+        >>> X, Y = np.meshgrid(x, y)
+        >>> Z = np.exp(-(X**2 + Y**2))
+        >>> gplt.contour(X, Y, Z, levels=[0.1, 0.3, 0.5, 0.7, 0.9])
+    """
     if Z is None:
         matrix = _as_float_array(X, ndim=2, name="Z")
         yy, xx = np.indices(matrix.shape, dtype=np.float32)
@@ -1075,6 +1656,44 @@ def contourf(
     label: Optional[str] = None,
     **kwargs,
 ):
+    """Draw filled contours for a 2D field.
+
+    Renders filled contour regions (colored bands between level curves) of
+    a 2D scalar field. Similar to imshow() but computed from explicit mesh
+    coordinates. Useful for publication-quality visualizations of field data.
+
+    Args:
+        X (array-like): 2D x-coordinates array, or values if Z=None.
+            Shape (M, N).
+        Y (array-like, optional): 2D y-coordinates. Required if Z provided.
+            Shape (M, N). Defaults to None.
+        Z (array-like, optional): 2D values for contours. Required if X and Y
+            provided separately. Shape (M, N). Defaults to None.
+        levels (int or array-like, optional): Number of contour levels or
+            explicit level values. Defaults to 10.
+        cmap (str, optional): Colormap for level colors. Defaults to 'viridis'.
+        alpha (float, optional): Transparency. Defaults to 1.0.
+        label (str, optional): Legend label. Defaults to None.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        Layer: The filled contour layer added to plot.
+
+    Examples:
+        Simple filled contour:
+
+        >>> Z = np.random.rand(30, 30)
+        >>> gplt.contourf(Z, levels=10, cmap='viridis')
+        >>> gplt.show()
+
+        With function values:
+
+        >>> x = np.linspace(-2, 2, 40)
+        >>> y = np.linspace(-2, 2, 40)
+        >>> X, Y = np.meshgrid(x, y)
+        >>> Z = X**2 - Y**2
+        >>> gplt.contourf(X, Y, Z, levels=15, cmap='RdBu', alpha=0.8)
+    """
     if Z is None:
         matrix = _as_float_array(X, ndim=2, name="Z")
         yy, xx = np.indices(matrix.shape, dtype=np.float32)
@@ -1113,6 +1732,54 @@ def plot_surface(
     label: Optional[str] = None,
     **kwargs,
 ):
+    """Plot a 3D surface mesh.
+
+    Renders a triangulated surface from 2D grid of (X, Y) coordinates and
+    corresponding Z values. Surface is colored by Z-value through colormap.
+    Stride parameters allow downsampling large meshes for performance.
+
+    Args:
+        X (array-like): 2D array of x-coordinates. Shape (M, N).
+        Y (array-like): 2D array of y-coordinates. Shape (M, N).
+        Z (array-like): 2D array of z-coordinates (heights). Shape (M, N).
+        cmap (str, optional): Colormap for Z-value coloring. Defaults to 'viridis'.
+        elev (float, optional): Camera elevation angle in degrees. Defaults to 30.0.
+        azim (float, optional): Camera azimuth angle in degrees. Defaults to -60.0.
+        scale_z (float, optional): Z-axis scale factor for aspect ratio.
+            Defaults to 0.7.
+        rstride (int, optional): Row stride (mesh decimation along rows).
+            Defaults to 1 (no decimation).
+        cstride (int, optional): Column stride (mesh decimation along columns).
+            Defaults to 1 (no decimation).
+        alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
+        label (str, optional): Legend label. Defaults to None.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        Layer: The 3D mesh layer added to plot.
+
+    Raises:
+        ValueError: If X, Y, and Z have different shapes.
+
+    Examples:
+        Plot a simple surface:
+
+        >>> x = np.linspace(-5, 5, 50)
+        >>> y = np.linspace(-5, 5, 50)
+        >>> X, Y = np.meshgrid(x, y)
+        >>> Z = np.sin(np.sqrt(X**2 + Y**2))
+        >>> gplt.plot_surface(X, Y, Z)
+        >>> gplt.show()
+
+        With downsampling for performance:
+
+        >>> gplt.plot_surface(X, Y, Z, rstride=2, cstride=2, cmap='cool')
+
+        Custom colors and camera:
+
+        >>> gplt.plot_surface(X, Y, Z, cmap='hot', elev=45, azim=120,
+        ...                   scale_z=1.0, alpha=0.9)
+    """
     xx = _as_float_array(X, name="X")
     yy = _as_float_array(Y, name="Y")
     zz = _as_float_array(Z, name="Z")
@@ -1444,6 +2111,65 @@ def bar3d(
     ssao_strength: Optional[float] = None,
     **kwargs,
 ):
+    """Create a 3D bar chart.
+
+    Renders rectangular bars or hexagonal prisms at 3D positions with
+    specified dimensions. Supports per-bar colormapping and customizable
+    gaps between bars. Each bar is rendered as a textured 3D mesh.
+
+    Args:
+        x (array-like): Bar x-positions. Shape (N,).
+        y (array-like): Bar y-positions. Shape (N,).
+        z (array-like): Bar z-positions (baseline heights). Shape (N,).
+        dx (array-like or float): Bar width along x-axis.
+        dy (array-like or float): Bar width along y-axis.
+        dz (array-like or float): Bar height along z-axis.
+        color (str or tuple, optional): Single color for all bars. Ignored if c
+            provided. Defaults to 'tab:blue'.
+        alpha (float, optional): Transparency. Defaults to 1.0.
+        elev (float, optional): Camera elevation angle. Defaults to 30.0.
+        azim (float, optional): Camera azimuth angle. Defaults to -60.0.
+        scale_z (float, optional): Z-axis scale factor. Defaults to 0.7.
+        label (str, optional): Legend label. Defaults to None.
+        shape (str, optional): Bar shape: 'box' (rectangular) or 'hex'
+            (hexagonal prism). Defaults to 'box'.
+        c (array-like or str, optional): Per-bar colors. If 1D numeric,
+            maps to colormap. Defaults to None.
+        cmap (str, optional): Colormap name. Defaults to 'viridis'.
+        vmin, vmax (float, optional): Colormap normalization. Defaults to None.
+        gap (float, optional): Gap between bars (0.0-0.95). Defaults to 0.0.
+        edge_color (str or tuple, optional): Edge color for wireframe.
+            Defaults to black.
+        edge_width (float, optional): Edge line width. Defaults to 0.8.
+        ssao (bool, optional): Enable screen-space ambient occlusion.
+            Defaults to None (use plot setting).
+        ssao_strength (float, optional): SSAO strength (0-1). Defaults to 0.45.
+
+    Returns:
+        list: Bar and edge layer objects added to plot.
+
+    Examples:
+        Simple 3D bars:
+
+        >>> x = [0, 1, 2]
+        >>> y = [0, 0, 0]
+        >>> z = [0, 0, 0]
+        >>> dx = dy = [0.8, 0.8, 0.8]
+        >>> dz = [1, 2, 1.5]
+        >>> gplt.bar3d(x, y, z, dx, dy, dz)
+        >>> gplt.show()
+
+        With colormap and gaps:
+
+        >>> colors = [10, 20, 15]
+        >>> gplt.bar3d(x, y, z, 0.7, 0.7, dz, c=colors, cmap='hot',
+        ...             gap=0.2, shape='box')
+
+        Hexagonal bars:
+
+        >>> gplt.bar3d(x, y, z, 0.7, 0.7, dz, shape='hex', gap=0.1,
+        ...             edge_color='white', edge_width=1.5)
+    """
     x_arr = _as_float_array(x, name="x").ravel()
     y_arr = _as_float_array(y, name="y").ravel()
     z_arr = _as_float_array(z, name="z").ravel()
@@ -1571,7 +2297,56 @@ def quiver(
     head_length: float = 0.12,
     label: Optional[str] = None,
     **kwargs,
-):
+) -> list:
+    """Create a 2D vector field plot.
+
+    Renders arrows representing 2D vector field (u, v) at each point (x, y).
+    Arrows are batched for efficient rendering of large vector fields.
+    Useful for visualizing flow fields, gradients, or force vectors.
+
+    Args:
+        x (array-like): X-positions of vectors. Shape (N,).
+        y (array-like): Y-positions of vectors. Shape (N,).
+        u (array-like): X-components of vectors. Shape (N,).
+        v (array-like): Y-components of vectors. Shape (N,).
+        color (str or tuple, optional): Arrow color. Named color or RGBA.
+            Defaults to black.
+        scale (float, optional): Scaling factor for arrow magnitudes.
+            Larger values make arrows longer. Defaults to 1.0.
+        width (float, optional): Arrow shaft line width in pixels. Defaults to 1.0.
+        head_width (float, optional): Arrowhead width relative to shaft.
+            Defaults to 0.08.
+        head_length (float, optional): Arrowhead length relative to shaft.
+            Defaults to 0.12.
+        label (str, optional): Legend label. Defaults to None.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        list: Arrow layers (shaft and head) added to plot.
+
+    Examples:
+        Simple vector field:
+
+        >>> x = np.linspace(-1, 1, 10)
+        >>> y = np.linspace(-1, 1, 10)
+        >>> X, Y = np.meshgrid(x, y)
+        >>> U = -Y  # rotational field
+        >>> V = X
+        >>> gplt.quiver(X.ravel(), Y.ravel(), U.ravel(), V.ravel())
+        >>> gplt.show()
+
+        With scaling:
+
+        >>> gplt.quiver(X.ravel(), Y.ravel(), U.ravel(), V.ravel(),
+        ...             scale=2.0, width=1.5, color='red')
+
+        Gradient field:
+
+        >>> U = 2*X
+        >>> V = 2*Y
+        >>> gplt.quiver(X.ravel(), Y.ravel(), U.ravel(), V.ravel(),
+        ...             head_width=0.1, head_length=0.15)
+    """
     x_arr = _as_float_array(x, name="x").ravel()
     y_arr = _as_float_array(y, name="y").ravel()
     u_arr = _as_float_array(u, name="u").ravel()
@@ -1657,7 +2432,62 @@ def quiver3d(
     azim: float = -60.0,
     label: Optional[str] = None,
     **kwargs,
-):
+) -> list:
+    """Create a 3D vector field plot.
+
+    Renders arrows in 3D space representing vector field (u, v, w) at each
+    point (x, y, z). Supports normalization of vector magnitudes for cleaner
+    visualization. Useful for visualizing 3D flow fields and force vectors.
+
+    Args:
+        x (array-like): X-positions of vectors. Shape (N,).
+        y (array-like): Y-positions of vectors. Shape (N,).
+        z (array-like): Z-positions of vectors. Shape (N,).
+        u (array-like): X-components of vectors. Shape (N,).
+        v (array-like): Y-components of vectors. Shape (N,).
+        w (array-like): Z-components of vectors. Shape (N,).
+        color (str or tuple, optional): Arrow color. Defaults to 'C0'.
+        scale (float, optional): Scaling factor for arrow magnitudes.
+            Defaults to 1.0.
+        linewidth (float, optional): Arrow shaft line width. Defaults to 0.8.
+        head_length (float, optional): Arrowhead length relative to shaft.
+            Defaults to 0.18.
+        head_width (float, optional): Arrowhead width relative to shaft.
+            Defaults to 0.09.
+        normalize (bool, optional): If True, normalize all vectors to unit
+            magnitude (shows direction only). Defaults to False.
+        elev (float, optional): Camera elevation angle. Defaults to 30.0.
+        azim (float, optional): Camera azimuth angle. Defaults to -60.0.
+        label (str, optional): Legend label. Defaults to None.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        list: Arrow layer added to plot.
+
+    Examples:
+        Simple 3D vector field:
+
+        >>> x = y = z = np.linspace(-1, 1, 5)
+        >>> X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+        >>> U = -Y
+        >>> V = X
+        >>> W = np.zeros_like(X)
+        >>> gplt.quiver3d(X.ravel(), Y.ravel(), Z.ravel(),
+        ...               U.ravel(), V.ravel(), W.ravel())
+        >>> gplt.show()
+
+        With normalization (direction only):
+
+        >>> gplt.quiver3d(X.ravel(), Y.ravel(), Z.ravel(),
+        ...               U.ravel(), V.ravel(), W.ravel(),
+        ...               normalize=True, scale=0.5)
+
+        Gradient field with custom camera:
+
+        >>> gplt.quiver3d(X.ravel(), Y.ravel(), Z.ravel(),
+        ...               U.ravel(), V.ravel(), W.ravel(),
+        ...               elev=60, azim=120, color='red')
+    """
     x_arr = _as_float_array(x, name="x").ravel()
     y_arr = _as_float_array(y, name="y").ravel()
     z_arr = _as_float_array(z, name="z").ravel()
@@ -1994,8 +2824,35 @@ def text(
     color: ColorLike = (0.0, 0.0, 0.0, 1.0),
     label: Optional[str] = None,
 ):
-    """
-    Add text annotation.
+    """Add a text string at specified plot coordinates.
+
+    Renders text at data coordinates (x, y). Useful for annotations,
+    labels, or callouts on the plot. Note that rendering quality and
+    styling depends on backend capabilities.
+
+    Args:
+        x (float): X-coordinate for text placement.
+        y (float): Y-coordinate for text placement.
+        s (str): Text string to display. Can include newlines.
+        fontsize (int, optional): Font size in points. Defaults to 12.
+        color (str or tuple, optional): Text color as RGBA or named color.
+            Defaults to black.
+        label (str, optional): Legend label (optional). Defaults to None.
+
+    Returns:
+        GPULinePlot: The plot object.
+
+    Examples:
+        Add text annotation:
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2])
+        >>> gplt.text(2, 4, "Peak", fontsize=14, color='red')
+        >>> gplt.show()
+
+        Multiple annotations:
+
+        >>> gplt.text(1, 1, "Start", color='blue', fontsize=10)
+        >>> gplt.text(3, 2, "End", color='green', fontsize=10)
     """
     plot_obj = _get_or_create_plot()
 
@@ -2013,9 +2870,50 @@ def add_patch(
     face_color: Optional[ColorLike] = None,
     edge_color: Optional[ColorLike] = None,
     label: Optional[str] = None,
-):
-    """
-    Add a geometric patch (polygon, strip, etc.) to the plot.
+) -> GPULinePlot:
+    """Add a geometric patch (filled shape) to the plot.
+
+    Renders an arbitrary geometric patch defined by vertices and optional
+    indices. Supports multiple drawing modes for different geometry types:
+    triangle strips, triangle lists, or line primitives. Useful for custom
+    shapes not covered by standard plotting functions.
+
+    Args:
+        vertices (array-like): 2D array of vertex coordinates. Shape (N, 2).
+        indices (array-like, optional): Triangle or line indices. Shape (M,).
+            If None with mode='strip', vertices form a continuous strip.
+            For mode='triangles', indices must be provided and form triangles
+            (triples of indices). Defaults to None.
+        mode (str, optional): Drawing mode:
+            - 'strip': Triangle strip from consecutive vertices
+            - 'triangles': Indexed triangles
+            - 'lines': Line segments (edges)
+            Defaults to 'strip'.
+        face_color (str or tuple, optional): Fill color as RGBA or named color.
+            Defaults to None (no fill).
+        edge_color (str or tuple, optional): Edge/outline color. Defaults to None.
+        label (str, optional): Legend label. Defaults to None.
+
+    Returns:
+        GPULinePlot: The plot object.
+
+    Examples:
+        Triangle from vertices:
+
+        >>> verts = [[0, 0], [1, 0], [0.5, 1]]
+        >>> gplt.add_patch(verts, mode='triangles', face_color='blue')
+
+        Triangle strip:
+
+        >>> verts = [[0, 0], [1, 0], [0, 1], [1, 1]]
+        >>> gplt.add_patch(verts, mode='strip', face_color='red', alpha=0.5)
+
+        Custom indexed shape:
+
+        >>> verts = [[0, 0], [1, 0], [1, 1], [0, 1]]
+        >>> idx = [0, 1, 2, 0, 2, 3]  # Two triangles forming a quad
+        >>> gplt.add_patch(verts, indices=idx, mode='triangles',
+        ...                face_color='green', edge_color='black')
     """
     plot_obj = _get_or_create_plot()
 
@@ -2041,23 +2939,83 @@ def add_patch(
 
 
 def title(s: str) -> None:
+    """Set the figure title.
+
+    Sets the main title displayed at the top of the plot window.
+
+    Args:
+        s (str): Title text. Can include special characters and unicode.
+
+    Returns:
+        None
+
+    Examples:
+        >>> gplt.plot([1, 2, 3], [1, 4, 2])
+        >>> gplt.title('My Plot Data')
+        >>> gplt.show()
+    """
     plot = _get_or_create_plot()
     _set_title(plot, s)
 
 
 def xlabel(s: str) -> None:
+    """Set the x-axis label.
+
+    Sets the label text displayed below the x-axis.
+
+    Args:
+        s (str): Label text for the x-axis.
+
+    Returns:
+        None
+
+    Examples:
+        >>> gplt.plot(time, values)
+        >>> gplt.xlabel('Time (seconds)')
+        >>> gplt.show()
+    """
     plot = _get_or_create_plot()
     plot.xlabel = str(s)
     _set_dirty(plot)
 
 
 def ylabel(s: str) -> None:
+    """Set the y-axis label.
+
+    Sets the label text displayed to the left of the y-axis.
+
+    Args:
+        s (str): Label text for the y-axis.
+
+    Returns:
+        None
+
+    Examples:
+        >>> gplt.plot(time, values)
+        >>> gplt.ylabel('Amplitude')
+        >>> gplt.show()
+    """
     plot = _get_or_create_plot()
     plot.ylabel = str(s)
     _set_dirty(plot)
 
 
 def zlabel(s: str) -> None:
+    """Set the z-axis label for 3D plots.
+
+    Sets the label text displayed along the z-axis in 3D visualizations.
+
+    Args:
+        s (str): Label text for the z-axis.
+
+    Returns:
+        None
+
+    Examples:
+        >>> gplt.scatter3d(x, y, z)
+        >>> gplt.zlabel('Height (meters)')
+        >>> gplt.show()
+    """
     plot = _get_or_create_plot()
     plot.zlabel = str(s)
     _set_dirty(plot)
@@ -2073,6 +3031,29 @@ def ssao(enabled: bool = True, strength: float = 0.45, radius: float = 1.0) -> N
 
 
 def grid(visible: bool = True, **kwargs) -> None:
+    """Show or hide the background grid.
+
+    Toggles the visibility of the grid lines in the background of the plot.
+
+    Args:
+        visible (bool, optional): If True, show grid. If False, hide grid.
+            Defaults to True.
+        **kwargs: Additional keyword arguments (reserved for future use).
+
+    Returns:
+        None
+
+    Examples:
+        Show grid:
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2])
+        >>> gplt.grid(True)
+        >>> gplt.show()
+
+        Hide grid:
+
+        >>> gplt.grid(False)
+    """
     plot = _get_or_create_plot()
     plot.grid_visible = bool(visible)
     if hasattr(plot.options, "show_grid"):
@@ -2081,6 +3062,35 @@ def grid(visible: bool = True, **kwargs) -> None:
 
 
 def legend(*args, max_items: Optional[int] = None, **kwargs):
+    """Display a legend showing labeled layers.
+
+    Automatically creates legend from labeled plot objects. Deduplicates
+    repeated labels and can limit the number of displayed items to avoid
+    clutter on dense plots.
+
+    Args:
+        *args: Reserved for future compatibility (ignored).
+        max_items (int, optional): Maximum number of legend items to show.
+            If there are more unique labels than this, shows top N and adds
+            a "+N more" entry. Defaults to None (show all).
+        **kwargs: Reserved for future keyword arguments.
+
+    Returns:
+        list: List of legend labels displayed.
+
+    Examples:
+        Simple legend:
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2], label='Data 1')
+        >>> gplt.plot([1, 2, 3], [2, 2, 3], label='Data 2')
+        >>> labels = gplt.legend()
+        >>> gplt.show()
+
+        With max items limit:
+
+        >>> # Plot many datasets...
+        >>> labels = gplt.legend(max_items=5)  # Show top 5 + "+N more"
+    """
     plot = _get_or_create_plot()
     labels = []
     seen = set()
@@ -2101,8 +3111,35 @@ def legend(*args, max_items: Optional[int] = None, **kwargs):
 def xlim(
     left: Optional[float] = None, right: Optional[float] = None
 ) -> Optional[Tuple[float, float]]:
-    """
-    Get or set the x-limits of the current axes.
+    """Get or set the x-axis limits.
+
+    Query the current x-axis range or set new limits. If called without
+    arguments, returns current limits. If called with arguments, sets new
+    limits and returns the tuple of limits set.
+
+    Args:
+        left (float, optional): Minimum x-value (left edge). Defaults to None.
+        right (float, optional): Maximum x-value (right edge). Defaults to None.
+
+    Returns:
+        tuple: Current or newly set (left, right) x-axis limits. Returns None
+            if called without arguments (getter mode in future).
+
+    Raises:
+        ValueError: If right <= left.
+
+    Examples:
+        Get current limits:
+
+        >>> xleft, xright = gplt.xlim()
+
+        Set limits:
+
+        >>> gplt.xlim(0, 100)
+
+        Using tuple:
+
+        >>> gplt.xlim((0, 100))
     """
     plot = _get_or_create_plot()
     if left is None and right is None:
@@ -2120,8 +3157,35 @@ def xlim(
 def ylim(
     bottom: Optional[float] = None, top: Optional[float] = None
 ) -> Optional[Tuple[float, float]]:
-    """
-    Get or set the y-limits of the current axes.
+    """Get or set the y-axis limits.
+
+    Query the current y-axis range or set new limits. If called without
+    arguments, returns current limits. If called with arguments, sets new
+    limits and returns the tuple of limits set.
+
+    Args:
+        bottom (float, optional): Minimum y-value (bottom edge). Defaults to None.
+        top (float, optional): Maximum y-value (top edge). Defaults to None.
+
+    Returns:
+        tuple: Current or newly set (bottom, top) y-axis limits. Returns None
+            if called without arguments (getter mode in future).
+
+    Raises:
+        ValueError: If top <= bottom.
+
+    Examples:
+        Get current limits:
+
+        >>> ybottom, ytop = gplt.ylim()
+
+        Set limits:
+
+        >>> gplt.ylim(-10, 10)
+
+        Using tuple:
+
+        >>> gplt.ylim((-10, 10))
     """
     plot = _get_or_create_plot()
     if bottom is None and top is None:
@@ -2139,12 +3203,46 @@ def ylim(
 def axis(
     mode: Union[str, Tuple[float, float, float, float]] = "auto",
 ) -> Optional[Tuple[float, float, float, float]]:
-    """
-    Supported:
-        axis("auto")
-        axis("tight")
-        axis("reset")
-        axis((xmin, xmax, ymin, ymax))
+    """Control or query the axis limits and scaling.
+
+    Get or set the axis extent and scaling mode. Supports preset modes
+    ('auto', 'tight', 'reset') and explicit limit specification via tuple.
+    Provides matplotlib-compatible interface for axis manipulation.
+
+    Args:
+        mode (str or tuple, optional): Axis mode or limits. Can be:
+            - 'auto': Auto-scale to fit all data (default)
+            - 'tight': Auto-scale tightly to data without padding
+            - 'reset': Reset to default view (-1, 1) on both axes
+            - tuple (xmin, xmax, ymin, ymax): Explicit axis limits
+            Defaults to 'auto'.
+
+    Returns:
+        tuple or None: When called with mode (setter), returns limits or None.
+            When called with no arguments, returns current limits (to be
+            implemented in future).
+
+    Raises:
+        ValueError: If mode is unsupported or limits are invalid
+            (xmax <= xmin or ymax <= ymin).
+
+    Examples:
+        Auto-scale to data:
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2])
+        >>> gplt.axis('auto')
+
+        Tight fit to data (no padding):
+
+        >>> gplt.axis('tight')
+
+        Reset to default view:
+
+        >>> gplt.axis('reset')
+
+        Set explicit limits:
+
+        >>> gplt.axis((0, 10, -5, 5))  # xmin, xmax, ymin, ymax
     """
     plot = _get_or_create_plot()
 
@@ -2172,8 +3270,37 @@ def axis(
 
 
 def autoscale(enable: bool = True, axis: str = "both", tight: Optional[bool] = None) -> None:
-    """
-    Autoscale the view to fit data.
+    """Auto-scale the view to fit the plotted data.
+
+    Adjusts axis limits to show all plotted data. Can auto-scale both axes,
+    or independently control x and y. Supports tight fitting (no padding)
+    or regular fitting (with padding).
+
+    Args:
+        enable (bool, optional): If True, perform autoscaling. If False,
+            disable. Defaults to True.
+        axis (str, optional): Which axes to scale: 'x', 'y', or 'both'.
+            Defaults to 'both'.
+        tight (bool, optional): If True, fit tightly to data without padding.
+            If False or None, add padding. Defaults to None (add padding).
+
+    Returns:
+        None
+
+    Examples:
+        Auto-scale to fit all data:
+
+        >>> gplt.plot([1, 100], [1, 1000])
+        >>> gplt.autoscale()
+        >>> gplt.show()
+
+        Tight fit without padding:
+
+        >>> gplt.autoscale(tight=True)
+
+        Only auto-scale y-axis:
+
+        >>> gplt.autoscale(axis='y')
     """
     plot = _get_or_create_plot()
 
@@ -2291,6 +3418,43 @@ def export(filename: Optional[str] = None, scale: float = 2.0):
 
 
 def savefig(filename: str, density: Optional[bool] = None, scale: float = 2.0):
+    """Save the current figure to a PNG file.
+
+    Exports the current plot to a PNG image at the specified filename.
+    Supports high-DPI rendering via the scale parameter. Can optionally
+    override density mode for the export. Automatically falls back to
+    matplotlib-based preview rendering if no GL window is available.
+
+    Args:
+        filename (str): Output file path. Should end in '.png'. Directory
+            must exist.
+        density (bool, optional): Override density visualization for export.
+            Defaults to None (use current setting).
+        scale (float, optional): Render scale multiplier for high-DPI export.
+            2.0 renders at 2x resolution before downsampling. Defaults to 2.0.
+
+    Returns:
+        None
+
+    Raises:
+        IOError: If file cannot be written or directory doesn't exist.
+
+    Examples:
+        Save current plot:
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2])
+        >>> gplt.savefig('plot.png')
+
+        High-resolution export:
+
+        >>> gplt.scatter(x, y)
+        >>> gplt.savefig('scatter_hires.png', scale=4.0)
+
+        With density mode:
+
+        >>> gplt.imshow(data)
+        >>> gplt.savefig('heatmap.png', density=True)
+    """
     plot = _get_or_create_plot()
 
     if density is not None:
@@ -2318,6 +3482,38 @@ def show(
     *,
     test_mode: bool = False,
 ) -> None:
+    """Display the current figure in an interactive window.
+
+    Opens a native window running the interactive plot engine with OpenGL
+    rendering. Blocks until the user closes the window. Can optionally
+    override density mode and enable test mode for automated testing.
+
+    Args:
+        density (bool, optional): Override density visualization setting.
+            If True, enables density mode for 2D layers. Defaults to None
+            (use figure setting).
+        test_mode (bool, optional): Enable test mode for automated scripting.
+            Disables certain interactive features. Defaults to False.
+
+    Returns:
+        None
+
+    Examples:
+        Display current figure:
+
+        >>> gplt.plot([1, 2, 3], [1, 4, 2])
+        >>> gplt.show()  # Blocks until window closed
+
+        With density visualization:
+
+        >>> gplt.imshow(data)
+        >>> gplt.show(density=True)
+
+        Test mode for automation:
+
+        >>> gplt.plot(x, y)
+        >>> gplt.show(test_mode=True)  # Headless mode
+    """
     plot = _get_or_create_plot()
 
     if density is not None:

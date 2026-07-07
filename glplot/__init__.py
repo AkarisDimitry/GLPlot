@@ -26,7 +26,7 @@ Repository: https://github.com/AkarisDimitry/GLPlot
 from .engine import GPULinePlot
 from .options import BlendMode, EngineOptions, RenderMode
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 __author__ = "Juan Manuel Lombardi"
 __license__ = "MIT"
 

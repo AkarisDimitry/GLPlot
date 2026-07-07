@@ -26,9 +26,9 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 - [x] **Open-source license** (MIT - OSI-approved)
 - [x] **Copyright and authorship** (LICENSE file, CITATION.cff, pyproject.toml)
 - [x] **Contribution history** (git log shows development progression)
-- [x] **Dependencies documented** (pyproject.toml with all dependencies)
+- [x] **Dependencies documented** (pyproject.toml with minimum supported versions)
 - [x] **No proprietary dependencies** (all dependencies are open-source)
-- [x] **Release archived** (tagged releases, ready for Zenodo submission)
+- [x] **Release history documented** (CHANGELOG.md with versioned entries)
 
 ## ✅ Advanced Requirements
 
@@ -44,7 +44,7 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 - [x] **Contributor guidelines** (CONTRIBUTING.md)
 - [x] **Issue reporting guidelines** (CONTRIBUTING.md)
 - [x] **Code of conduct** (CODE_OF_CONDUCT.md)
-- [x] **Versioned release** (version 0.1.2 in pyproject.toml)
+- [x] **Versioned release** (version 0.1.3 in pyproject.toml, glplot.__version__, CITATION.cff, and CHANGELOG.md)
 - [x] **CITATION.cff** (provided for academic citations)
 - [x] **paper.md** (academic journal submission format)
 
@@ -76,6 +76,7 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 - **CITATION.cff**: Citation metadata for academic use
 - **CODE_OF_CONDUCT.md**: Community conduct guidelines
 - **CONTRIBUTING.md**: Contribution procedures and guidelines
+- **CHANGELOG.md**: Versioned release history
 - **paper.md**: Academic paper for SoftwareX submission
 - **LICENSE**: MIT License text
 - **pyproject.toml**: Project metadata and dependencies
@@ -99,5 +100,5 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 
 ---
 
-**Last Updated**: July 6, 2026  
+**Last Updated**: July 7, 2026
 **Status**: Ready for Publication
