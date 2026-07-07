@@ -305,9 +305,7 @@ class TestEngineOptions:
 
     def test_interaction_parameters(self):
         """Test interaction parameters."""
-        opts = EngineOptions(
-            drag_threshold_px=5.0, hover_pick_hz=1.0, zoom_scroll_factor=1.15
-        )
+        opts = EngineOptions(drag_threshold_px=5.0, hover_pick_hz=1.0, zoom_scroll_factor=1.15)
         assert opts.drag_threshold_px == 5.0
         assert opts.hover_pick_hz == 1.0
         assert opts.zoom_scroll_factor == 1.15
@@ -359,9 +357,7 @@ class TestEngineOptions:
 
     def test_grid_and_axis_parameters(self):
         """Test grid and axis visibility parameters."""
-        opts = EngineOptions(
-            axis_show_grid=False, axis_show_labels=False, axis_show_frame=False
-        )
+        opts = EngineOptions(axis_show_grid=False, axis_show_labels=False, axis_show_frame=False)
         assert opts.axis_show_grid is False
         assert opts.axis_show_labels is False
         assert opts.axis_show_frame is False

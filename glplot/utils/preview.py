@@ -23,9 +23,7 @@ def _rgba(
     return default
 
 
-def _apply_preview_ssao(
-    colors: np.ndarray, z_values: np.ndarray, strength: float
-) -> np.ndarray:
+def _apply_preview_ssao(colors: np.ndarray, z_values: np.ndarray, strength: float) -> np.ndarray:
     cols = np.asarray(colors, dtype=float).copy()
     if cols.ndim == 1:
         cols = np.tile(cols, (len(z_values), 1))

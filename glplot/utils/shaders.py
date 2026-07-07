@@ -240,7 +240,9 @@ void main() {
 """
 
 
-def mix(c1: Tuple[float, float, float], c2: Tuple[float, float, float], x: float) -> Tuple[float, float, float]:
+def mix(
+    c1: Tuple[float, float, float], c2: Tuple[float, float, float], x: float
+) -> Tuple[float, float, float]:
     return (
         c1[0] * (1.0 - x) + c2[0] * x,
         c1[1] * (1.0 - x) + c2[1] * x,

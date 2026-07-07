@@ -67,13 +67,13 @@ class TestScatterRendererInitialization:
 
     def test_renderer_has_required_attributes(self, scatter_renderer):
         """Test that renderer has all required attributes."""
-        assert hasattr(scatter_renderer, 'prog')
-        assert hasattr(scatter_renderer, 'accum_prog')
-        assert hasattr(scatter_renderer, 'image_prog')
-        assert hasattr(scatter_renderer, 'options')
-        assert hasattr(scatter_renderer, 'u_mvp')
-        assert hasattr(scatter_renderer, 'u_size')
-        assert hasattr(scatter_renderer, 'u_alpha')
+        assert hasattr(scatter_renderer, "prog")
+        assert hasattr(scatter_renderer, "accum_prog")
+        assert hasattr(scatter_renderer, "image_prog")
+        assert hasattr(scatter_renderer, "options")
+        assert hasattr(scatter_renderer, "u_mvp")
+        assert hasattr(scatter_renderer, "u_size")
+        assert hasattr(scatter_renderer, "u_alpha")
 
 
 class TestScatterRendererBufferManagement:
@@ -87,7 +87,7 @@ class TestScatterRendererBufferManagement:
 
         # This tests the color broadcasting logic
         assert layer.colors.shape == (4,)  # Single color
-        assert layer.pts.shape == (2, 2)   # Two points
+        assert layer.pts.shape == (2, 2)  # Two points
 
     def test_update_gpu_data_with_per_point_colors(self, scatter_renderer, simple_scatter_layer):
         """Test that per-point colors are handled correctly."""
@@ -129,9 +129,7 @@ class TestScatterRendererEdgeCases:
 
     def test_points_with_nan_values(self, scatter_renderer):
         """Test handling of NaN values in points."""
-        pts = np.array(
-            [[0.0, 0.0], [np.nan, np.nan], [2.0, 2.0]], dtype=np.float32
-        )
+        pts = np.array([[0.0, 0.0], [np.nan, np.nan], [2.0, 2.0]], dtype=np.float32)
         colors = np.ones((3, 4), dtype=np.float32)
         layer = ScatterLayer(pts=pts, colors=colors)
 
@@ -179,7 +177,7 @@ class TestScatterRendererIntegration:
         y = np.array([0, 1, 0], dtype=np.float32)
         c = np.array([0.0, 0.5, 1.0], dtype=np.float32)
 
-        gplt.scatter(x, y, c=c, cmap='viridis')
+        gplt.scatter(x, y, c=c, cmap="viridis")
         # Should create a scatter layer with colormap
         assert len(gplt.gcf().scene.scatters) == 1
 

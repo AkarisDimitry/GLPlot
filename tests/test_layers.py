@@ -383,18 +383,14 @@ class TestPatchLayer:
 
     def test_get_intrinsic_bounds(self):
         """Test bounds calculation."""
-        vertices = np.array(
-            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=np.float32
-        )
+        vertices = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=np.float32)
         layer = PatchLayer(vertices=vertices)
         bounds = layer.get_intrinsic_bounds()
         assert bounds == (0.0, 1.0, 0.0, 1.0)
 
     def test_get_intrinsic_bounds_negative(self):
         """Test bounds with negative coordinates."""
-        vertices = np.array(
-            [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]], dtype=np.float32
-        )
+        vertices = np.array([[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]], dtype=np.float32)
         layer = PatchLayer(vertices=vertices)
         bounds = layer.get_intrinsic_bounds()
         assert bounds == (-1.0, 1.0, -1.0, 1.0)
@@ -483,9 +479,7 @@ class TestLayer3D:
 
     def test_get_bounds_3d(self):
         """Test 3D bounds calculation."""
-        vertices = np.array(
-            [[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [0.5, 1.5, 2.5]], dtype=np.float32
-        )
+        vertices = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [0.5, 1.5, 2.5]], dtype=np.float32)
         layer = Layer3D(vertices=vertices)
         bounds = layer.get_bounds_3d()
         # 3D bounds: (xmin, xmax, ymin, ymax, zmin, zmax)
@@ -493,9 +487,7 @@ class TestLayer3D:
 
     def test_get_bounds_3d_negative(self):
         """Test 3D bounds with negative coordinates."""
-        vertices = np.array(
-            [[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]], dtype=np.float32
-        )
+        vertices = np.array([[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]], dtype=np.float32)
         layer = Layer3D(vertices=vertices)
         bounds = layer.get_bounds_3d()
         assert bounds == (-1.0, 1.0, -1.0, 1.0, -1.0, 1.0)

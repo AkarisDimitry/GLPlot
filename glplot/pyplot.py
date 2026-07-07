@@ -188,7 +188,9 @@ def _parse_plot_format(fmt: Optional[str]) -> dict[str, Any]:
     return out
 
 
-def _plot_single(x: ArrayLike, y: Optional[ArrayLike] = None, fmt: Optional[str] = None, **kwargs: Any) -> BaseLayer:
+def _plot_single(
+    x: ArrayLike, y: Optional[ArrayLike] = None, fmt: Optional[str] = None, **kwargs: Any
+) -> BaseLayer:
     style = _parse_plot_format(fmt)
     style.update({k: v for k, v in kwargs.items() if v is not None})
     if y is None:
@@ -228,7 +230,10 @@ def _project_3d(
 
 
 def _colormap_values(
-    values: ArrayLike, cmap: Optional[str] = None, vmin: Optional[float] = None, vmax: Optional[float] = None
+    values: ArrayLike,
+    cmap: Optional[str] = None,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
 ) -> np.ndarray:
     from matplotlib import colormaps
 
@@ -830,7 +835,16 @@ def plot(*args: Any, **kwargs: Any) -> list[BaseLayer]:
     return artists
 
 
-def plot3d(x: ArrayLike, y: ArrayLike, z: ArrayLike, *args: Any, elev: float = 30.0, azim: float = -60.0, scale_z: float = 0.7, **kwargs: Any) -> BaseLayer:
+def plot3d(
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
+    *args: Any,
+    elev: float = 30.0,
+    azim: float = -60.0,
+    scale_z: float = 0.7,
+    **kwargs: Any,
+) -> BaseLayer:
     """Plot a 3D line in 3D space.
 
     Renders a connected line in 3D using native 3D geometry shader pipeline.
