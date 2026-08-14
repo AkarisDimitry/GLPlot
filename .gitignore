@@ -63,6 +63,10 @@ imgui.ini
 *.temp
 .scratch/
 
+# Benchmark comparison output (regenerated locally, not referenced by any doc;
+# unlike examples/gallery/results, which IS embedded in README.md and must stay tracked)
+examples/benchmark/results/
+
 # Claude Code (local settings only, keep agents/)
 .claude/settings.json
 .claude/settings.local.json
