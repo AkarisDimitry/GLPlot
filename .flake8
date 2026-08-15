@@ -1,0 +1,31 @@
+[flake8]
+# flake8 does not read pyproject.toml, so the settings that black and isort take
+# from there have to be repeated here to keep the three tools consistent.
+max-line-length = 100
+
+# E203 / W503 conflict with black's formatting of slices and line breaks before
+# binary operators; both are explicitly recommended for black-formatted code.
+extend-ignore = E203, W503
+
+exclude =
+    .git,
+    __pycache__,
+    .pytest_cache,
+    .ruff_cache,
+    build,
+    dist,
+    .venv,
+    venv,
+    docs/_build
+
+per-file-ignores =
+    # The GPU modules bind PyOpenGL through `from OpenGL.GL import *`, which is
+    # that library's documented usage: the GL entry points and GL_* constants are
+    # re-exported dynamically and cannot be enumerated in an explicit import list.
+    # flake8 cannot resolve them, so it reports every gl* call site as
+    # possibly-undefined (F405) and the import itself as a star import (F403).
+    # These two codes are therefore suppressed for the package; note F405 can only
+    # fire in a module that actually contains a star import, so this does not mask
+    # genuinely undefined names elsewhere.
+    glplot/*: F403,F405
+    glplot/*/*: F403,F405
