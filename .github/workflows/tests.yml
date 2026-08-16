@@ -23,12 +23,24 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    - name: Install headless OpenGL libraries (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libglvnd0 libgl1 libglu1-mesa libosmesa6 xvfb
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[test]"
 
+    - name: Run tests with coverage (Linux, under a virtual display)
+      if: runner.os == 'Linux'
+      run: |
+        xvfb-run -a pytest --cov=glplot --cov-report=term-missing --cov-report=xml
+
     - name: Run tests with coverage
+      if: runner.os != 'Linux'
       run: |
         pytest --cov=glplot --cov-report=term-missing --cov-report=xml
 
