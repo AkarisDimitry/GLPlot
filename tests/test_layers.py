@@ -493,6 +493,63 @@ class TestLayer3D:
         assert bounds == (-1.0, 1.0, -1.0, 1.0, -1.0, 1.0)
 
 
+class TestLayer3DBoundsCache:
+    """``get_bounds_3d`` is memoised: a camera nudge asks for it ~20 times a frame.
+
+    Uncached it was six full scans of the vertex array per call, which on a large cloud was
+    the whole of a rotate drag's frame budget and, whenever the array fell out of cache, the
+    hitch that made the view jump.
+    """
+
+    def _layer(self, values=((0.0, 0.0, 0.0), (1.0, 2.0, 3.0))):
+        layer = Layer3D(vertices=np.array(values, dtype=np.float32))
+        layer.dirty.clear()
+        return layer
+
+    def test_a_repeat_call_does_not_rescan(self, monkeypatch):
+        layer = self._layer()
+        layer.get_bounds_3d()
+
+        def explode(*args, **kwargs):  # pragma: no cover - only runs on failure
+            raise AssertionError("bounds were recomputed on a cache hit")
+
+        monkeypatch.setattr(np, "min", explode)
+        monkeypatch.setattr(np, "max", explode)
+        assert layer.get_bounds_3d() == (0.0, 1.0, 0.0, 2.0, 0.0, 3.0)
+
+    def test_replacing_the_array_invalidates_it(self):
+        layer = self._layer()
+        assert layer.get_bounds_3d() == (0.0, 1.0, 0.0, 2.0, 0.0, 3.0)
+        layer.vertices = np.array([[-5.0, -5.0, -5.0], [5.0, 5.0, 5.0]], dtype=np.float32)
+        assert layer.get_bounds_3d() == (-5.0, 5.0, -5.0, 5.0, -5.0, 5.0)
+
+    def test_an_in_place_edit_invalidates_it_through_the_dirty_flag(self):
+        """The contract for mutating an array in place (``gui/datasets.py`` CONTRACT 1.4)."""
+        layer = self._layer()
+        assert layer.get_bounds_3d()[5] == 3.0
+        layer.vertices[1, 2] = 42.0
+        layer.dirty.gpu_dirty = True
+        assert layer.get_bounds_3d()[5] == 42.0
+
+    def test_bounds_dirty_invalidates_it_too(self):
+        layer = self._layer()
+        layer.get_bounds_3d()
+        layer.vertices[1, 0] = -9.0
+        layer.dirty.bounds_dirty = True
+        assert layer.get_bounds_3d()[0] == -9.0
+
+    def test_emptying_the_layer_is_not_a_stale_hit(self):
+        layer = self._layer()
+        layer.get_bounds_3d()
+        layer.vertices = None
+        assert layer.get_bounds_3d() is None
+
+    def test_intrinsic_bounds_agree_with_the_cached_3d_ones(self):
+        layer = self._layer()
+        x0, x1, y0, y1, _, _ = layer.get_bounds_3d()
+        assert layer.get_intrinsic_bounds() == (x0, x1, y0, y1)
+
+
 class TestLineFamilyLayer:
     """Test LineFamilyLayer (high-performance line rendering)."""
 

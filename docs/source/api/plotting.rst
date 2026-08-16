@@ -21,6 +21,17 @@ High-level pyplot-style plotting interface, compatible with Matplotlib conventio
 .. autofunction:: glplot.pyplot.vlines
 .. autofunction:: glplot.pyplot.step
 
+View-Driven Plots
+-----------------
+
+Plots that are **recomputed from the current view** rather than stored as fixed samples,
+so zooming reveals detail that was never computed before. These have no matplotlib
+equivalent — matplotlib's zoom magnifies what it was given.
+
+.. autofunction:: glplot.pyplot.function
+.. autofunction:: glplot.pyplot.mandelbrot
+.. autofunction:: glplot.pyplot.julia
+
 Matrix & Grid Visualization
 -----------------------------
 

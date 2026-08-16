@@ -233,22 +233,25 @@ class TestDefaultGlobalAlpha:
 
 
 class TestFillBetweenGeometry:
-    """fill_between() must interleave top/bottom vertices for GL_TRIANGLE_STRIP.
-    Columns [0::2] are y1 (top), columns [1::2] are y2 (bottom), and x values
-    must match the input x array at both positions."""
+    """fill_between() must interleave top/bottom vertices. Columns [0::2] are y1 (top),
+    columns [1::2] are y2 (bottom), and x values must match the input x array at both
+    positions. The interleaving survived the move from a single triangle strip to indexed
+    triangles (which `where=` needed for its holes) -- these pin that it did.
+
+    ``fill_between`` now returns the patch Layer directly (its docstring always said so),
+    so these read the vertices off the return value rather than off a figure's scene."""
 
     def test_vertices_shape(self):
         x = [0.0, 1.0, 2.0]
         layer = gplt.fill_between(x, [1, 2, 1], 0)
-        verts = layer.scene.layers[-1].vertices
-        assert verts.shape == (6, 2)
+        assert layer.vertices.shape == (6, 2)
 
     def test_strip_interleaving_top_bottom(self):
         x = np.array([0.0, 1.0, 2.0])
         y1 = np.array([3.0, 4.0, 3.0])
         y2 = np.array([1.0, 2.0, 1.0])
         layer = gplt.fill_between(x, y1, y2)
-        verts = layer.scene.layers[-1].vertices
+        verts = layer.vertices
         # Even rows: (x[i], y1[i]) — top boundary
         np.testing.assert_allclose(verts[0::2, 0], x)
         np.testing.assert_allclose(verts[0::2, 1], y1)
@@ -259,8 +262,7 @@ class TestFillBetweenGeometry:
     def test_scalar_y2_broadcasts(self):
         x = np.array([0.0, 1.0])
         layer = gplt.fill_between(x, [5.0, 6.0], 0.0)
-        verts = layer.scene.layers[-1].vertices
-        np.testing.assert_allclose(verts[1::2, 1], [0.0, 0.0])
+        np.testing.assert_allclose(layer.vertices[1::2, 1], [0.0, 0.0])
 
     def test_length_mismatch_raises(self):
         with pytest.raises(ValueError):

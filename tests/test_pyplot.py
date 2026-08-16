@@ -70,9 +70,12 @@ def test_scatter_accepts_numeric_cmap_values():
 
 
 def test_fill_between_creates_patch():
+    # fill_between returns the patch Layer, per its docstring -- not the figure. It used
+    # to return the figure, and this test read `.scene` off it; the contract is now the
+    # one the docstring always promised and that stackplot/fill_betweenx rely on.
     layer = gplt.fill_between([0, 1, 2], [1, 2, 1], 0, color="#336699", alpha=0.25)
-    assert layer.scene.layers[-1].layer_type == "patch"
-    assert layer.scene.layers[-1].vertices.shape == (6, 2)
+    assert layer.layer_type == "patch"
+    assert layer.vertices.shape == (6, 2)
 
 
 def test_bar_and_hist_create_patch_layers():
@@ -161,6 +164,29 @@ def test_imshow_matshow_and_hist2d():
     assert mat.metadata["artist"] == "imshow"
     assert counts.shape == (2, 2)
     assert layer.metadata["artist"] == "hist2d"
+
+
+def test_imshow_accepts_rgb_and_rgba_images():
+    """imshow() used to require a 2D scalar matrix; a loaded image (e.g. via imread())
+    is (H, W, 3) or (H, W, 4) and must render with its own per-pixel colour, not be
+    forced through the scalar colormap path."""
+    rgb_u8 = np.zeros((4, 4, 3), dtype=np.uint8)
+    rgb_u8[0, 0] = [255, 0, 0]
+    layer = gplt.imshow(rgb_u8)
+    assert layer.metadata["matrix"].shape == (4, 4, 3)
+    # uint8 0-255 is normalised to 0-1 before it reaches the renderer.
+    assert layer.colors[0] == pytest.approx([1.0, 0.0, 0.0, 1.0])
+
+    rgba_f32 = np.zeros((4, 4, 4), dtype=np.float32)
+    rgba_f32[0, 0] = [0.0, 1.0, 0.0, 0.5]
+    layer = gplt.imshow(rgba_f32)
+    assert layer.metadata["matrix"].shape == (4, 4, 4)
+    assert layer.colors[0] == pytest.approx([0.0, 1.0, 0.0, 0.5])
+
+    # The original scalar/colormap path must still work unchanged.
+    scalar = gplt.imshow(np.arange(16, dtype=np.float32).reshape(4, 4), cmap="viridis")
+    assert scalar.metadata["matrix"].shape == (4, 4)
+    assert scalar.metadata["cmap"] == "viridis"
 
 
 def test_contour_pcolormesh_and_3d_surface_helpers():

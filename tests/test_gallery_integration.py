@@ -22,13 +22,20 @@ EXPECTED_FILES = [
     "15_vector_field_3d.png",
     "16_ssao_comparison.png",
     "17_square_bars3d.png",
-    "18_hex_bars3d.png",
     "19_turbulent_vector_field_3d.png",
+    "20_categorical_bar_and_spines.png",
+    "21_date_axis_and_text_bbox.png",
+    "22_log_scale_plots.png",
+    "23_symlog_scale.png",
+    "24_log_scale_bar_chart.png",
+    "25_log_scale_contourf.png",
+    "26_logit_scale.png",
+    "27_inset_axes_image.png",
 ]
 
 
 def test_gallery_scripts_build_without_rendering(monkeypatch):
-    """All 19 gallery scripts must run to completion without crashing and each
+    """All 21 gallery scripts must run to completion without crashing and each
     must call savefig() exactly once with the expected filename.
 
     savefig() now falls back to render_preview() when no GL window exists

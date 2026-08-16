@@ -186,3 +186,192 @@ class TestExportEdgeCases:
                 gplt.savefig(output_path)
             except NotImplementedError:
                 pytest.skip("savefig not implemented for 3D")
+
+
+class TestPerVertexColourExport:
+    """The savefig fallback must honour a patch's per-vertex colours.
+
+    hexbin, pcolor and tripcolor draw into a single patch whose cells each carry their
+    own colour (a colour VBO, since one `face_color` uniform cannot express them). The
+    PNG export renders patches through matplotlib's PolyCollection, which was handed a
+    single `face_color` -- so the exported figure came out one flat blue while the live
+    view was correct. That is a colormap silently dropped on save, the worst kind of
+    export bug because the on-screen plot looks right. These pin that the colours reach
+    the PNG.
+
+    Asserted by intercepting the facecolors handed to PolyCollection rather than by
+    reading pixels back, so antialiasing at the cell edges cannot fake a pass.
+    """
+
+    def _facecolor_count(self, build) -> int:
+        import matplotlib.collections as mc
+
+        from glplot.utils import preview
+
+        captured = {"n": 0}
+        original = mc.PolyCollection.__init__
+
+        def spy(self, verts, *args, **kwargs):
+            fc = kwargs.get("facecolors")
+            captured["n"] = 0 if fc is None else (1 if np.ndim(fc) <= 1 else len(fc))
+            return original(self, verts, *args, **kwargs)
+
+        mc.PolyCollection.__init__ = spy
+        try:
+            build()
+            preview.render_preview(gplt.gcf(), tempfile.mktemp(suffix=".png"))
+        finally:
+            mc.PolyCollection.__init__ = original
+        return captured["n"]
+
+    def test_hexbin_exports_per_hexagon_colours(self):
+        rng = np.random.default_rng(0)
+        n = self._facecolor_count(
+            lambda: gplt.hexbin(rng.normal(size=3000), rng.normal(size=3000), gridsize=15)
+        )
+        assert n > 1, "hexbin exported as one flat colour -- colormap dropped on savefig"
+
+    def test_pcolor_exports_per_cell_colours(self):
+        n = self._facecolor_count(lambda: gplt.pcolor(np.arange(30.0).reshape(5, 6)))
+        assert n > 1
+
+    def test_tripcolor_exports_per_face_colours(self):
+        rng = np.random.default_rng(0)
+        n = self._facecolor_count(
+            lambda: gplt.tripcolor(rng.random(40), rng.random(40), rng.random(40))
+        )
+        assert n > 1
+
+    def test_a_flat_patch_still_exports_one_colour(self):
+        """The fix must not overshoot: a bar carries no colour buffer, so one colour."""
+        assert self._facecolor_count(lambda: gplt.bar([0, 1, 2], [3, 4, 5])) == 1
+
+
+class TestMultiPanelExport:
+    """render_preview() used to only ever draw the active panel, so an inset_axes() image
+    or a subplots() grid's other cells were silently missing from a saved PNG even though
+    they render correctly in the live GL window.
+    """
+
+    @staticmethod
+    def _solid(color):
+        img = np.zeros((8, 8, 3), dtype=np.float32)
+        img[..., 0], img[..., 1], img[..., 2] = color
+        return img
+
+    @staticmethod
+    def _has_color(img, color, tol=40):
+        r, g, b = (int(c * 255) for c in color)
+        return bool(
+            np.any(
+                (np.abs(img[..., 0].astype(int) - r) < tol)
+                & (np.abs(img[..., 1].astype(int) - g) < tol)
+                & (np.abs(img[..., 2].astype(int) - b) < tol)
+            )
+        )
+
+    def test_inset_axes_image_reaches_the_saved_png(self):
+        from PIL import Image
+
+        from glplot.utils.preview import render_preview
+
+        fig, ax = gplt.subplots()
+        ax.imshow(self._solid((0.0, 1.0, 0.0)))
+        inset = ax.inset_axes([0.05, 0.05, 0.3, 0.3])
+        inset.imshow(self._solid((1.0, 0.0, 0.0)))
+
+        path = tempfile.mktemp(suffix=".png")
+        try:
+            render_preview(fig, path)
+            img = np.asarray(Image.open(path).convert("RGB"))
+            assert self._has_color(img, (0.0, 1.0, 0.0)), "parent panel missing from PNG"
+            assert self._has_color(img, (1.0, 0.0, 0.0)), "inset panel missing from PNG"
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_subplots_grid_exports_every_cell(self):
+        from PIL import Image
+
+        from glplot.utils.preview import render_preview
+
+        fig, axs = gplt.subplots(1, 2)
+        axs[0].imshow(self._solid((1.0, 0.0, 0.0)))
+        axs[1].imshow(self._solid((0.0, 0.0, 1.0)))
+
+        path = tempfile.mktemp(suffix=".png")
+        try:
+            render_preview(fig, path)
+            img = np.asarray(Image.open(path).convert("RGB"))
+            assert self._has_color(img, (1.0, 0.0, 0.0)), "first subplot missing from PNG"
+            assert self._has_color(img, (0.0, 0.0, 1.0)), "second subplot missing from PNG"
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_single_panel_export_is_unaffected(self):
+        """The common case (no extra panels) keeps rendering through the original path."""
+        from glplot.utils.preview import render_preview
+
+        gplt.plot([0, 1, 2], [0, 1, 4])
+        path = tempfile.mktemp(suffix=".png")
+        try:
+            render_preview(gplt.gcf(), path)
+            assert os.path.getsize(path) > 0
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+
+class TestNewArtistsExportVisibly:
+    """Every new plotting function must leave marks in the PNG, not vanish on save.
+
+    A function that renders live but exports blank is a savefig-only regression that unit
+    tests on the live scene never catch. Measured as non-white pixels in the rendered
+    figure -- a low bar, but it catches "the export path does not know this artist".
+    """
+
+    @pytest.mark.parametrize(
+        "name, build",
+        [
+            ("violinplot", lambda r: gplt.violinplot(r.normal(size=300))),
+            (
+                "eventplot",
+                lambda r: gplt.eventplot([np.sort(r.uniform(0, 5, 50)) for _ in range(3)]),
+            ),
+            ("stairs", lambda r: gplt.stairs([1, 3, 2, 4], [0, 1, 2, 3, 4])),
+            ("ecdf", lambda r: gplt.ecdf(r.normal(size=200))),
+            ("barh", lambda r: gplt.barh([0, 1, 2], [10, 24, 18])),
+            (
+                "fill_betweenx",
+                lambda r: gplt.fill_betweenx(
+                    np.linspace(0, 10, 20), np.zeros(20), np.sin(np.linspace(0, 10, 20))
+                ),
+            ),
+            ("boxplot", lambda r: gplt.boxplot(r.normal(size=200))),
+            ("pie", lambda r: gplt.pie([30, 20, 50])),
+            ("triplot", lambda r: gplt.triplot(r.random(30), r.random(30))),
+            ("spy", lambda r: gplt.spy(np.eye(8))),
+            (
+                "stackplot",
+                lambda r: gplt.stackplot(np.linspace(0, 10, 20), np.ones(20), 2 * np.ones(20)),
+            ),
+            ("broken_barh", lambda r: gplt.broken_barh([(1, 2), (5, 1)], (0, 1))),
+        ],
+    )
+    def test_artist_leaves_marks_in_the_png(self, name, build):
+        from PIL import Image
+
+        from glplot.utils.preview import render_preview
+
+        rng = np.random.default_rng(0)
+        build(rng)
+        path = tempfile.mktemp(suffix=".png")
+        try:
+            render_preview(gplt.gcf(), path)
+            img = np.asarray(Image.open(path))[:, :, :3]
+            non_white = int(np.sum(np.any(img < 250, axis=-1)))
+            assert non_white > 100, f"{name} exported nearly blank ({non_white} px)"
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
