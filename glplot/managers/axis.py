@@ -208,7 +208,9 @@ class AxisManager:
             # and falls through to the linear ladder below, applied directly in log space.
             return self._generate_log_ticks(vmin, vmax, target_count)
         if scale_mode in ("symlog", "asinh") and not has_forced_step:
-            return self._generate_symmetric_ticks(vmin, vmax, target_count, scale_mode, scale_params)
+            return self._generate_symmetric_ticks(
+                vmin, vmax, target_count, scale_mode, scale_params
+            )
         if scale_mode == "logit" and not has_forced_step:
             return self._generate_logit_ticks(vmin, vmax, target_count)
 

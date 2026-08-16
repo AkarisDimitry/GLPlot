@@ -31,7 +31,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-
 from compose import INSET_FIGSIZE, PANEL_DPI, PANEL_FIGSIZE, assemble_grid, composite_inset
 from data import (
     ALPHA_BAND,
@@ -162,7 +161,7 @@ def panel_b():
     fig, ax = new_panel()
     ax.plot(d["x_exact"], d["f_exact"], color="crimson", lw=2.2, label="exact F(x)", zorder=5)
 
-    band = 0.35 * np.exp(-((d["x"] - 0.6) / 1.4) ** 2) + 0.05
+    band = 0.35 * np.exp(-(((d["x"] - 0.6) / 1.4) ** 2)) + 0.05
     f_on_x = np.interp(d["x"], d["x_exact"], d["f_exact"])
     ax.fill_between(
         d["x"],

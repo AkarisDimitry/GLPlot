@@ -114,7 +114,9 @@ for idx, (mean, err, neon) in enumerate(zip(means, errors, NEON_COLORS)):
     top_cap_y = mean + err
     bottom_cap_y = max(mean - err, 0.0)
     glow_line([idx - cap_half, idx + cap_half], [top_cap_y, top_cap_y], color=neon, base_lw=2.2)
-    glow_line([idx - cap_half, idx + cap_half], [bottom_cap_y, bottom_cap_y], color=neon, base_lw=2.2)
+    glow_line(
+        [idx - cap_half, idx + cap_half], [bottom_cap_y, bottom_cap_y], color=neon, base_lw=2.2
+    )
 
 ax = plt.gca()
 ax.spines["top"].set_visible(False)

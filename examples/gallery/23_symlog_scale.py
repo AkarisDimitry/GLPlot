@@ -61,9 +61,7 @@ plt.plot(t, signal_clean, color=scope_green, lw=base_lw, label="coil current")
 # zebra-striping instead of a smooth glow; every 4th sample keeps the big early lobes solid
 # and the fill fast without changing what the eye reads.
 fill_stride = 4
-plt.fill_between(
-    t[::fill_stride], signal_clean[::fill_stride], 0.0, color=scope_green, alpha=0.1
-)
+plt.fill_between(t[::fill_stride], signal_clean[::fill_stride], 0.0, color=scope_green, alpha=0.1)
 
 # Glow: the same trace redrawn progressively thicker and more transparent so the stacked
 # translucent copies blend into a soft halo around the crisp core above -- the real

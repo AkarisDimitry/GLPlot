@@ -130,8 +130,7 @@ def _coerce_axis_values(values: ArrayLike, axis_name: str, func: str) -> ArrayLi
         return values
 
     is_datetime = np.issubdtype(arr.dtype, np.datetime64) or (
-        arr.dtype == object
-        and all(isinstance(v, (_dt.date, _dt.datetime)) for v in arr.ravel())
+        arr.dtype == object and all(isinstance(v, (_dt.date, _dt.datetime)) for v in arr.ravel())
     )
     if is_datetime:
         import matplotlib.dates as _mdates
@@ -12622,8 +12621,7 @@ def set_aspect(
         {
             "adjustable": "has no effect: GLPlot always adjusts the data limits "
             "('datalim'), never the axes box",
-            "anchor": "has no effect: GLPlot's single viewport has nothing to anchor "
-            "within",
+            "anchor": "has no effect: GLPlot's single viewport has nothing to anchor " "within",
             "share": "has no effect: GLPlot has no linked-aspect axes group",
         },
     )

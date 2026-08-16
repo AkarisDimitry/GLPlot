@@ -76,9 +76,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as mpl
 import numpy as np
-
-import glplot.pyplot as gplt
-import glplot.utils.preview as preview_mod
 from compose import INSET_FIGSIZE, PANEL_DPI, PANEL_FIGSIZE, assemble_grid, composite_inset
 from data import (
     ALPHA_BAND,
@@ -103,6 +100,9 @@ from data import (
     panel_f_data,
     panel_f_limits,
 )
+
+import glplot.pyplot as gplt
+import glplot.utils.preview as preview_mod
 
 RESULTS = Path(__file__).resolve().parent / "results"
 PANELS_DIR = RESULTS / "glplot_panels"
@@ -333,7 +333,9 @@ def build_panel_a():
             x_grid, 0.0, hill_scaled, kinds[i], color, lims["xlim"], lims["y_main"], alpha=0.45
         )
     labeled(
-        gplt.plot(d["x_exact"], clip_y(d["f_exact"], lims["y_main"]), color="crimson", linewidth=2.0),
+        gplt.plot(
+            d["x_exact"], clip_y(d["f_exact"], lims["y_main"]), color="crimson", linewidth=2.0
+        ),
         "exact F(x)",
     )
     labeled(
@@ -390,11 +392,13 @@ def build_panel_b():
 
     gplt.figure(figsize=PANEL_FIGSIZE)
     f_on_x = np.interp(d["x"], d["x_exact"], d["f_exact"])
-    band = 0.35 * np.exp(-((d["x"] - 0.6) / 1.4) ** 2) + 0.05
+    band = 0.35 * np.exp(-(((d["x"] - 0.6) / 1.4) ** 2)) + 0.05
     band_lo = clip_y(f_on_x - band, lims["ylim"])
     band_hi = clip_y(f_on_x + band, lims["ylim"])
     labeled(no_edge(gplt.fill_between(d["x"], band_lo, band_hi, color="crimson", alpha=ALPHA_BAND)))
-    texture_overlay(d["x"], band_lo, band_hi, "dots", "crimson", lims["xlim"], lims["ylim"], alpha=0.35)
+    texture_overlay(
+        d["x"], band_lo, band_hi, "dots", "crimson", lims["xlim"], lims["ylim"], alpha=0.35
+    )
 
     labeled(
         gplt.plot(d["x_exact"], clip_y(d["f_exact"], lims["ylim"]), color="crimson", linewidth=2.2),
@@ -437,13 +441,17 @@ def build_panel_c():
 
     gplt.figure(figsize=PANEL_FIGSIZE)
     labeled(
-        gplt.plot(d["x_exact"], clip_y(d["f_exact"], lims["y_main"]), color="crimson", linewidth=2.2),
+        gplt.plot(
+            d["x_exact"], clip_y(d["f_exact"], lims["y_main"]), color="crimson", linewidth=2.2
+        ),
         "exact F(x)",
     )
     for i, (T, color) in enumerate(zip(d["temperatures"], colors)):
         p_scaled = d["p_curves"][T] * lims["twin_rescale"]
         labeled(no_edge(gplt.fill_between(d["x"], p_scaled, 0, color=color, alpha=ALPHA_TWIN_FILL)))
-        texture_overlay(d["x"], 0.0, p_scaled, kinds[i], color, lims["xlim"], lims["y_main"], alpha=0.4)
+        texture_overlay(
+            d["x"], 0.0, p_scaled, kinds[i], color, lims["xlim"], lims["y_main"], alpha=0.4
+        )
         labeled(
             gplt.plot(d["x"], clip_y(d["f_curves"][T], lims["y_main"]), color=color, linewidth=1.5),
             f"T={T:g}",
@@ -514,9 +522,7 @@ def build_panel_d():
     gplt.title("d   Thermodynamic integration")
     tx = lims["xlim"][0] + 0.03 * (lims["xlim"][1] - lims["xlim"][0])
     ty = lims["ylim"][0] + 0.06 * (lims["ylim"][1] - lims["ylim"][0])
-    labeled(
-        gplt.text(tx, ty, f"dF = {d['df_estimate']:.3f} +/- {d['df_sigma']:.3f}", fontsize=8.5)
-    )
+    labeled(gplt.text(tx, ty, f"dF = {d['df_estimate']:.3f} +/- {d['df_sigma']:.3f}", fontsize=8.5))
     return save("d_main")
 
 
@@ -551,10 +557,16 @@ def build_panel_e():
         # stacked exactly on top of each other) into a much bolder border than
         # mpl's single-patch edge: the "marked edge" the histogram didn't need.
         labeled(
-            no_edge(gplt.fill_between(centers, counts, 0, color=color, alpha=ALPHA_HIST_FILL, step="mid")),
+            no_edge(
+                gplt.fill_between(
+                    centers, counts, 0, color=color, alpha=ALPHA_HIST_FILL, step="mid"
+                )
+            ),
             f"n_switch={n}",
         )
-        texture_overlay(centers, 0.0, counts, kinds[i], color, lims["xlim"], lims["ylim"], alpha=0.4)
+        texture_overlay(
+            centers, 0.0, counts, kinds[i], color, lims["xlim"], lims["ylim"], alpha=0.4
+        )
     set_axis_bounds(lims["xlim"], lims["ylim"])
     gplt.xlabel("work W")
     gplt.ylabel("P_F(W)")
@@ -573,7 +585,9 @@ def build_panel_f():
         log_lo = np.log10(c["lo"])
         log_hi = np.log10(c["hi"])
         log_mean = np.log10(c["mean"])
-        labeled(no_edge(gplt.fill_between(d["t"], log_lo, log_hi, color=color, alpha=ALPHA_ERROR_BAND)))
+        labeled(
+            no_edge(gplt.fill_between(d["t"], log_lo, log_hi, color=color, alpha=ALPHA_ERROR_BAND))
+        )
         texture_overlay(
             d["t"], log_lo, log_hi, kinds[i], color, lims["xlim"], lims["log_ylim"], alpha=0.35
         )

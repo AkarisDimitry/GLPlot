@@ -19,7 +19,9 @@ def chladni_field(m: float, n: float) -> np.ndarray:
     zero-crossings are exactly the nodal lines sand collects on in a real Chladni-plate
     demonstration.
     """
-    return np.sin(m * np.pi * X) * np.cos(n * np.pi * Y) - np.sin(n * np.pi * X) * np.cos(m * np.pi * Y)
+    return np.sin(m * np.pi * X) * np.cos(n * np.pi * Y) - np.sin(n * np.pi * X) * np.cos(
+        m * np.pi * Y
+    )
 
 
 def mode_pair(frame: int) -> tuple:
@@ -43,7 +45,9 @@ def update(frame: int):
     span = zoom_span(frame)
     Z = chladni_field(m, n)
     plt.cla()
-    plt.imshow(Z, extent=(-1, 1, -1, 1), origin="lower", cmap="RdBu_r", vmin=-1.0, vmax=1.0, aspect="equal")
+    plt.imshow(
+        Z, extent=(-1, 1, -1, 1), origin="lower", cmap="RdBu_r", vmin=-1.0, vmax=1.0, aspect="equal"
+    )
     plt.xlim(-span, span)
     plt.ylim(-span, span)
     plt.title(f"Standing-wave interference (m={m:.1f}, n={n:.1f})")

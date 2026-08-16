@@ -88,7 +88,9 @@ panels = [
         # Wide, multimodal spread in both slope and intercept: a dense,
         # chaotic web rather than one clean bundle -- reads as a rave-poster
         # tangle instead of a physics diagram.
-        "a": lambda: np.concatenate([rng.normal(-1.8, 0.5, N // 2), rng.normal(1.8, 0.5, N - N // 2)]),
+        "a": lambda: np.concatenate(
+            [rng.normal(-1.8, 0.5, N // 2), rng.normal(1.8, 0.5, N - N // 2)]
+        ),
         "b": lambda: rng.normal(0.0, 1.6, N),
     },
 ]
@@ -133,7 +135,9 @@ plt.savefig(output_path)
 # files even under pytest. The composite below must NOT land at the real
 # output_path in that case -- it would clobber the real 20M-line gallery PNG
 # with the tiny N=2,000 test-mode version the moment the test suite runs.
-composite_path = str(tmp_dir / "composite.png") if "PYTEST_CURRENT_TEST" in os.environ else output_path
+composite_path = (
+    str(tmp_dir / "composite.png") if "PYTEST_CURRENT_TEST" in os.environ else output_path
+)
 
 fig, axes = mpl.subplots(2, 2, figsize=(15, 11), dpi=120)
 for ax, spec, tile_path in zip(axes.flat, panels, tile_paths):

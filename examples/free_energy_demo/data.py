@@ -20,7 +20,7 @@ def exact_F1(x):
     """Single steep well used by panels a, b, e, f."""
     x = np.asarray(x, dtype=float)
     base = 0.55 * (x - 0.6) ** 2
-    wiggle = 0.16 * np.sin(3.0 * (x - 0.6)) * np.exp(-((x - 0.6) / 1.2) ** 2)
+    wiggle = 0.16 * np.sin(3.0 * (x - 0.6)) * np.exp(-(((x - 0.6) / 1.2) ** 2))
     return base + wiggle
 
 
@@ -66,8 +66,8 @@ def panel_b_data():
     curves = {}
     for frac in fractions:
         weight = min(1.0, frac * 6.0)
-        residual_bump = 1.3 * np.exp(-((x - 0.6) / 0.9) ** 2) * (1.0 - weight)
-        edge_sag = 0.9 * np.exp(-((x + 1.6) / 0.5) ** 2) * (1.0 - weight)
+        residual_bump = 1.3 * np.exp(-(((x - 0.6) / 0.9) ** 2)) * (1.0 - weight)
+        edge_sag = 0.9 * np.exp(-(((x + 1.6) / 0.5) ** 2)) * (1.0 - weight)
         noise = RNG.normal(scale=0.03 * (1.0 - weight) + 0.01, size=x.shape)
         curves[frac] = weight * exact_F1(x) + residual_bump + edge_sag + noise
     return dict(x_exact=x_exact, f_exact=f_exact, x=x, fractions=fractions, curves=curves)
@@ -239,6 +239,7 @@ ALPHA_HIST_FILL = 0.20
 ALPHA_ERROR_BAND = 0.16
 ALPHA_VIOLIN = 0.30
 
+
 #: matplotlib's ``errorbar(capsize=...)`` is in *points*; GLPlot's is in *data
 #: units* (see its docstring). With both scripts now rendering every panel at
 #: the same physical size and DPI (``compose.PANEL_DPI``/``PANEL_FIGSIZE``),
@@ -269,5 +270,7 @@ def panel_f_data():
         mean = np.abs(mean)
         band_lo = mean * (1.0 - p["band"])
         band_hi = mean * (1.0 + p["band"])
-        curves[name] = dict(mean=np.clip(mean, 1e-5, None), lo=np.clip(band_lo, 1e-5, None), hi=band_hi)
+        curves[name] = dict(
+            mean=np.clip(mean, 1e-5, None), lo=np.clip(band_lo, 1e-5, None), hi=band_hi
+        )
     return dict(t=t, curves=curves)

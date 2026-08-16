@@ -67,8 +67,10 @@ edges = np.quantile(speed_flat, np.linspace(0, 1, n_bins + 1))
 cmap = colormaps["viridis"]
 for i in range(n_bins):
     lo, hi = edges[i], edges[i + 1]
-    sel = (speed_flat >= lo) & (speed_flat <= hi) if i == n_bins - 1 else (
-        (speed_flat >= lo) & (speed_flat < hi)
+    sel = (
+        (speed_flat >= lo) & (speed_flat <= hi)
+        if i == n_bins - 1
+        else ((speed_flat >= lo) & (speed_flat < hi))
     )
     if not np.any(sel):
         continue

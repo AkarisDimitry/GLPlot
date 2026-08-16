@@ -133,7 +133,9 @@ c_warm = (0.95, 0.55, 0.12, 0.4)
 station_range = station_mean.max() - station_mean.min()
 t_norm = (station_mean - station_mean.min()) / (station_range if station_range > 0 else 1.0)
 for i in range(n_stations):
-    panel_c.plot(hours, station_traces[i], color=_lerp(float(t_norm[i]), c_cool, c_warm), linewidth=0.9)
+    panel_c.plot(
+        hours, station_traces[i], color=_lerp(float(t_norm[i]), c_cool, c_warm), linewidth=0.9
+    )
 yc_min, yc_max = float(station_traces.min()), float(station_traces.max())
 panel_c.scatter([0.5], [yc_max + 0.2 * (yc_max - yc_min)], s=0.01, alpha=0.0)
 _caption(
@@ -185,7 +187,13 @@ banner.set_ylabel("Northing (km)")
 # A corner caption (same _caption() helper the other four panels use) rather
 # than text floating above the axes: that collided with the real set_title()
 # below, which matplotlib also draws just above the axes box.
-_caption(banner, 2.0, 90.0 * 0.90, f"{n_stations} station map, colored by mean daily temperature (deg C)", fontsize=14)
+_caption(
+    banner,
+    2.0,
+    90.0 * 0.90,
+    f"{n_stations} station map, colored by mean daily temperature (deg C)",
+    fontsize=14,
+)
 banner.set_title("Regional Weather-Station Network -- One Synthetic Day")
 
 plt.savefig("examples/gallery/results/16_ssao_comparison.png")
