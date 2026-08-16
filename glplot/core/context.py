@@ -40,9 +40,27 @@ class RenderContext:
     # Device Pixel Ratio for HighDPI / Retina consistency
     dpr: float = 1.0
 
+    # How many times wider (linearly) this pass's world window is than the view its result
+    # will finally be shown through. 1.0 for a direct render -- the only pass that raises it
+    # is the interaction-cache capture, which renders `options.cache_padding` times more
+    # world into the same framebuffer so a drag has somewhere to pan into, and whose impostor
+    # magnifies the texture back by exactly this factor.
+    #
+    # Anything sized in *world* units is reprojected correctly by that magnification and can
+    # ignore this. Anything sized in *pixels* -- a point sprite, a px-wide line -- is not: it
+    # keeps its size while the world around it shrinks, so the capture packs the same marks
+    # into 1/capture_scale^2 of the area and the impostor comes out that much denser than the
+    # exact view. See ScatterRenderer._capture_scale_stride.
+    capture_scale: float = 1.0
+
     # Orthographic specialization (skip 4x4 matrix multiplication in hot paths)
     ndc_scale: Tuple[float, float] = (1.0, 1.0)
     ndc_offset: Tuple[float, float] = (0.0, 0.0)
+
+    # Top-left-origin offset, in logical window pixels, of this panel inside the window. GL
+    # geometry is placed by glViewport, but imgui overlays (tick labels, legend) draw in
+    # window space and must add this to land in the right panel. (0, 0) for a full-window panel.
+    px_offset: Tuple[float, float] = (0.0, 0.0)
 
     @property
     def aspect(self) -> float:

@@ -14,13 +14,18 @@ class GLPlotSnapshot:
     plotting libraries like Matplotlib.
     """
 
-    rgba: np.ndarray  # H x W x 4 uint8
+    rgba: np.ndarray  # H x W x 4 uint8, top row first
     extent: Tuple[float, float, float, float]  # xmin, xmax, ymin, ymax
     xlim: Tuple[float, float]
     ylim: Tuple[float, float]
     width_px: int
     height_px: int
     transparent: bool
+    #: True when the scene is a 3D projection (``elev``/``azim``), which has no 2D data
+    #: mapping: the raster is a view of a rotated volume, so ``extent`` is only the
+    #: camera's window and pinning x/y ticks to it would label the picture with numbers
+    #: that mean nothing. Receivers should show such a snapshot as a plain image.
+    projected_3d: bool = False
 
 
 def snapshot_to_matplotlib(
@@ -41,6 +46,19 @@ def snapshot_to_matplotlib(
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
+
+    if snapshot.projected_3d:
+        # No data extent: the picture is a projection of a rotated volume, so it goes in
+        # as a plain image. 'equal' keeps that projection from being stretched, and the
+        # frame comes off rather than carry ticks that would be pure fiction.
+        artist = ax.imshow(
+            snapshot.rgba,
+            aspect="equal",
+            interpolation=interpolation,
+            zorder=zorder,
+        )
+        ax.set_axis_off()
+        return fig, ax, artist
 
     xmin, xmax, ymin, ymax = snapshot.extent
 

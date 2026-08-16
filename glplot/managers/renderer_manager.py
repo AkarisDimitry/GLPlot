@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from ..options import EngineOptions
 
 from ..renderers.axis import AxisRenderer
+from ..renderers.fractal import FractalRenderer
 from ..renderers.geometry3d import Geometry3DRenderer
 from ..renderers.line_family import LineFamilyRenderer
 from ..renderers.patch import PatchRenderer
@@ -57,11 +58,22 @@ class RendererManager:
         self.renderers["text"] = TextRenderer(self.options)
         self.renderers["axis"] = AxisRenderer(self.options)
         geometry3d = Geometry3DRenderer(self.options)
+        # ``geometry3d`` is ``Layer3D``'s own default ``layer_type``, so a layer built by
+        # constructing one directly had no renderer registered and silently drew nothing.
+        self.renderers["geometry3d"] = geometry3d
         self.renderers["scatter3d"] = geometry3d
+        # ``surface3d`` was already accepted by ``datasets._LAYER_BINDINGS`` but never
+        # routed here, which made it the one 3D layer type the editor could bind and the
+        # renderer could not draw.
+        self.renderers["surface3d"] = geometry3d
         self.renderers["mesh3d"] = geometry3d
         self.renderers["wireframe3d"] = geometry3d
         self.renderers["bars3d"] = geometry3d
         self.renderers["volume3d"] = geometry3d
+        # The GPU escape-time field (Mandelbrot / Julia). A view-driven layer: its pixels
+        # are computed per screen fragment every frame, so it re-detailes as the camera
+        # zooms. See ``renderers/fractal.py``.
+        self.renderers["fractal"] = FractalRenderer(self.options)
         initialized = set()
         for renderer in self.renderers.values():
             if id(renderer) in initialized:
@@ -101,9 +113,11 @@ class RendererManager:
         context: Any,
         target_fbo: int = 0,
         target_size: Optional[Tuple[int, int]] = None,
+        target_viewport: Optional[Tuple[int, int, int, int]] = None,
     ) -> None:
         """Modular DENSITY pass render loop."""
         sorted_layers = self.filter_layers(layers, LayerCapability.DENSITY)
+        tint = self.density_tint_active(sorted_layers)
 
         # 1. Prepare the density manager for accumulation
         target = self.plot.density_renderer.accum_target
@@ -122,7 +136,30 @@ class RendererManager:
             context.fb_width, context.fb_height = old_w, old_h
 
         # 3. Resolve to the target FBO
-        self.plot.density_renderer.resolve(target_fbo=target_fbo, target_size=target_size)
+        self.plot.density_renderer.resolve(
+            target_fbo=target_fbo,
+            target_size=target_size,
+            target_viewport=target_viewport,
+            tint=tint,
+        )
+
+    @staticmethod
+    def density_tint_active(layers: Iterable[BaseLayer]) -> bool:
+        """Whether this density pass should be painted in the layers' own colours.
+
+        On when any participating layer was given a colour *by the caller* --
+        ``scatter(color=...)``, ``scatter(c=...)``, ``plot(color=...)``. That is the whole
+        rule, and it is deliberately about what was asked for rather than about what colour
+        came out: every layer ends up with a colour (a cycle colour, or scatter's default
+        black), so "has colours" is true of everything and would tint every density plot
+        ever made -- including the ones whose layers are black, which would paint the image
+        in black on black.
+
+        A layer that inherited its colour from the cycle therefore keeps the colormap, and
+        so do the bulk verbs (``plot_lines`` and friends) where the heatmap *is* the point
+        and the colours are usually a flat fill chosen to weigh every line the same.
+        """
+        return any(l.metadata.get("explicit_color") for l in layers)
 
     def draw_exact(self, layers: List[BaseLayer], context: Any) -> None:
         """Main EXACT pass render loop."""
@@ -134,9 +171,9 @@ class RendererManager:
         #   3. axis3d   — bounding-box wireframe always on top
         floor_layers = [l for l in sorted_layers if l.metadata.get("artist") == "floor3d"]
         axis_layers = [l for l in sorted_layers if l.metadata.get("artist") == "axis3d"]
-        data_layers = [
-            l for l in sorted_layers if l.metadata.get("artist") not in ("floor3d", "axis3d")
-        ]
+        data_layers = self._order_by_opacity(
+            [l for l in sorted_layers if l.metadata.get("artist") not in ("floor3d", "axis3d")]
+        )
 
         # Pre-count types for colourmap normalisation (data layers only)
         type_totals = {}
@@ -155,6 +192,32 @@ class RendererManager:
         _draw_batch(floor_layers)
         _draw_batch(data_layers)
         _draw_batch(axis_layers)
+
+    @staticmethod
+    def _order_by_opacity(layers: List[BaseLayer]) -> List[BaseLayer]:
+        """Draw opaque **3D** layers before translucent ones, order-stable within each group.
+
+        A translucent layer can only blend against what is *already in the framebuffer*, so
+        declaration order decided whether transparency worked at all. The nebula gallery
+        example is exactly that: ``volume3d`` is declared before its ``scatter3d`` probes, so
+        the cloud went down first and the opaque probes then painted over it -- and where the
+        cloud's own depth writes had claimed a pixel first (see ``renderers/geometry3d.py``),
+        the probes behind it vanished instead. Opaque first means the depth buffer is already
+        filled when the cloud draws: fragments genuinely behind the probes are rejected, the
+        rest blend over them, and both layers read as being in the same space.
+
+        2D layers are untouched -- for them ``zorder`` *is* the contract and there is no depth
+        test to arbitrate anything -- so a batch with no 3D layer is returned unchanged and
+        every 2D plot renders bit-for-bit as before.
+        """
+        from ..core.layers import Layer3D
+        from ..renderers.geometry3d import is_translucent
+
+        if not any(isinstance(l, Layer3D) for l in layers):
+            return layers
+        opaque = [l for l in layers if not (isinstance(l, Layer3D) and is_translucent(l))]
+        translucent = [l for l in layers if isinstance(l, Layer3D) and is_translucent(l)]
+        return opaque + translucent
 
     def draw_axes(self, axis_manager: Any, context: Any) -> None:
         """Draw the coordinate framework."""

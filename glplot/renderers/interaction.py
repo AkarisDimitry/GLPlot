@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Tuple
 
 from OpenGL.GL import *
 
+from ..options import resolve_axis_margins
 from ..utils.gl_utils import link_program
 from ..utils.shaders import CACHE_IMPOSTOR_FS, INTERACTION_FULLSCREEN_VS
 from .base import GLOffscreenTarget
@@ -28,14 +29,28 @@ class InteractionRenderer:
         self.u_cache_tex = -1
         self.u_cache_window = -1
         self.u_cur_window = -1
+        self.u_cache_margins = -1
         self.cache_vao = 0
         self.cache_target = GLOffscreenTarget()
+
+    def _normalized_margins(self) -> Tuple[float, float, float, float]:
+        """Axis margins as viewport fractions: (left, right, bottom, top).
+
+        The impostor remaps through the same inset region ``mvp()`` renders into, so it
+        needs the identical margins. Normalising here (against the logical size the
+        margins are expressed in) keeps the shader device-pixel-ratio agnostic.
+        """
+        margin_l, margin_r, margin_b, margin_t = resolve_axis_margins(self.options)
+        width = max(float(self.plot.width), 1e-6)
+        height = max(float(self.plot.height), 1e-6)
+        return (margin_l / width, margin_r / width, margin_b / height, margin_t / height)
 
     def initialize(self, fb_width: int, fb_height: int) -> None:
         self.cache_prog = link_program(INTERACTION_FULLSCREEN_VS, CACHE_IMPOSTOR_FS)
         self.u_cache_tex = glGetUniformLocation(self.cache_prog, "u_tex")
         self.u_cache_window = glGetUniformLocation(self.cache_prog, "u_cache_window")
         self.u_cur_window = glGetUniformLocation(self.cache_prog, "u_cur_window")
+        self.u_cache_margins = glGetUniformLocation(self.cache_prog, "u_margins")
         self.cache_vao = glGenVertexArrays(1)
         self.rebuild_cache_target(fb_width, fb_height)
 
@@ -79,6 +94,7 @@ class InteractionRenderer:
         glUniform1i(self.u_cache_tex, 0)
         glUniform4f(self.u_cache_window, *capture_window)
         glUniform4f(self.u_cur_window, *current_window)
+        glUniform4f(self.u_cache_margins, *self._normalized_margins())
         glBindVertexArray(self.cache_vao)
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
         glBindVertexArray(0)

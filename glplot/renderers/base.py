@@ -26,6 +26,10 @@ class GLScatterBuffers:
     vao: int = 0
     vbo_pts: int = 0
     vbo_col: int = 0
+    vbo_size: int = 0  # per-point size multipliers (attribute 2); 1.0 when uniform-sized
+    vbo_lod: int = 0  # element buffer of decimated indices for zoom-out LOD; 0 = draw all
+    lod_stride: int = 1  # decimation stride the LOD index buffer was built at
+    lod_count: int = 0  # number of indices in the LOD buffer
     count: int = 0
     size: float = 5.0
 

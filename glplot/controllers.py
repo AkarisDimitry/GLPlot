@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 import numpy as np
 
+from .options import resolve_axis_margins
 from .utils.gl_utils import ortho
 
 if TYPE_CHECKING:
@@ -15,6 +16,15 @@ class CameraController:
     def __init__(self, camera: CameraState, options: EngineOptions) -> None:
         self.camera = camera
         self.options = options
+
+    def _margins(self) -> Tuple[float, float, float, float]:
+        """The content inset ``(left, right, bottom, top)`` in pixels, from the options.
+
+        `mvp` and `screen_to_world` are exact inverses of each other, so both MUST read the
+        gutters from here. If they ever disagree the cursor stops matching the data under
+        it -- a horrible, hard-to-diagnose bug.
+        """
+        return resolve_axis_margins(self.options)
 
     def world_window(
         self, width: int, height: int, padding: float = 1.0
@@ -38,10 +48,7 @@ class CameraController:
         l, r, b, t = window if window is not None else self.world_window(width, height)
 
         # Apply inset margins for axes and labels visibility
-        margin_l = 60.0
-        margin_r = 20.0
-        margin_b = 40.0
-        margin_t = 20.0
+        margin_l, margin_r, margin_b, margin_t = self._margins()
 
         rl, tb = (r - l), (t - b)
 
@@ -78,11 +85,9 @@ class CameraController:
     def screen_to_world(self, sx: float, sy: float, width: int, height: int) -> Tuple[float, float]:
         l, r, b, t = self.world_window(width, height)
 
-        # Apply inset margins for axes and labels visibility
-        margin_l = 60.0
-        margin_r = 20.0
-        margin_b = 40.0
-        margin_t = 20.0
+        # Apply inset margins for axes and labels visibility. Same source as `mvp` -- these
+        # two are exact inverses and must never be allowed to drift apart.
+        margin_l, margin_r, margin_b, margin_t = self._margins()
 
         w_px = max(width, 1e-12)
         h_px = max(height, 1e-12)

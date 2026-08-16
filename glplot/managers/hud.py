@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import typing
 from typing import TYPE_CHECKING, Any, Optional, Tuple
 
@@ -20,6 +21,13 @@ except (ImportError, Exception):
     imgui = None
     GlfwRenderer = None
 
+logger = logging.getLogger(__name__)
+
+#: Cached in ``_workspace`` when construction raised, so a broken panel import is not
+#: retried (and re-logged) on every single frame. Distinct from None, which means
+#: "not built yet".
+_WORKSPACE_FAILED = object()
+
 
 class HudManager:
     def __init__(self, plot: GPULinePlot) -> None:
@@ -29,13 +37,44 @@ class HudManager:
         self.controller = HudController(plot)
         self.imgui_ctx = None
         self.imgui_impl = None
+        self._workspace: Optional[Any] = None
 
-    def _is_3d_layer(self, layer: Any) -> bool:
-        return getattr(layer, "layer_type", "").endswith("3d")
+    @property
+    def workspace(self) -> Optional[Any]:
+        """The mathematical workstation, built on first access; None when unavailable.
+
+        Lazy for two reasons: importing the panels pulls in imgui and every op module,
+        which a HUD-less or GL-less engine must not pay for; and ``engine._main_loop``
+        reads ``hud.workspace`` through ``getattr`` every frame to drain its command
+        queue, so the attribute has to exist even when there is nothing behind it.
+
+        ``enable_hud`` gates construction precisely because of that per-frame read: an
+        engine with the HUD off must stay unaffected, and a property that built the whole
+        panel set on first access would make the drain's ``getattr`` do exactly what it
+        was written to avoid. Turning the HUD on later still builds it on demand.
+
+        A failure to build is logged and cached as None — the engine keeps rendering with
+        the classic HUD rather than dying on an import error in a panel.
+        """
+        if self._workspace is None and IMGUI_AVAILABLE and self.options.enable_hud:
+            try:
+                from ..gui.workspace import Workspace
+
+                self._workspace = Workspace(self.plot, hud=self)
+            except Exception:
+                logger.exception("Workspace unavailable; falling back to the classic HUD.")
+                self._workspace = _WORKSPACE_FAILED
+        if self._workspace is _WORKSPACE_FAILED:
+            return None
+        return self._workspace
 
     def _scene_3d_stats(self) -> dict[str, Any]:
         layers = [layer for layer in self.plot.scene.layers if self._is_3d_layer(layer)]
-        data_layers = [layer for layer in layers if layer.metadata.get("artist") != "axis3d"]
+        from ..core.camera3d import SYSTEM_3D_ARTISTS
+
+        data_layers = [
+            layer for layer in layers if layer.metadata.get("artist") not in SYSTEM_3D_ARTISTS
+        ]
         vertices = sum(
             0 if getattr(layer, "vertices", None) is None else len(layer.vertices)
             for layer in data_layers
@@ -135,16 +174,15 @@ class HudManager:
             self.state._last_hud_selection = hud_sel
             self.state._last_engine_selection = hud_sel
 
-        self._draw_main_menu()
+        # The workspace owns the main menu bar when it is present: Dear ImGui allows only
+        # one per frame, and the workspace's menu already reproduces the View/Actions
+        # items below (driving this same state and controller).
+        workspace = self.workspace
+        if workspace is None:
+            self._draw_main_menu()
 
         if self.state.show_status_overlay:
             self._draw_status_overlay()
-
-        if self.state.show_layers:
-            self._draw_layers_panel()
-
-        if self.state.show_render_controls:
-            self._draw_render_panel()
 
         if self.state.show_profiler:
             self._draw_profiler_panel()
@@ -155,7 +193,19 @@ class HudManager:
         if self.state.show_analysis:
             self._draw_analysis_panel()
 
-        self._draw_layer_inspector()
+        # The layer tree, render controls and layer inspector now live in the workspace's
+        # Scene and Style panels, which supersede them (richer, and correct about which
+        # fields the renderers actually read). Drawing both would give the user two
+        # disagreeing editors for the same fields, so the legacy panels are only used as
+        # the fallback for when the workspace could not be built.
+        if workspace is not None:
+            workspace.draw()
+        else:
+            if self.state.show_layers:
+                self._draw_layers_panel()
+            if self.state.show_render_controls:
+                self._draw_render_panel()
+            self._draw_layer_inspector()
 
     def _draw_main_menu(self) -> None:
         if imgui.begin_main_menu_bar():
@@ -221,14 +271,23 @@ class HudManager:
             else 0
         )
 
+        # Density is a 2D-only accumulator (see engine._density_active). When it is switched
+        # on in a 3D scene it does nothing, so the readout says so rather than claiming a
+        # "Density" mode that the frame is not actually in — and points at the 3D
+        # equivalent, a volume3d layer.
+        if self.plot.display_density and self.plot.is_3d_scene():
+            mode = "Exact (density is 2D — use volume3d in 3D)"
+        elif self.plot.display_density:
+            mode = "Density"
+        else:
+            mode = "Exact"
         imgui.text(
-            f"FPS: {fps:4.1f} | Lines: {n_lines:,} | 3D Layers: {n_3d_layers:,} ({n_3d_vertices:,} verts) | Mode: {'Density' if self.plot.display_density else 'Exact'} | "
+            f"FPS: {fps:4.1f} | Lines: {n_lines:,} | 3D Layers: {n_3d_layers:,} ({n_3d_vertices:,} verts) | Mode: {mode} | "
         )
         imgui.same_line()
-        if self.plot.mouse_world:
-            imgui.text(
-                f"Mouse: ({self.plot.mouse_world[0]:.4f}, {self.plot.mouse_world[1]:.4f}) | "
-            )
+        display_world = self.plot.mouse_world_display()
+        if display_world:
+            imgui.text(f"Mouse: ({display_world[0]:.4f}, {display_world[1]:.4f}) | ")
             imgui.same_line()
 
         imgui.text(f"Alpha: {self.options.default_global_alpha:.3f} | ")
