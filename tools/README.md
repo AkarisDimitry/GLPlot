@@ -172,5 +172,5 @@ For issues with these tools:
 
 ---
 
-**Last Updated**: July 6, 2026  
-**Status**: Production-ready
+These three scripts are the whole directory — see `check_gl_capabilities.py`,
+`validate_runtime_math.py`, and `diagnose_camera_state.py` above for what each does.

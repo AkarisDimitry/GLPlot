@@ -102,26 +102,9 @@ python examples/showcase/04_cosmic_sphere_3d.py
 
 ## Why These Examples?
 
-### Code Simplicity
-All examples are **10-15 lines of actual code** (excluding comments). Perfect for:
-- Quick understanding
-- Copy-paste starting points
-- Teaching GPU visualization
-- Impressing colleagues
-
-### Visual Impact
-Each example is designed to be:
-- **Colorful**: Vibrant palettes that catch the eye
-- **Interactive**: Full pan/zoom/rotate support
-- **Performant**: All run at 60+ FPS with 50k-360k points
-- **Unique**: Demonstrates different GLPlot capabilities
-
-### Performance Showcase
-These examples prove GLPlot's speed advantage:
-- **100k particles**: 60 FPS with smooth interactivity
-- **360k Mandelbrot**: Complex computation + visualization
-- **150k cosmic sphere**: 3D surface with noise effects
-- All with interactive controls - no performance loss
+Each one is 10-15 lines of actual code, colorful, fully interactive (pan/zoom/rotate),
+and runs at 60+ FPS regardless of point count — good starting points to copy-paste from,
+or to use for teaching/demos.
 
 ---
 
@@ -202,6 +185,4 @@ n = 500_000  # Make it even more impressive!
 
 ---
 
-**Author**: GLPlot Community  
-**Created**: 2026-07-06  
-**License**: MIT
+**License**: MIT (see [../../LICENSE](../../LICENSE))

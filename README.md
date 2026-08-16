@@ -1,135 +1,83 @@
-# GLPlot: High-Performance GPU-Accelerated Plotting Library
+# GLPlot: GPU-Accelerated Plotting for Python
 
 [![Tests](https://github.com/AkarisDimitry/GLPlot/workflows/Tests/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/tests.yml)
+[![Lint](https://github.com/AkarisDimitry/GLPlot/workflows/Lint/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/lint.yml)
+[![Build](https://github.com/AkarisDimitry/GLPlot/workflows/Build/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/Python-3.9+-blue.svg)](pyproject.toml)
 
-High-performance, GPU-accelerated plotting library in Python, designed to handle **millions** of geometric primitives effortlessly. It provides a Matplotlib-compatible API while running natively over an OpenGL/GLFW backend, performing instanced rendering and density visualization directly on the GPU.
+GLPlot is a Python plotting library with a Matplotlib-like API that renders on the GPU
+through OpenGL instead of the CPU. Plots that make Matplotlib chug — millions of points,
+dense line families, large 3D scenes — stay interactive: smooth pan, zoom, and rotation,
+even at that scale. If you already know `plt.plot()` / `plt.scatter()`, most of what you
+know carries over directly.
 
-## Motivation
+## Install
 
-Interactive visualization of large-scale datasets is critical in scientific computing, yet traditional CPU-bound plotting libraries (such as Matplotlib) fail to maintain smooth frame rates (60+ FPS) when rendering beyond 10^5 geometric elements. GLPlot addresses this by providing a familiar, high-performance alternative optimized for modern GPUs.
-
-## Features
-
-- **Matplotlib API Compatibility**: Familiar function signatures (`figure`, `plot`, `scatter`, `bar`, `hist`, `imshow`, `quiver`, etc.) reduce adoption friction
-- **Massive Dataset Support**: Efficiently renders millions of geometric primitives through GPU instancing and density visualization
-- **Novel GPU Algorithms**:
-  - Analytical line-family shader expansion (millions of lines from $(a_i, b_i)$ coefficients)
-  - Viewport-relative center projection preventing floating-point precision loss at extreme zoom levels
-  - HDR density accumulation for statistical visualization of overlapping elements
-- **Complete 2D/3D Support**: Lines, scatter plots, filled regions, bars, histograms, matrices, surfaces, wireframes, 3D bars, vector fields
-- **Interactive Controls**: Smooth camera pan/zoom with on-the-fly level-of-detail adaptation
-- **Screen-Space Ambient Occlusion (SSAO)**: Enhanced depth perception for 3D visualizations
-- **Format String Support**: Matplotlib-style syntax (`"r-o"`, `"b--"`, etc.)
-
-## Visual Gallery
-
-GLPlot excels at visualizing massive datasets with stunning interactivity and real-time performance.
-
-### 2D Visualization: 10M-Point Spiral Scatter
-![Scatter Fill](examples/gallery/results/02_scatter_fill.png)
-*Smooth interactive rendering of massive point clouds with color mapping*
-
-### 3D Cloud: 1M-Point Volumetric Projection
-![3D Cloud](examples/gallery/results/07_projected_3d_cloud.png)
-*High-performance 3D point cloud visualization with depth and color encoding*
-
-### Density Visualization: 10M-Sample 2D Histogram
-![Massive Density](examples/gallery/results/10_massive_hist2d_density.png)
-*HDR density mapping handles millions of overlapping points seamlessly*
-
-### 3D Volumetric: 1.75M-Point Nebula
-![Volumetric Nebula](examples/gallery/results/13_volumetric_nebula.png)
-*Advanced 3D volumetric rendering with point cloud opacity and depth*
-
-### 3D Vector Field: Turbulent Flow
-![3D Vector Field](examples/gallery/results/19_turbulent_vector_field_3d.png)
-*Complex 3D vector field visualization with particles and dynamic flow*
-
-> **All visualizations render at 60+ FPS** with interactive panning, zooming, and rotation. No performance degradation with dataset size.
-
-## Quick Showcase - Simple & Beautiful Examples
-
-Start with these elegant examples to see GLPlot's power with minimal code:
-
-### 🚀 Run in 30 seconds
-```bash
-# 100k colorful particles
-python examples/showcase/01_colorful_particles_2d.py
-
-# Mandelbrot fractal (360k points)
-python examples/showcase/02_mandelbrot_zoom_2d.py
-
-# Spinning 3D torus
-python examples/showcase/03_spinning_torus_3d.py
-
-# Cosmic 3D sphere with noise
-python examples/showcase/04_cosmic_sphere_3d.py
-```
-
-### ✨ What You'll See
-
-| Example | Data | Colors | Interaction | Code |
-|---------|------|--------|-------------|------|
-| Particles 2D | 100k points | Rainbow gradient | Pan/Zoom | 10 lines |
-| Mandelbrot | 360k points | Psychedelic | Pan/Zoom | 15 lines |
-| Torus 3D | 50k points | HSV spectrum | Rotate/Zoom | 12 lines |
-| Cosmic Sphere | 150k points | Rainbow noise | Rotate/Zoom | 14 lines |
-
-**All run at 60+ FPS** with smooth interactive controls and vibrant colors.
-
-See [examples/showcase/README.md](examples/showcase/README.md) for detailed descriptions and how to modify them.
-
-## Installation
-
-### From PyPI (once released)
 ```bash
 pip install glplot
 ```
 
-### From Source
+or from source:
+
 ```bash
 git clone https://github.com/AkarisDimitry/GLPlot.git
 cd GLPlot
 pip install -e .
 ```
 
-### Requirements
-- **Python**: 3.9 or later
-- **Core Dependencies**: numpy >= 1.23, scipy >= 1.9, matplotlib >= 3.6, glfw >= 2.5, PyOpenGL >= 3.1.6
-- **HUD Dependency**: imgui[glfw] >= 2.0
+Requires Python 3.9+. Core dependencies: numpy, scipy, matplotlib, glfw, PyOpenGL,
+`imgui[glfw]` (for the on-screen control panel).
 
-### Clean Environment Testing
-```bash
-# Create isolated environment
-python -m venv glplot_test
-source glplot_test/bin/activate  # On Windows: glplot_test\Scripts\activate
-pip install glplot
-python -c "import glplot; print(glplot.__version__)"
-```
+## 30-second example
 
-## Usage
-
-**Matplotlib-style line plots**
 ```python
 import numpy as np
 import glplot.pyplot as plt
 
 x = np.linspace(0, 10, 100)
 
-plt.figure("Sine Wave", figsize=(8, 5))
+plt.figure("My Plot", figsize=(8, 5))
 plt.plot(x, np.sin(x), "r-", lw=2, label="sin(x)")
-plt.plot(x, np.cos(x), "bo", ms=3, label="cos(x)")
+plt.scatter(x[::10], np.sin(x[::10]), c="blue", s=20)
 plt.xlabel("x")
-plt.ylabel("value")
-plt.title("Line and marker syntax")
-plt.grid(True)
+plt.ylabel("y")
 plt.legend()
 plt.show()
 ```
 
-**Scatter, filled regions, bars, and histograms**
+That's it — a real window opens, fully interactive (pan/zoom/rotate) from the first frame.
+
+## What it looks like
+
+| | |
+|---|---|
+| ![Scatter Fill](examples/gallery/results/02_scatter_fill.png) 10M-point spiral scatter | ![3D Cloud](examples/gallery/results/07_projected_3d_cloud.png) 1M-point 3D point cloud |
+| ![Massive Density](examples/gallery/results/10_massive_hist2d_density.png) 10M-sample 2D density histogram | ![Volumetric Nebula](examples/gallery/results/13_volumetric_nebula.png) 1.75M-point volumetric nebula |
+| ![3D Vector Field](examples/gallery/results/19_turbulent_vector_field_3d.png) 3D turbulent vector field | ![Chladni animation](examples/gallery/results/28_chladni_wave_animation.gif) Animated standing-wave pattern, `glplot.animation.FuncAnimation` |
+
+**All of the above render at 60+ FPS** with interactive panning, zooming, and rotation,
+regardless of point count. More in the [example gallery](examples/gallery/README.md)
+(28 scripts) and the [showcase](examples/showcase/README.md) (four ~10-line demos).
+
+## Features
+
+- **Matplotlib-compatible API** — `plot`, `scatter`, `bar`, `hist`, `hist2d`, `imshow`,
+  `contour`/`contourf`, `quiver`, format strings (`"r-o"`, `"b--"`), and more
+- **Millions of points, still interactive** — GPU instancing and density accumulation
+  instead of CPU-side geometry construction
+- **Full 2D/3D** — lines, scatter, filled regions, bars, histograms, matrices, surfaces,
+  wireframes, 3D bars, vector fields, with SSAO depth shading in 3D
+- **Real multi-panel subplots** — `plt.subplots()`, per-panel interaction
+- **Animation** — `glplot.animation.FuncAnimation`/`ArtistAnimation`, exportable to GIF/video
+- **A live control panel** — `python -m glplot` opens a workstation for editing a scene,
+  its layers, and its styling interactively, with undo history
+- **Numerically stable at extreme zoom** — double-precision, viewport-relative coordinate
+  transforms avoid the jitter that single-precision GPU pipelines show at large offsets
+
+## More examples
+
+**Filled regions, bars, and histograms**
 ```python
 import numpy as np
 import glplot.pyplot as plt
@@ -144,19 +92,16 @@ plt.scatter(x[::10], y[::10], c="tab:orange", s=20)
 plt.show()
 ```
 
-**Projected 3D and arrows**
+**3D scatter**
 ```python
 import numpy as np
 import glplot.pyplot as plt
 
 t = np.linspace(0, 16 * np.pi, 100000)
-x = (0.05 * t) * np.cos(t)
-y = (0.05 * t) * np.sin(t)
-z = 0.05 * t
+x, y, z = (0.05 * t) * np.cos(t), (0.05 * t) * np.sin(t), 0.05 * t
 
 plt.figure("Projected 3D")
 plt.scatter3d(x, y, z, c=z, cmap="turbo", s=1.5)
-plt.annotate("start", xy=(0, 0), xytext=(-2, 2), arrowprops={"color": "white"})
 plt.show()
 ```
 
@@ -173,15 +118,12 @@ plt.bar3d(
     x.ravel(), y.ravel(), np.zeros(x.size),
     1, 1, height.ravel(),
     c=height.ravel(), cmap="turbo",
-    gap=0.15,
-    edge_color=(0, 0, 0, 0.75),
-    edge_width=0.7,
-    ssao=True,
+    gap=0.15, edge_color=(0, 0, 0, 0.75), edge_width=0.7, ssao=True,
 )
 plt.show()
 ```
 
-**Matrices and 2D density**
+**Massive 2D density**
 ```python
 import numpy as np
 import glplot.pyplot as plt
@@ -195,184 +137,74 @@ plt.hist2d(x, y, bins=350, cmap="inferno")
 plt.show()
 ```
 
-**Bulk Lines (Density Map)**
-```python
-import numpy as np
-import glplot.pyplot as gplt
+**A million lines at once (`plot_lines`)**
 
-N = 1000000
-a = np.random.randn(N)
-b = np.random.randn(N)
-
-gplt.figure("Density")
-gplt.plot_lines(a, b, x_range=(-2, 2))
-gplt.show(density=True)
-```
-
-## Rendering Architecture
-
-GLPlot runs two parallel rendering pipelines — one for 2D primitives (lines, scatter, density) and one for 3D geometry (bars, surfaces, wireframes, `scatter3d`). The diagram below traces both from input data to saved figure, with the vertical rail marking where each stage runs: **CPU** setup/transfer, **GPU** shading, and the **export** readback.
-
-![GLPlot rendering pipeline](examples/dataflow.png)
-
-A few things worth noting from the diagram:
-
-- **2D density path (steps 7R–9R).** Overlapping primitives are additively accumulated into a single-channel `R32F` texture (`DENSITY_ACCUM_FS`), then resolved in one pass with a log-normalized colormap, `t = log(1 + D) / log(1 + Dmax)`, `RGB = apply_heatmap(t)` (`DENSITY_RESOLVE_FS`). `Dmax` is read back to the CPU to normalize the map.
-- **3D depth cues (step 9).** Cavity/rim shading (`ao = (1 − cavity)·rim`) is computed *inline* in `GEOMETRY3D_FS` from the per-vertex normalized depth `v_z_norm` — an SSAO-style effect, not a separate screen-space pass.
-- **Post-processing (2D step 10 / 3D step 11).** The scene renders into an `RGBA16F` framebuffer and passes through background → bloom → tone-map → grain before the HUD and export.
-- **CPU ↔ GPU boundary.** Only staging/upload (`glBufferData`) and the final `glReadPixels` readback touch the CPU; everything between runs on the GPU.
-
-See [GLPlot_Architecture_and_Mathematical_Formulation.md](GLPlot_Architecture_and_Mathematical_Formulation.md) for the full derivation of each stage.
-
-## Example Gallery
-
-The ordered gallery lives in `examples/gallery` and writes rendered output into `examples/gallery/results`:
-
-```bash
-python examples/gallery/run_gallery.py
-```
-
-Gallery contents:
-
-1. `01_line_plot.py` - dozens of high-resolution line layers plus sampled markers.
-2. `02_scatter_fill.py` - 220k-point spiral scatter plus filled nonlinear band.
-3. `03_bar_hist.py` - million-sample histogram with a bar overlay.
-4. `04_line_family_density.py` - 500k-line high-density `plot_lines`.
-5. `05_guides_and_colormap.py` - 250k clustered samples, guides, colormap, and annotation.
-6. `06_signal_tools.py` - long signal with `step`, `errorbar`, event `stem`, and annotation.
-7. `07_projected_3d_cloud.py` - projected 3D point cloud and 3D line syntax.
-8. `08_vector_field_quiver.py` - arrows, annotation, and vector fields over a matrix.
-9. `09_large_matrix_heatmap.py` - large procedural matrix heatmap.
-10. `10_massive_hist2d_density.py` - one-million-sample 2D density histogram.
-11. `11_contour_pcolormesh_field.py` - contour, contourf, and pcolormesh on a 520 x 520 field.
-12. `12_surface_wireframe_bar3d.py` - projected 3D surface, wireframe, and bar3d syntax.
-13. `13_volumetric_nebula.py` - massive volumetric 3D point field with 750k samples.
-14. `14_bar3d_hex_box_city.py` - mixed square and hexagonal 3D bars.
-15. `15_vector_field_3d.py` - 3D vector field over a massive volumetric flow cloud.
-16. `16_ssao_comparison.py` - dense 3D bars comparing SSAO off vs on.
-17. `17_square_bars3d.py` - square 3D bars with edges and SSAO.
-19. `19_turbulent_vector_field_3d.py` - massive 3D vector field with volumetric particles and stream traces.
-28. `28_chladni_wave_animation.py` - animated standing-wave interference pattern (`glplot.animation.FuncAnimation`) with a live camera zoom in/out, exported to a GIF.
-
-## Quality Assurance & CI/CD
-
-GLPlot uses comprehensive continuous integration to ensure reliability:
-
-### Automated Testing
-- **Test Matrix**: Python 3.9, 3.10, 3.11, 3.12 on macOS, Ubuntu, Windows
-- **Coverage**: 210+ tests (unit, API, edge cases, performance, regression)
-- **Headless Execution**: All tests run without displaying windows
-
-### Code Quality
-- **Linting**: Black, isort, flake8 enforced in CI
-- **Type Hints**: Python type annotations throughout codebase
-- **Coverage Reports**: Automated coverage tracking to Codecov
-
-### Workflow Status
-[![Tests](https://github.com/AkarisDimitry/GLPlot/workflows/Tests/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/tests.yml)
-[![Lint](https://github.com/AkarisDimitry/GLPlot/workflows/Lint/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/lint.yml)
-[![Build](https://github.com/AkarisDimitry/GLPlot/workflows/Build/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/build.yml)
-
-## Testing
-
-GLPlot includes a comprehensive test suite (210+ tests) covering core plotting functionality, 3D geometry, rendering pipeline, and robustness:
-
-```bash
-# Run all tests
-pytest
-
-# With coverage report
-pytest --cov=glplot --cov-report=html
-
-# Run specific test
-pytest tests/test_pyplot.py::test_plot_accepts_y_only_and_returns_artists
-```
-
-All tests run **headless without displaying windows**, enabling CI/CD integration.
-
-## Comparison with Alternative Libraries
-
-| Feature | GLPlot | Matplotlib | Plotly | Datashader | VisPy |
-|---------|--------|-----------|--------|-----------|-------|
-| **GPU Acceleration** | ✓ (OpenGL) | ✗ | ✗ | ✓ | ✓ |
-| **Matplotlib API** | ✓ | ✓ | ✗ | ✗ | ✗ |
-| **Simple Setup** | ✓ | ✓ | ✓ | ✓ | ✗ |
-| **Millions of Points** | ✓ | ✗ | Limited | ✓ | ✓ |
-| **Interactive 3D** | ✓ | Limited | ✓ | Limited | ✓ |
-| **Density Visualization** | ✓ (HDR) | Basic | Limited | ✓ | ✗ |
-| **Zoom Precision** | ✓ (double precision) | ✓ | Basic | ✓ | ✗ |
-
-## Scientific Applications
-
-GLPlot is particularly suited for:
-- **High-energy physics**: Visualizing detector event data and particle trajectories
-- **Computational chemistry**: Molecular visualization and spectroscopic data
-- **Climate science**: Large-scale gridded data visualization
-- **Bioinformatics**: Single-cell RNA-seq and genomic visualization
-- **Materials science**: Volumetric simulations and 3D material structures
-- **Data science**: Extreme-scale density plots and statistical distributions
-
-## Performance Benchmarks
-
-GLPlot maintains **60+ FPS** across all tested platforms with various data sizes:
-
-### Rendering Performance
-- **1M points scatter**: 60fps+
-- **500k line family density**: 60fps+  
-- **1M histogram bins**: 60fps+
-- **3D volumetric cloud (750k points)**: 60fps+
-- **Large 3D meshes**: 60fps+ with 100k+ vertices
-
-### Scaling Efficiency
-- Linear or better scaling with dataset size
-- No performance degradation from 1k to 1M+ points
-- Efficient memory usage with GPU instancing
-- Automatic level-of-detail adaptation
-
-See `examples/benchmark/` for reproducible benchmarks and `tools/` for performance diagnostics.
-
-## Getting Started in 30 Seconds
+Ordinary plotting draws each line as CPU-generated geometry — a million calls to `plot()`
+would build a million separate meshes. `plot_lines` instead uploads each line as an
+`(a, b)` coefficient pair and lets the GPU work out what's visible:
 
 ```python
 import numpy as np
 import glplot.pyplot as plt
 
-# Create data
-x = np.linspace(0, 10, 100)
-y = np.sin(x)
+n = 1_000_000
+a = np.random.randn(n)
+b = np.random.randn(n)
 
-# Plot it (familiar Matplotlib syntax)
-plt.figure("My Plot", figsize=(8, 5))
-plt.plot(x, y, "r-", lw=2, label="sin(x)")
-plt.scatter(x[::10], y[::10], c="blue", s=20)
-plt.xlabel("x")
-plt.ylabel("y")
-plt.legend()
-plt.show()
-
-# That's it! Fully interactive with pan, zoom, rotation
+plt.figure("Density")
+plt.plot_lines(a, b, x_range=(-2, 2))
+plt.show(density=True)
 ```
+
+## How it compares
+
+| Feature | GLPlot | Matplotlib | Plotly | Datashader | VisPy |
+|---|---|---|---|---|---|
+| GPU acceleration | ✓ (OpenGL) | ✗ | ✗ | ✓ | ✓ |
+| Matplotlib-style API | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Millions of points, interactive | ✓ | ✗ | Limited | ✓ | ✓ |
+| Interactive 3D | ✓ | Limited | ✓ | Limited | ✓ |
+| Density visualization | ✓ (HDR) | Basic | Limited | ✓ | ✗ |
+| Precision at extreme zoom | ✓ (double precision) | ✓ | Basic | ✓ | ✗ |
+
+GLPlot sits between "familiar API, CPU-bound" (Matplotlib) and "GPU-fast, low-level"
+(VisPy): a Matplotlib-shaped surface backed by a GPU renderer.
+
+## Rendering architecture
+
+GLPlot runs two rendering pipelines — one for 2D primitives (lines, scatter, density) and
+one for 3D geometry (bars, surfaces, wireframes, `scatter3d`) — both driven from the CPU
+but doing their actual work on the GPU. `glReadPixels` is only ever called for export; the
+interactive path never reads pixels back to the CPU.
+
+![GLPlot rendering pipeline](examples/dataflow.png)
+
+See [GLPlot_Architecture_and_Mathematical_Formulation.md](GLPlot_Architecture_and_Mathematical_Formulation.md)
+for the full derivation of each stage, including the density-accumulation math and the
+viewport-relative projection that keeps zoom numerically stable.
+
+## Testing
+
+```bash
+pytest                                   # run everything
+pytest --cov=glplot --cov-report=html    # with coverage
+pytest tests/test_pyplot.py::test_plot_accepts_y_only_and_returns_artists  # one test
+```
+
+6,800+ tests, run fully headless (no window is ever displayed) so they work in CI. The
+matrix covers Python 3.9–3.12 on Ubuntu, macOS, and Windows; `black`, `isort`, and `flake8`
+are enforced on every push. See `examples/benchmark/` for reproducible performance
+comparisons against Matplotlib, VisPy, fastplotlib, Datashader, and hvPlot, and `tools/`
+for GPU/environment diagnostics.
 
 ## Documentation
 
-- **API Reference**: See docstrings in `glplot.pyplot` module
-- **Architecture**: See [GLPlot_Architecture_and_Mathematical_Formulation.md](GLPlot_Architecture_and_Mathematical_Formulation.md)
-- **Tools & Diagnostics**: See [tools/README.md](tools/README.md)
-- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Code of Conduct**: See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-- **Citation**: See [CITATION.cff](CITATION.cff)
-
-## Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting issues, suggesting enhancements, and submitting pull requests.
-
-## License
-
-GLPlot is released under the [MIT License](LICENSE). See LICENSE file for details.
+- API reference: docstrings in `glplot.pyplot`, or the built docs — see [docs/README.md](docs/README.md)
+- Architecture: [GLPlot_Architecture_and_Mathematical_Formulation.md](GLPlot_Architecture_and_Mathematical_Formulation.md)
+- Dev tools: [tools/README.md](tools/README.md)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
 ## Citation
-
-If you use GLPlot in your research, please cite it as:
 
 ```bibtex
 @software{lombardi2026glplot,
@@ -384,8 +216,13 @@ If you use GLPlot in your research, please cite it as:
 }
 ```
 
-See [CITATION.cff](CITATION.cff) for additional citation formats.
+See [CITATION.cff](CITATION.cff) for other formats.
+
+## License
+
+[MIT](LICENSE).
 
 ## Acknowledgments
 
-This project builds on foundational work in GPU-accelerated rendering and modern OpenGL. We acknowledge the Python scientific computing community and developers of PyOpenGL, GLFW, NumPy, SciPy, and Matplotlib.
+Built on PyOpenGL, GLFW, NumPy, SciPy, Matplotlib, and Dear ImGui — thanks to those
+communities for the foundations this sits on.
