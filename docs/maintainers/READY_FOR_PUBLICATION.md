@@ -172,7 +172,7 @@ All publication-related docs have been created:
 - **`PUBLICATION_WORKFLOW.md`** — Detailed step-by-step instructions (THIS GUIDE)
 - **`PUBLICATION_CHECKLIST.md`** — Scientific software readiness checklist
 - **`JOSS_READINESS.md`** — Journal of Open Source Software criteria (all met)
-- **`build_and_upload.sh`** — Automated build script
+- **`tools/build_and_upload.sh`** — Automated build script
 - **`.readthedocs.yml`** — ReadTheDocs configuration
 - **`pyproject.toml`** — Package metadata and dependencies
 

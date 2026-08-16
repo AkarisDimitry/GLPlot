@@ -68,6 +68,23 @@ python tools/diagnose_camera_state.py
 
 ---
 
+### `build_and_upload.sh`
+**Purpose**: Build the sdist/wheel, validate them with `twine check`, and print the
+`twine upload` commands for TestPyPI/PyPI
+
+**What it checks**:
+- `pyproject.toml`'s `version` matches `glplot.__version__` (warns on mismatch)
+
+**Usage**:
+```bash
+tools/build_and_upload.sh
+```
+
+**When to use**:
+- Preparing a release
+
+---
+
 ## Common Issues and Solutions
 
 ### Issue: "GL_PROGRAM_POINT_SIZE is DISABLED"
