@@ -27,19 +27,19 @@ Interactive visualization of large-scale datasets is critical in scientific comp
 
 GLPlot excels at visualizing massive datasets with stunning interactivity and real-time performance.
 
-### 2D Visualization: 220k-Point Spiral Scatter
+### 2D Visualization: 10M-Point Spiral Scatter
 ![Scatter Fill](examples/gallery/results/02_scatter_fill.png)
 *Smooth interactive rendering of massive point clouds with color mapping*
 
-### 3D Cloud: 100k-Point Volumetric Projection
+### 3D Cloud: 1M-Point Volumetric Projection
 ![3D Cloud](examples/gallery/results/07_projected_3d_cloud.png)
 *High-performance 3D point cloud visualization with depth and color encoding*
 
-### Density Visualization: 1M-Sample 2D Histogram
+### Density Visualization: 10M-Sample 2D Histogram
 ![Massive Density](examples/gallery/results/10_massive_hist2d_density.png)
 *HDR density mapping handles millions of overlapping points seamlessly*
 
-### 3D Volumetric: 750k-Point Nebula
+### 3D Volumetric: 1.75M-Point Nebula
 ![Volumetric Nebula](examples/gallery/results/13_volumetric_nebula.png)
 *Advanced 3D volumetric rendering with point cloud opacity and depth*
 
@@ -209,6 +209,21 @@ gplt.plot_lines(a, b, x_range=(-2, 2))
 gplt.show(density=True)
 ```
 
+## Rendering Architecture
+
+GLPlot runs two parallel rendering pipelines — one for 2D primitives (lines, scatter, density) and one for 3D geometry (bars, surfaces, wireframes, `scatter3d`). The diagram below traces both from input data to saved figure, with the vertical rail marking where each stage runs: **CPU** setup/transfer, **GPU** shading, and the **export** readback.
+
+![GLPlot rendering pipeline](examples/dataflow.png)
+
+A few things worth noting from the diagram:
+
+- **2D density path (steps 7R–9R).** Overlapping primitives are additively accumulated into a single-channel `R32F` texture (`DENSITY_ACCUM_FS`), then resolved in one pass with a log-normalized colormap, `t = log(1 + D) / log(1 + Dmax)`, `RGB = apply_heatmap(t)` (`DENSITY_RESOLVE_FS`). `Dmax` is read back to the CPU to normalize the map.
+- **3D depth cues (step 9).** Cavity/rim shading (`ao = (1 − cavity)·rim`) is computed *inline* in `GEOMETRY3D_FS` from the per-vertex normalized depth `v_z_norm` — an SSAO-style effect, not a separate screen-space pass.
+- **Post-processing (2D step 10 / 3D step 11).** The scene renders into an `RGBA16F` framebuffer and passes through background → bloom → tone-map → grain before the HUD and export.
+- **CPU ↔ GPU boundary.** Only staging/upload (`glBufferData`) and the final `glReadPixels` readback touch the CPU; everything between runs on the GPU.
+
+See [GLPlot_Architecture_and_Mathematical_Formulation.md](GLPlot_Architecture_and_Mathematical_Formulation.md) for the full derivation of each stage.
+
 ## Example Gallery
 
 The ordered gallery lives in `examples/gallery` and writes rendered output into `examples/gallery/results`:
@@ -236,8 +251,8 @@ Gallery contents:
 15. `15_vector_field_3d.py` - 3D vector field over a massive volumetric flow cloud.
 16. `16_ssao_comparison.py` - dense 3D bars comparing SSAO off vs on.
 17. `17_square_bars3d.py` - square 3D bars with edges and SSAO.
-18. `18_hex_bars3d.py` - hexagonal 3D bars with edges and SSAO.
 19. `19_turbulent_vector_field_3d.py` - massive 3D vector field with volumetric particles and stream traces.
+28. `28_chladni_wave_animation.py` - animated standing-wave interference pattern (`glplot.animation.FuncAnimation`) with a live camera zoom in/out, exported to a GIF.
 
 ## Quality Assurance & CI/CD
 

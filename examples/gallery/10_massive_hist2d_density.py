@@ -2,20 +2,41 @@ import numpy as np
 
 import glplot.pyplot as plt
 
+# Simulated positions where beam particles strike a downstream tracking
+# detector after multiple Coulomb scattering through a target: a dense
+# central spot from the common small-angle deflections, surrounded by a
+# diffuse halo from the rarer, large-angle single-scattering events.
 rng = np.random.default_rng(123)
-n = 1_000_000
+n = 10_000_000
 theta = rng.uniform(0, 2 * np.pi, n)
-arms = rng.integers(0, 5, n)
-r = rng.gamma(shape=2.2, scale=0.8, size=n)
-twist = theta + arms * 2 * np.pi / 5 + 0.9 * r
-x = r * np.cos(twist) + rng.normal(scale=0.08, size=n)
-y = r * np.sin(twist) + rng.normal(scale=0.08, size=n)
+r = rng.gamma(shape=2.2, scale=0.8, size=n)  # scattering-angle-like radius
+mm_per_unit = 10.0  # detector spans roughly +/-100 mm
+x = mm_per_unit * (r * np.cos(theta) + rng.normal(scale=0.08, size=n))
+y = mm_per_unit * (r * np.sin(theta) + rng.normal(scale=0.08, size=n))
 
-plt.figure("Gallery - Massive 2D Density", figsize=(8, 6))
-plt.hist2d(x, y, bins=360, cmap="inferno", s=2.0, label="1M samples")
-plt.title("1,000,000-point density histogram")
-plt.xlabel("x")
-plt.ylabel("y")
+plt.figure("Gallery - Detector Impact Density", figsize=(8, 6))
+# Bin over a tight +/-45 mm window rather than the raw data extent (rare
+# large-angle outliers stretch that to +/-150 mm): this is the "zoom in" the
+# populated core needs, and it keeps every displayed cell backed by enough of
+# the 10M hits to read as a continuous density field instead of a halo of
+# isolated single-count dots. `s` is sized to the resulting bin pitch on the
+# canvas so neighboring cells overlap slightly and no grid of gaps shows
+# between them (the previous s=2.0 was far smaller than the cell pitch, which
+# is what made the headless render look like a hatched grid instead of a
+# density map).
+lim = 45.0
+plt.hist2d(
+    x,
+    y,
+    bins=170,
+    range=[[-lim, lim], [-lim, lim]],
+    cmap="plasma",
+    s=40.0,
+    label=f"{n:,} hits",
+)
+plt.title(f"{n:,}-hit density map on a detector plane after multiple Coulomb scattering")
+plt.xlabel("x (mm)")
+plt.ylabel("y (mm)")
 plt.legend()
 # plt.show()
 plt.savefig("examples/gallery/results/10_massive_hist2d_density.png")
