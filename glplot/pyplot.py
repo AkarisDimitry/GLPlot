@@ -5933,6 +5933,7 @@ def stackplot(
     colors: Optional[Sequence[ColorLike]] = None,
     baseline: str = "zero",
     alpha: Optional[float] = None,
+    hatch: Optional[Union[str, Sequence[str]]] = None,
     data: Optional[Any] = None,
 ) -> list:
     """Draw a stacked area chart -- each series filled on top of the last.
@@ -5946,6 +5947,8 @@ def stackplot(
         baseline (str, optional): Only 'zero' is drawn; 'sym', 'wiggle' and
             'weighted_wiggle' are accepted and fall back to it.
         alpha (float, optional): Transparency.
+        hatch (str or sequence, optional): Accepted for matplotlib parity; ignored. GLPlot
+            fills are flat colour, with no hatch renderer.
         data (indexable, optional): If given, the series may be keys into it.
 
     Returns:
@@ -5958,8 +5961,11 @@ def stackplot(
         x, *ys = _resolve_data_args("stackplot", data, x, *ys)
     _warn_unsupported(
         "stackplot",
-        {"baseline": baseline if baseline != "zero" else None},
-        {"baseline": "is not supported; the stack is drawn from a zero baseline"},
+        {"baseline": baseline if baseline != "zero" else None, "hatch": hatch},
+        {
+            "baseline": "is not supported; the stack is drawn from a zero baseline",
+            "hatch": "has no effect: GLPlot has no hatch renderer, so fills are drawn flat",
+        },
     )
     x_arr = _as_float_array(x, ndim=1, name="x")
     # A single 2-D array is matplotlib's other calling convention; unpack it to rows.
@@ -13442,6 +13448,10 @@ _NOT_EXPORTED: dict = {
     "backend, so there is nothing to filter",
     "backend_registry": "matplotlib-3.9+ backend discovery/selection registry; GLPlot has "
     "exactly one backend and is not in it",
+    "available_backends": "matplotlib-3.9+ backend discovery; GLPlot has exactly one "
+    "backend and is not in matplotlib's registry",
+    "requested_backend": "matplotlib-3.9+ backend-selection state; meaningless with a "
+    "single, non-matplotlib-registered backend",
     "Colorizer": "matplotlib-3.10+ shared colour-mapping object; GLPlot resolves cmap/norm/"
     "vmin/vmax per call instead of sharing one across artists",
     "ColorizingArtist": "matplotlib-3.10+ mixin for artists bound to a shared Colorizer; "
