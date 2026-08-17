@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from ..options import EngineOptions, RenderMode
+    from ..options import RenderMode
 
 
 @dataclass

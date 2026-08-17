@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Optional, Protocol, Tuple
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 import numpy as np
 
 if TYPE_CHECKING:
     from ..options import BlendMode
-    from .context import RenderContext
 
 
 @dataclass

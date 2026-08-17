@@ -70,7 +70,7 @@ class TestClipDistanceRegression:
         y = np.linspace(0, 1, 100)
 
         gplt.plot(x, y)
-        fig = gplt.gcf()
+        gplt.gcf()
         # Should handle extreme aspect ratios
 
     def test_many_layered_clip_handling(self):

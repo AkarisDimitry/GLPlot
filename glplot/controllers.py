@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Optional, Tuple
 import numpy as np
 
 from .options import resolve_axis_margins
-from .utils.gl_utils import ortho
 
 if TYPE_CHECKING:
     from .core.legacy import CameraState
@@ -36,11 +35,11 @@ class CameraController:
         half_w = padding / max(self.camera.zoom_x, 1e-12)
         half_h = padding / max(self.camera.zoom_y, 1e-12)
 
-        l = self.camera.cx - half_w
+        left = self.camera.cx - half_w
         r = self.camera.cx + half_w
         b = self.camera.cy - half_h
         t = self.camera.cy + half_h
-        return l, r, b, t
+        return left, r, b, t
 
     def mvp(
         self, width: int, height: int, window: Optional[Tuple[float, float, float, float]] = None

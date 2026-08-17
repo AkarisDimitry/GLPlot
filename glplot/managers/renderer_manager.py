@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from enum import Flag, auto
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
 if TYPE_CHECKING:
     from ..engine import GPULinePlot
     from ..core.layers import BaseLayer
-    from ..options import EngineOptions
 
 from ..renderers.axis import AxisRenderer
 from ..renderers.fractal import FractalRenderer
@@ -91,21 +90,21 @@ class RendererManager:
         # 1. Filter by visibility and capability metadata
         # (In V1, we assume all layers support EXACT/EXPORT unless specified)
         eligible = []
-        for l in layers:
-            if not l.style.visible:
+        for layer in layers:
+            if not layer.style.visible:
                 continue
 
             # Capability check
             # Default to EXACT | EXPORT | DENSITY if not specified
-            caps = l.metadata.get(
+            caps = layer.metadata.get(
                 "capabilities",
                 LayerCapability.EXACT | LayerCapability.EXPORT | LayerCapability.DENSITY,
             )
             if capability in caps:
-                eligible.append(l)
+                eligible.append(layer)
 
         # 2. Sort by zorder, maintaining stable insertion order for ties
-        return sorted(eligible, key=lambda l: l.style.zorder)
+        return sorted(eligible, key=lambda layer: layer.style.zorder)
 
     def draw_density(
         self,
@@ -159,7 +158,7 @@ class RendererManager:
         so do the bulk verbs (``plot_lines`` and friends) where the heatmap *is* the point
         and the colours are usually a flat fill chosen to weigh every line the same.
         """
-        return any(l.metadata.get("explicit_color") for l in layers)
+        return any(layer.metadata.get("explicit_color") for layer in layers)
 
     def draw_exact(self, layers: List[BaseLayer], context: Any) -> None:
         """Main EXACT pass render loop."""
@@ -169,16 +168,22 @@ class RendererManager:
         #   1. floor3d  — behind all data (semi-transparent floor plane)
         #   2. data     — user geometry
         #   3. axis3d   — bounding-box wireframe always on top
-        floor_layers = [l for l in sorted_layers if l.metadata.get("artist") == "floor3d"]
-        axis_layers = [l for l in sorted_layers if l.metadata.get("artist") == "axis3d"]
+        floor_layers = [
+            layer for layer in sorted_layers if layer.metadata.get("artist") == "floor3d"
+        ]
+        axis_layers = [layer for layer in sorted_layers if layer.metadata.get("artist") == "axis3d"]
         data_layers = self._order_by_opacity(
-            [l for l in sorted_layers if l.metadata.get("artist") not in ("floor3d", "axis3d")]
+            [
+                layer
+                for layer in sorted_layers
+                if layer.metadata.get("artist") not in ("floor3d", "axis3d")
+            ]
         )
 
         # Pre-count types for colourmap normalisation (data layers only)
         type_totals = {}
-        for l in data_layers:
-            type_totals[l.layer_type] = type_totals.get(l.layer_type, 0) + 1
+        for layer in data_layers:
+            type_totals[layer.layer_type] = type_totals.get(layer.layer_type, 0) + 1
 
         def _draw_batch(batch: list) -> None:
             type_counters = {}
@@ -213,10 +218,14 @@ class RendererManager:
         from ..core.layers import Layer3D
         from ..renderers.geometry3d import is_translucent
 
-        if not any(isinstance(l, Layer3D) for l in layers):
+        if not any(isinstance(layer, Layer3D) for layer in layers):
             return layers
-        opaque = [l for l in layers if not (isinstance(l, Layer3D) and is_translucent(l))]
-        translucent = [l for l in layers if isinstance(l, Layer3D) and is_translucent(l)]
+        opaque = [
+            layer for layer in layers if not (isinstance(layer, Layer3D) and is_translucent(layer))
+        ]
+        translucent = [
+            layer for layer in layers if isinstance(layer, Layer3D) and is_translucent(layer)
+        ]
         return opaque + translucent
 
     def draw_axes(self, axis_manager: Any, context: Any) -> None:

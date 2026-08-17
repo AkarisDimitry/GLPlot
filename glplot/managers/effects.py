@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, List
 
-import glfw
 from OpenGL.GL import *
 
 from ..renderers.base import GLOffscreenTarget

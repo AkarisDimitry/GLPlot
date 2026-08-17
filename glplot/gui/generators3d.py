@@ -45,8 +45,8 @@ Shapes
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 import numpy as np
 

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import collections
-import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from ..engine import GPULinePlot

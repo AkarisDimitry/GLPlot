@@ -2,11 +2,11 @@ import numpy as np
 from OpenGL.GL import *
 
 
-def ortho(l: float, r: float, b: float, t: float, n: float = -1.0, f: float = 1.0) -> np.ndarray:
-    rl, tb, fn = (r - l), (t - b), (f - n)
+def ortho(left: float, r: float, b: float, t: float, n: float = -1.0, f: float = 1.0) -> np.ndarray:
+    rl, tb, fn = (r - left), (t - b), (f - n)
     return np.array(
         [
-            [2.0 / rl, 0.0, 0.0, -(r + l) / rl],
+            [2.0 / rl, 0.0, 0.0, -(r + left) / rl],
             [0.0, 2.0 / tb, 0.0, -(t + b) / tb],
             [0.0, 0.0, -2.0 / fn, -(f + n) / fn],
             [0.0, 0.0, 0.0, 1.0],

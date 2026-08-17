@@ -69,9 +69,9 @@ class TextRenderer:
         """Helper to draw all text layers in the scene."""
         if not IMGUI_AVAILABLE:
             return
-        for l in layers:
-            if l.layer_type == "text":
-                self.draw(l, ctx)
+        for layer in layers:
+            if layer.layer_type == "text":
+                self.draw(layer, ctx)
 
     def draw_density(self, layer: TextLayer, ctx: RenderContext) -> None:
         # Text does not participate in density

@@ -29,3 +29,11 @@ per-file-ignores =
     # genuinely undefined names elsewhere.
     glplot/*: F403,F405
     glplot/*/*: F403,F405
+    # These two tests import glplot only after doing something that must run first:
+    # test_camera_anisotropy patches sys.modules["OpenGL"/"glfw"] before anything
+    # imports glplot (so glplot picks up the mocks, not the real bindings), and
+    # test_mpl_bridge calls matplotlib.use("Agg") before matplotlib-dependent
+    # imports (so a real display is never required). Moving either import to the
+    # top would defeat the point of the test.
+    tests/test_camera_anisotropy.py: E402
+    tests/test_mpl_bridge.py: E402

@@ -44,7 +44,7 @@ from glplot.renderers import line_family as lf
 from glplot.renderers import patch as pt
 from glplot.renderers import polyline as pl
 from glplot.renderers import scatter as sc
-from glplot.renderers.geometry3d import OUTLINE_SOLID_STEPS, _outline_offsets
+from glplot.renderers.geometry3d import OUTLINE_SOLID_STEPS
 from glplot.utils.shaders import (
     EXACT_LINES_FS,
     PATCH_FS,
@@ -373,7 +373,7 @@ class TestOutlineOffIsUnchanged:
 
     def test_geometry_is_not_touched(self, monkeypatch):
         """An outline is a draw-time decision: it must not rewrite the layer's arrays."""
-        rec = install_recorder(monkeypatch, pt, UNIFORMS["patch"])
+        install_recorder(monkeypatch, pt, UNIFORMS["patch"])
         layer = make_patch(indexed=True)
         layer.style.outline_enabled = True
         vertices, indices = layer.vertices.copy(), layer.indices.copy()

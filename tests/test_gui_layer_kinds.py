@@ -165,7 +165,10 @@ class TestKindOptions:
         narrow = layerops.add_xy_layer(
             plot, *xy, kind="bar", label="n", options={"baseline": 0.0, "bar_width": 0.1}
         )
-        span = lambda l: float(l.vertices[:, 0].max() - l.vertices[:, 0].min())
+
+        def span(layer):
+            return float(layer.vertices[:, 0].max() - layer.vertices[:, 0].min())
+
         thin = span(narrow)
         wide = layerops.replot_layer_xy(
             plot,
@@ -383,7 +386,7 @@ class TestFieldArtistsHaveNoKind:
     def test_imshow_renders_as_a_scatter(self):
         """The premise: this is why layer_type alone cannot answer the question."""
         layers = _pyplot_layers(lambda: gplt.imshow(np.zeros((8, 8))))
-        assert [str(getattr(l, "layer_type", "")) for l in layers] == ["scatter"]
+        assert [str(getattr(layer, "layer_type", "")) for layer in layers] == ["scatter"]
 
     @pytest.mark.parametrize("name", ["axhline", "axvline"])
     def test_guides_have_no_kind(self, name):

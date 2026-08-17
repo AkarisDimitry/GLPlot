@@ -757,10 +757,12 @@ def write_animation(
 
     if suffix in VIDEO_EXTENSIONS:
         if video_backend() is not None:
-            return write_mp4(frames, resolved, fps=fps, count=count, **kwargs)  # type: ignore[arg-type]
+            result = write_mp4(frames, resolved, fps=fps, count=count, **kwargs)
+            return result  # type: ignore[arg-type]
         if not fallback:
             # Raises the RuntimeError naming both installation routes.
-            return write_mp4(frames, resolved, fps=fps, count=count, **kwargs)  # type: ignore[arg-type]
+            result = write_mp4(frames, resolved, fps=fps, count=count, **kwargs)
+            return result  # type: ignore[arg-type]
         target = resolved.with_suffix(".gif" if pillow_available() else ".png")
         warnings.warn(
             f"No video encoder available, so {resolved.name} could not be written; wrote "

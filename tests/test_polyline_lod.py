@@ -8,12 +8,12 @@ zoom out. Pure numpy, no GL context needed for the stride decision.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from glplot.core.context import RenderContext
-from glplot.core.layers import PolylineLayer
+from glplot.core.layers import PolylineLayer, ScatterLayer
 from glplot.options import EngineOptions, RenderMode
 from glplot.renderers.polyline import PolylineRenderer
+from glplot.renderers.scatter import ScatterRenderer
 
 
 def _ctx(world):
@@ -74,11 +74,6 @@ class TestPolylineLOD:
         assert idx[0] == 0 and idx[-1] == 999  # first and last always kept
         assert np.all(np.diff(idx) > 0)  # strictly increasing (connectivity)
         assert len(idx) < 1000  # actually decimated
-
-
-from glplot.core.layers import ScatterLayer
-from glplot.renderers.base import GLScatterBuffers
-from glplot.renderers.scatter import ScatterRenderer
 
 
 def _cloud(n):

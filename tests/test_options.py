@@ -4,8 +4,6 @@ Focus on enum options, dataclass initialization, and default values
 without requiring OpenGL or GPU.
 """
 
-import pytest
-
 from glplot.options import (
     BlendMode,
     EngineOptions,

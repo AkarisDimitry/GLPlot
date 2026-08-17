@@ -1216,8 +1216,11 @@ class Workspace:
             self._panel_toggler("presentation"),
             icon="play",
             keywords=("scenes", "chapters", "slides", "talk", "present", "story"),
-            description="Show the Presentation panel: the timeline's scenes as chapters you "
-            f"can name, reorder and step through. Also {_chord_text(_PANEL_CHORDS['presentation'])}.",
+            description=(
+                "Show the Presentation panel: the timeline's scenes as chapters you can "
+                f"name, reorder and step through. Also "
+                f"{_chord_text(_PANEL_CHORDS['presentation'])}."
+            ),
             is_enabled=self._has_presentation_panel,
             is_checked=lambda: bool(self.open.get("presentation", False)),
         )

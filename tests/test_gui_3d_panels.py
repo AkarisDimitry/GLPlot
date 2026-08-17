@@ -148,11 +148,11 @@ class TestView3DPanel:
     def test_axes_toggle_removes_the_artist(self, ws, plot):
         plot.set_ndim(3)
         layerops3d.add_xyz_layer(plot, *_curve(), kind="scatter3d", label="c")
-        assert any(l.metadata.get("artist") == "grid3d" for l in plot.scene.layers)
+        assert any(layer.metadata.get("artist") == "grid3d" for layer in plot.scene.layers)
         panel = self._panel(ws)
         panel._set_axes("show_grid", False)
         ws.drain()
-        assert not any(l.metadata.get("artist") == "grid3d" for l in plot.scene.layers)
+        assert not any(layer.metadata.get("artist") == "grid3d" for layer in plot.scene.layers)
 
     def test_box_aspect_setter(self, ws, plot):
         plot.set_ndim(3)

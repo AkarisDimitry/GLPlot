@@ -266,7 +266,8 @@ layout(location = 2) in float a_size;   // per-point size multiplier (point clou
 
 uniform mat4 u_mvp;
 uniform float u_point_size;
-uniform float u_ref_w;   // clip-space w at scene centre (≈ camera distance); 0 = disable perspective sizing
+uniform float u_ref_w;   // clip-space w at scene centre (≈ camera distance);
+                         // 0 = disable perspective sizing
 uniform vec2 u_z_range;
 uniform int u_is_points;
 
@@ -714,7 +715,7 @@ void main() {
     float eps = (t - b) * 0.1;
     float ext_t = t + eps;
     float ext_b = b - eps;
-    
+
     bool outsideY = (yA > ext_t && yB > ext_t) || (yA < ext_b && yB < ext_b);
 
     if (drop || noOverlapX || outsideY) {
@@ -999,7 +1000,7 @@ out vec4 v_col;
 
 void main() {
     float width = max(1.0, u_width);
-    
+
     vec4 p1 = u_mvp * vec4(a_pos, 0.0, 1.0);
     vec4 p2 = u_mvp * vec4(a_next, 0.0, 1.0);
 
@@ -1012,12 +1013,12 @@ void main() {
 
     // Offset in NDC space
     vec2 offset = norm * (width / u_viewport_size) * a_side;
-    
+
     // Determine if this vertex belongs to the start or end of the segment
     // We assume 4 vertices per segment (0,1 at start; 2,3 at end)
     float is_end = float(gl_VertexID % 4 >= 2);
     vec4 p = mix(p1, p2, is_end);
-    
+
     p.xy += offset * p.w;
 
     gl_Position = p;

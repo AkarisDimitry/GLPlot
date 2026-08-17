@@ -43,8 +43,8 @@ class TestFigureCreation:
 
     def test_multiple_figures(self):
         """Test managing multiple figures."""
-        fig1 = gplt.figure("fig1")
-        fig2 = gplt.figure("fig2")
+        gplt.figure("fig1")
+        gplt.figure("fig2")
         assert gplt.gcf().title == "fig2"
         gplt.figure("fig1")
         assert gplt.gcf().title == "fig1"

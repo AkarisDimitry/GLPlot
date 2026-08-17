@@ -51,7 +51,7 @@ def test_ssao_option_and_bar3d_edges():
     gplt._cleanup_pyplot_state()
     layer = gplt.scatter3d([0, 1], [0, 1], [0, 2], s=4)
     fig = gplt.gcf()
-    axis_layers = [l for l in fig.scene.layers if l.metadata.get("artist") == "axis3d"]
+    axis_layers = [layer for layer in fig.scene.layers if layer.metadata.get("artist") == "axis3d"]
     assert len(axis_layers) == 1
     assert axis_layers[0].vertices.shape[1] == 3
     assert axis_layers[0].style.line_width >= 2.0
@@ -75,7 +75,7 @@ def test_ssao_option_and_bar3d_edges():
     assert np.allclose(layer.metadata["scene_bounds"], axis_bounds)
 
     fig.set_3d_view(show_axes=False)
-    assert not any(l.metadata.get("artist") == "axis3d" for l in fig.scene.layers)
+    assert not any(layer.metadata.get("artist") == "axis3d" for layer in fig.scene.layers)
     gplt._cleanup_pyplot_state()
 
 

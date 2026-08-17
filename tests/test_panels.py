@@ -12,7 +12,6 @@ None of these need a GL context: they exercise state and geometry, not rendering
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 import glplot.pyplot as gplt

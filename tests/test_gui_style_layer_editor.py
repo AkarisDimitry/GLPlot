@@ -277,16 +277,18 @@ class TestKind3DConversion:
         plot.set_ndim(3)
         first = _add3d(plot, kind="scatter3d", label="first")
         second = _add3d(plot, kind="scatter3d", label="second")
-        assert [l.label for l in _data_layers(plot)] == ["first", "second"]
+        assert [layer.label for layer in _data_layers(plot)] == ["first", "second"]
         _select(plot, first)
 
         panel._replot_layer3d(first, "surface3d", {"nu": 0, "nv": 0}, undoable=True)
         ws.drain()
 
-        assert all(l is not first for l in plot.scene.layers), "the old layer must be dropped"
+        assert all(
+            layer is not first for layer in plot.scene.layers
+        ), "the old layer must be dropped"
         new = layerops.find_layer(plot, plot.interaction.selected_layer_id)
         assert new.label == "first"
-        assert [l.label for l in _data_layers(plot)] == ["first", "second"]
+        assert [layer.label for layer in _data_layers(plot)] == ["first", "second"]
         assert _data_layers(plot)[0] is new
         assert _data_layers(plot)[1] is second
 
@@ -377,7 +379,7 @@ class TestKind3DConversion:
         plot.set_ndim(3)
         layer = _select(plot, _add3d(plot, kind="scatter3d"))
         panel._replot_layer3d(layer, "line3d", {}, undoable=True)
-        plot.scene.layers = [l for l in plot.scene.layers if l is not layer]
+        plot.scene.layers = [item for item in plot.scene.layers if item is not layer]
         ws.drain()  # must not raise
 
     def test_the_picker_is_blocked_for_the_two_unconvertible_cases(self, plot, panel):

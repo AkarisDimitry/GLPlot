@@ -669,11 +669,11 @@ class TestAxes3D:
         plot = _plot_3d()
         style = styles.get_style("stage")
         styles.apply_style(plot, style)
-        helix = next(l for l in plot.scene.layers if getattr(l, "label", "") == "helix")
+        helix = next(layer for layer in plot.scene.layers if getattr(layer, "label", "") == "helix")
         assert tuple(helix.style.color) in style.palette
 
     def _box_ink(self, plot: GPULinePlot):
-        box = next(l for l in plot.scene.layers if l.metadata.get("artist") == "axis3d")
+        box = next(layer for layer in plot.scene.layers if layer.metadata.get("artist") == "axis3d")
         return tuple(float(v) for v in box.colors[0])
 
     def test_decoration_ink_follows_the_page_not_the_palette(self):

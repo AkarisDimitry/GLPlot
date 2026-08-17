@@ -210,7 +210,7 @@ class TestScatterRendererIntegration:
 
         gplt.scatter(x, y, size=10.0)
         # Access through layers, not legacy scatters
-        layers = [l for l in gplt.gcf().scene.layers if l.layer_type == "scatter"]
+        layers = [layer for layer in gplt.gcf().scene.layers if layer.layer_type == "scatter"]
         assert len(layers) > 0
         layer = layers[0]
 
@@ -224,7 +224,7 @@ class TestScatterRendererIntegration:
 
         gplt.scatter(x, y)
         # Access through layers
-        layers = [l for l in gplt.gcf().scene.layers if l.layer_type == "scatter"]
+        layers = [layer for layer in gplt.gcf().scene.layers if layer.layer_type == "scatter"]
         assert len(layers) > 0
         layer = layers[0]
         bounds = layer.get_intrinsic_bounds()

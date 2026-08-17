@@ -21,7 +21,6 @@ from ..utils.shaders import (
 if TYPE_CHECKING:
     from ..core import SceneData
     from ..options import EngineOptions
-    from ..renderers.exact import GLLineBuffers
 
 
 def _as_int32(raw: Any) -> np.ndarray:
@@ -99,7 +98,7 @@ class PickingManager:
                 continue
 
             # IDs are 1-based, 0 is "nothing"
-            layer_id_start = current_offset + 1
+            current_offset + 1
 
             if layer.layer_type == "line_family":
                 if layer.ab is not None and hasattr(layer, "_gl"):

@@ -563,7 +563,8 @@ def axis_extents(bounds: Bounds3D) -> Tuple[float, float, float]:
         float(bounds[5]) - float(bounds[4]),
     ]
     largest = max(max(spans), 1e-6)
-    return tuple(span if span > largest * 1e-3 else largest for span in spans)  # type: ignore[return-value]
+    result = tuple(span if span > largest * 1e-3 else largest for span in spans)
+    return result  # type: ignore[return-value]
 
 
 def tick_marks(

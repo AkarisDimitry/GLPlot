@@ -11,8 +11,7 @@ from ..utils.shaders import DENSITY_RESOLVE_FS, INTERACTION_FULLSCREEN_VS
 from .base import GLOffscreenTarget
 
 if TYPE_CHECKING:
-    from ..core.context import RenderContext
-    from ..options import EngineOptions
+    pass
 
 
 class DensityRenderer:

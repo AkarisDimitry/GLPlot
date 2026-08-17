@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -103,7 +103,7 @@ class RenderPolicyManager:
 
         # 1. Line Families (Approx coverage: Count * ViewportWidth * Width)
         if scene.lines.ab is not None:
-            from .options import RenderMode
+            pass
 
             # Relax budget for density mode as overdraw is the goal
             mode_multiplier = 100.0 if ctx.is_density else 1.0
@@ -129,8 +129,11 @@ class RenderPolicyManager:
     def should_force_density_mode(
         self, scene: SceneData, ctx: RenderContext, factor: float = 3.0
     ) -> bool:
-        """Determines if the scene is so complex that density mode should be forced during interaction."""
-        target_px2 = ctx.fb_width * ctx.fb_height * factor
+        """Determines if the scene is so complex that density mode should be forced.
+
+        Evaluated during interaction.
+        """
+        ctx.fb_width * ctx.fb_height * factor
 
         # Reuse LOD calc logic but for a higher threshold
         # (This is a simplified version for V1)

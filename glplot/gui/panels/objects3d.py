@@ -46,7 +46,7 @@ import numpy as np
 from ...core.camera3d import Camera3D
 from .. import generators3d, layerops, layerops3d, widgets
 from ..datasets import Column, DataSet
-from ..generators3d import CATEGORIES, GENERATORS, Generator3D, GeneratorError
+from ..generators3d import CATEGORIES, Generator3D, GeneratorError
 from ..history import Command
 from ..icons import icon_button
 from .base import Panel

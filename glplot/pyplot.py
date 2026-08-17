@@ -6,7 +6,7 @@ import sys as _sys
 import time
 import warnings
 from numbers import Integral
-from typing import Any, Iterable, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -6708,7 +6708,6 @@ def hexbin(
         >>> gplt.hexbin(x, y, gridsize=40)
         >>> gplt.hexbin(x, y, C=weights, reduce_C_function=np.max)
     """
-    from matplotlib import colormaps
 
     x, y, C = _resolve_data_args("hexbin", data, x, y, C)
     _warn_unsupported(
@@ -10551,7 +10550,7 @@ def pcolormesh(*args: Any, **kwargs: Any):
 
 
 def _pcolor_impl(func: str, args: tuple, kwargs: dict):
-    from matplotlib import colormaps
+    pass
 
     cmap = kwargs.pop("cmap", None)
     norm = kwargs.pop("norm", None)
@@ -10736,7 +10735,6 @@ def tripcolor(*args: Any, **kwargs: Any):
             "vertex colours"
         },
     )
-    from matplotlib import colormaps
 
     cmap = kwargs.pop("cmap", None)
     norm = kwargs.pop("norm", None)
@@ -11902,7 +11900,7 @@ def _tick_labels(
             f"on the {axis}-axis; call {'xticks' if axis == 'x' else 'yticks'}() first to "
             "set both together"
         )
-    _ticks(axis, func, current, [str(l) for l in labels], False, fontsize, color)
+    _ticks(axis, func, current, [str(label) for label in labels], False, fontsize, color)
     return list(labels)
 
 

@@ -113,7 +113,10 @@ class TestUnboundedDetail:
         magnified table shows a straight line. Re-sampling the function shows the 80
         periods, because it computes them on arrival.
         """
-        f = lambda x: np.sin(1.0 / x)
+
+        def f(x):
+            return np.sin(1.0 / x)
+
         window = (1e-3, 2e-3)
 
         def sign_changes(y):

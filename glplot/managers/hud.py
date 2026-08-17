@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import logging
-import typing
-from typing import TYPE_CHECKING, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 
 from .hud_state import HudController, HudState
 
 if TYPE_CHECKING:
-    from ..core import CameraState, FrameState
     from ..engine import GPULinePlot
-    from ..options import BlendMode, EngineOptions
 
 try:
     import imgui
@@ -282,7 +279,8 @@ class HudManager:
         else:
             mode = "Exact"
         imgui.text(
-            f"FPS: {fps:4.1f} | Lines: {n_lines:,} | 3D Layers: {n_3d_layers:,} ({n_3d_vertices:,} verts) | Mode: {mode} | "
+            f"FPS: {fps:4.1f} | Lines: {n_lines:,} | "
+            f"3D Layers: {n_3d_layers:,} ({n_3d_vertices:,} verts) | Mode: {mode} | "
         )
         imgui.same_line()
         display_world = self.plot.mouse_world_display()
@@ -366,7 +364,12 @@ class HudManager:
             return
 
         layer = next(
-            (l for l in self.plot.scene.layers if l.layer_id == self.state.selected_layer_id), None
+            (
+                candidate
+                for candidate in self.plot.scene.layers
+                if candidate.layer_id == self.state.selected_layer_id
+            ),
+            None,
         )
         if not layer:
             return
@@ -517,7 +520,7 @@ class HudManager:
             items = [m.name for m in BlendMode]
             try:
                 current = items.index(self.options.blend_mode.name)
-            except:
+            except ValueError:
                 current = 0
 
             imgui.push_item_width(120)

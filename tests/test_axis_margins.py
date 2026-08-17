@@ -246,9 +246,6 @@ class TestExportUsesDefaultMargins:
                 self.active_panel_index = 0
                 self.panels = [Panel(self.options)]
 
-            def _is_pure_3d_scene(self):
-                return False
-
             def _get_ndc_transform(self, window):
                 return (1.0, 1.0), (0.0, 0.0)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ctypes as C
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 from OpenGL.GL import *

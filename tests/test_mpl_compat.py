@@ -1074,7 +1074,7 @@ class TestImshowAndContourfUnderARealScale:
         GPU buffer matches this exact computation (see the project's own memory notes)."""
         from glplot.utils.scale import forward
 
-        xmin, xmax, ymin, ymax = 1.0, 100.0, 1.0, 50.0
+        xmin, xmax = 1.0, 100.0
         x_positions = forward(np.array([xmin, xmax]), "log")
         np.testing.assert_allclose(x_positions, [0.0, 2.0])
 

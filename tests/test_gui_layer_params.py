@@ -78,7 +78,7 @@ class TestLayerParamEditor:
         lay = _bar(plot)
         panel._replot_layer(lay, "line", {})
         # Remove it before the drain runs the queued apply().
-        plot.scene.layers = [l for l in plot.scene.layers if l is not lay]
+        plot.scene.layers = [layer for layer in plot.scene.layers if layer is not lay]
         ws.queue.drain(plot)  # must not raise
 
 

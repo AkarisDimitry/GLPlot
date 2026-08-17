@@ -47,7 +47,7 @@ dollied keeps the distance the user chose.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Iterator, MutableMapping, Optional, Tuple
 
 import numpy as np
@@ -289,6 +289,9 @@ class Camera3D:
 
     def copy(self) -> "Camera3D":
         """An independent copy — tuples are immutable, so a shallow dataclass copy is deep."""
+        box_aspect: Optional[Vec3] = None
+        if self.box_aspect is not None:
+            box_aspect = tuple(self.box_aspect)  # type: ignore[assignment]
         return Camera3D(
             elev=self.elev,
             azim=self.azim,
@@ -298,7 +301,7 @@ class Camera3D:
             projection=self.projection,
             up_axis=self.up_axis,
             pan=tuple(self.pan),  # type: ignore[arg-type]
-            box_aspect=None if self.box_aspect is None else tuple(self.box_aspect),  # type: ignore[arg-type]
+            box_aspect=box_aspect,
             auto_spin=self.auto_spin,
         )
 

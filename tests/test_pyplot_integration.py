@@ -53,8 +53,8 @@ class TestFigureManagement:
 
     def test_multiple_figures(self):
         """Test creating and switching between figures."""
-        fig1 = gplt.figure("fig1")
-        fig2 = gplt.figure("fig2")
+        gplt.figure("fig1")
+        gplt.figure("fig2")
         assert gplt.gcf().title == "fig2"
 
     def test_clf_clears_current_figure(self):

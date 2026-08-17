@@ -187,8 +187,12 @@ JS_INCLUDE = """
     }
     show(Math.max(0, Math.min(frames.length - 1, next)));
   }
-  function play() { if (!timer) { timer = setInterval(step, interval); toggle.textContent = "Pause"; } }
-  function stop() { if (timer) { clearInterval(timer); timer = null; } toggle.textContent = "Play"; }
+  function play() {
+    if (!timer) { timer = setInterval(step, interval); toggle.textContent = "Pause"; }
+  }
+  function stop() {
+    if (timer) { clearInterval(timer); timer = null; } toggle.textContent = "Play";
+  }
   toggle.addEventListener("click", function() { timer ? stop() : play(); });
   slider.addEventListener("input", function() { stop(); show(parseInt(slider.value, 10)); });
   slider.max = frames.length - 1;

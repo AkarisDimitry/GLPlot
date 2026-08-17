@@ -5,7 +5,6 @@ without requiring OpenGL or GPU.
 """
 
 import numpy as np
-import pytest
 
 from glplot.core.layers import (
     BaseLayer,
