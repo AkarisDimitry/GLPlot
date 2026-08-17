@@ -1535,7 +1535,11 @@ _AXES_METHOD_ALIASES = {
 _AXES_DENIED_NAMES = frozenset(
     {
         # Figure lifetime and layout.
-        "figure",
+        # ``figure`` is deliberately absent: newer matplotlib Axes objects carry a real
+        # ``.figure`` property, and AxesProxy already has its own -- defined below as
+        # ``@property def figure`` -- which resolves before ``__getattr__`` (and this
+        # deny-list) is ever consulted. Denying it here would therefore have blocked
+        # nothing real; it was just stale.
         "gcf",
         "gca",
         "sca",
@@ -2128,6 +2132,7 @@ def boxplot(
     capwidths: Optional[Union[float, ArrayLike]] = None,
     *,
     tick_labels: Optional[Sequence[str]] = None,
+    orientation: str = "vertical",
     color: Optional[ColorLike] = None,
     label: Optional[str] = None,
     data: Optional[Any] = None,
@@ -2147,7 +2152,11 @@ def boxplot(
         sym (str, optional): Format string for the fliers, e.g. ``'r+'``. ``''`` hides
             them. Overrides the marker keys of ``flierprops``.
         vert (bool, optional): Draw the boxes vertically. ``False`` draws them
-            horizontally, swapping the roles of the two axes. Defaults to True.
+            horizontally, swapping the roles of the two axes. Defaults to True. Takes
+            precedence over ``orientation`` when both are given, matching matplotlib's own
+            deprecation of ``vert`` in favour of ``orientation``.
+        orientation ({'vertical', 'horizontal'}, optional): The modern spelling of
+            ``vert``. Ignored if ``vert`` is also given.
         whis (float or tuple, optional): Whisker reach as a multiple of the IQR, or a
             ``(lo, hi)`` pair of percentiles. Defaults to 1.5.
         positions (array-like, optional): Where each box sits on the category axis.
@@ -2236,7 +2245,11 @@ def boxplot(
             if hi is not None:
                 stat["cihi"] = float(hi)
 
-    vert = True if vert is None else bool(vert)
+    if orientation not in ("vertical", "horizontal"):
+        raise ValueError(
+            f"boxplot(): orientation must be 'vertical' or 'horizontal', got {orientation!r}"
+        )
+    vert = (orientation == "vertical") if vert is None else bool(vert)
     notch = bool(notch)
     showbox = True if showbox is None else bool(showbox)
     showcaps = True if showcaps is None else bool(showcaps)
@@ -2434,7 +2447,7 @@ def _bxp_patch(plot_obj, box_x, box_y, kw, vert, artists, base, label):
 def violinplot(
     dataset: ArrayLike,
     positions: Optional[ArrayLike] = None,
-    vert: bool = True,
+    vert: Optional[bool] = None,
     widths: Union[float, ArrayLike] = 0.5,
     showmeans: bool = False,
     showextrema: bool = True,
@@ -2443,7 +2456,11 @@ def violinplot(
     points: int = 100,
     bw_method: Optional[Any] = None,
     *,
+    orientation: str = "vertical",
+    side: str = "both",
     color: ColorLike = (0.2, 0.4, 0.8, 0.5),
+    facecolor: Optional[ColorLike] = None,
+    linecolor: Optional[ColorLike] = None,
     label: Optional[str] = None,
     data: Optional[Any] = None,
 ):
@@ -2457,7 +2474,13 @@ def violinplot(
             a sequence of arrays is one violin each.
         positions (array-like, optional): Where each violin sits on the x-axis.
             Defaults to ``0, 1, 2...``.
-        vert (bool, optional): Draw the violins vertically. Defaults to True.
+        vert (bool, optional): Draw the violins vertically. Defaults to True. Takes
+            precedence over ``orientation`` when both are given, matching matplotlib's own
+            deprecation of ``vert`` in favour of ``orientation``.
+        orientation ({'vertical', 'horizontal'}, optional): The modern spelling of
+            ``vert``. Ignored if ``vert`` is also given.
+        side ({'both', 'low', 'high'}, optional): Accepted for parity; ignored. GLPlot
+            always draws the full, symmetric violin.
         widths (float or array-like, optional): Maximum width of each violin in
             data units. Defaults to 0.5.
         showmeans (bool, optional): Mark each mean with a line. Defaults to False.
@@ -2468,7 +2491,11 @@ def violinplot(
         points (int, optional): How many samples the density is evaluated at.
             Defaults to 100.
         bw_method (optional): Passed to ``scipy.stats.gaussian_kde``.
-        color (str or tuple, optional): Violin body colour.
+        color (str or tuple, optional): Violin body and line colour, if ``facecolor``/
+            ``linecolor`` are not given.
+        facecolor (str or tuple, optional): Violin body colour. Overrides ``color``.
+        linecolor (str or tuple, optional): Colour of the extrema/mean/median marks.
+            Overrides ``color``.
         label (str, optional): Legend label.
         data (indexable, optional): If given, ``dataset`` may be a key into it.
 
@@ -2484,6 +2511,17 @@ def violinplot(
     from scipy.stats import gaussian_kde
 
     (dataset,) = _resolve_data_args("violinplot", data, dataset)
+
+    if orientation not in ("vertical", "horizontal"):
+        raise ValueError(
+            f"violinplot(): orientation must be 'vertical' or 'horizontal', got {orientation!r}"
+        )
+    vert = (orientation == "vertical") if vert is None else bool(vert)
+    _warn_unsupported(
+        "violinplot",
+        {"side": side if side != "both" else None},
+        {"side": "has no effect: GLPlot always draws the full, symmetric violin"},
+    )
 
     raw = list(dataset) if isinstance(dataset, (list, tuple)) else [dataset]
     if raw and np.ndim(raw[0]) == 0:
@@ -2512,8 +2550,9 @@ def violinplot(
         "cquantiles": [],
     }
     plot_obj = _get_or_create_plot()
-    rgba = list(_normalize_rgba(color))
-    line_rgba = tuple(float(v) for v in _normalize_rgba(color)[:3]) + (1.0,)
+    rgba = list(_normalize_rgba(facecolor if facecolor is not None else color))
+    line_source = linecolor if linecolor is not None else color
+    line_rgba = tuple(float(v) for v in _normalize_rgba(line_source)[:3]) + (1.0,)
 
     for i, values in enumerate(groups):
         finite = values[np.isfinite(values)]
@@ -2790,6 +2829,11 @@ def pie(
             label=labels[i] if labels is not None else None,
         )
         wedges.append(plot_obj.scene.layers[-1])
+        # Stashed for pie_label(), added after the fact against an already-drawn pie: it
+        # needs each wedge's own centre and mid-angle, which only this loop computes.
+        wedges[-1].metadata["pie_center"] = (float(cx), float(cy))
+        wedges[-1].metadata["pie_mid_angle"] = float(mid)
+        wedges[-1].metadata["pie_radius"] = float(radius)
 
         if labels is not None and labeldistance is not None:
             _label_at(float(labeldistance), str(labels[i]), texts)
@@ -2807,6 +2851,68 @@ def pie(
 
     _set_dirty(plot_obj)
     return (wedges, texts, autotexts) if autopct is not None else (wedges, texts)
+
+
+def pie_label(
+    container: Sequence[Any],
+    labels: Union[str, Sequence[str]],
+    *,
+    distance: float = 0.6,
+    textprops: Optional[dict] = None,
+    rotate: bool = False,
+    alignment: str = "auto",
+) -> list:
+    """Add labels to an already-drawn pie chart, one per wedge.
+
+    matplotlib 3.11+ API for labelling a pie after the fact, instead of only through
+    ``pie(labels=...)`` at draw time. Reads the per-wedge centre/angle :func:`pie` stashes
+    in ``layer.metadata`` at draw time, so it only works on wedges :func:`pie` produced.
+
+    Args:
+        container: The wedge list :func:`pie` returned (its first return value).
+        labels: One label for every wedge, or a single string repeated for all of them.
+        distance (float, optional): Label position as a fraction of the pie's radius from
+            each wedge's own centre. Defaults to 0.6, matplotlib's own default.
+        textprops (dict, optional): ``fontsize``/``color`` forwarded to :func:`text`.
+        rotate (bool, optional): Rotate each label to align with its wedge's radial
+            direction. Accepted for parity; ignored -- GLPlot's text layers do not rotate.
+        alignment (str, optional): Accepted for parity; ignored -- GLPlot centres text on
+            its anchor point regardless of which side of the pie it falls on.
+
+    Returns:
+        list: The text layers added, one per wedge.
+
+    Examples:
+        >>> wedges, _ = gplt.pie([30, 70])
+        >>> gplt.pie_label(wedges, ["a", "b"], distance=0.7)
+    """
+    if isinstance(labels, str):
+        label_list = [labels] * len(container)
+    else:
+        label_list = list(labels)
+        if len(label_list) != len(container):
+            raise ValueError("pie_label(): labels must have one entry per wedge")
+    _warn_unsupported(
+        "pie_label",
+        {"rotate": rotate or None, "alignment": alignment if alignment != "auto" else None},
+        {
+            "rotate": "has no effect: GLPlot's text layers do not rotate",
+            "alignment": "has no effect: text is centred on its anchor point regardless "
+            "of which side of the pie it falls on",
+        },
+    )
+    tprops = _merge_props(textprops, {})
+    added: list = []
+    plot_obj = _get_or_create_plot()
+    for wedge, s in zip(container, label_list):
+        cx, cy = wedge.metadata["pie_center"]
+        mid = wedge.metadata["pie_mid_angle"]
+        radius = wedge.metadata["pie_radius"]
+        tx = cx + float(distance) * radius * np.cos(mid)
+        ty = cy + float(distance) * radius * np.sin(mid)
+        text(tx, ty, str(s), fontsize=tprops.get("fontsize"), color=tprops.get("color"))
+        added.append(plot_obj.scene.layers[-1])
+    return added
 
 
 def _link_shared_axes(fig: GPULinePlot, sharex: bool = False, sharey: bool = False) -> None:
@@ -3515,8 +3621,12 @@ def switch_backend(newbackend: str) -> None:
     )
 
 
-def get_backend() -> str:
+def get_backend(*, auto_select: bool = True) -> str:
     """Return the backend name.
+
+    Args:
+        auto_select: Accepted for matplotlib parity; ignored. GLPlot has exactly one
+            backend, so there is nothing to auto-select between.
 
     Returns:
         str: Always 'glplot'.
@@ -5134,6 +5244,7 @@ def _scatter_2d(
     edgecolors: Optional[ColorLike] = None,
     linewidths: Optional[float] = None,
     plotnonfinite: bool = False,
+    colorizer: Optional[Any] = None,
     *,
     data: Optional[Any] = None,
 ) -> BaseLayer:
@@ -5183,6 +5294,8 @@ def _scatter_2d(
         plotnonfinite (bool, optional): Accepted for matplotlib parity. GLPlot
             maps non-finite ``c`` values to the colormap's low end rather than
             dropping them, so this is ignored.
+        colorizer: Accepted for parity; ignored. Pass ``cmap``/``norm``/``vmin``/``vmax``
+            directly instead.
         data (indexable, optional): If given, ``x``, ``y`` and ``c`` may be keys
             into it (a DataFrame, dict, structured array, ...).
 
@@ -5213,10 +5326,12 @@ def _scatter_2d(
     x, y, c = _resolve_data_args("scatter", data, x, y, c)
     _warn_unsupported(
         "scatter",
-        {"plotnonfinite": plotnonfinite or None},
+        {"plotnonfinite": plotnonfinite or None, "colorizer": colorizer},
         {
             "plotnonfinite": "has no effect: non-finite c values are always mapped to the "
-            "colormap's low end rather than dropped"
+            "colormap's low end rather than dropped",
+            "colorizer": "has no effect: pass cmap=/norm=/vmin=/vmax= directly, there is "
+            "no shared Colorizer object across artists",
         },
     )
     x_arr = _as_float_array(_coerce_axis_values(x, "x", "scatter"), ndim=1, name="x")
@@ -6397,6 +6512,106 @@ def bar(
     return patches
 
 
+def grouped_bar(
+    heights: Union[Sequence[ArrayLike], dict],
+    *,
+    positions: Optional[ArrayLike] = None,
+    group_spacing: Optional[float] = 1.5,
+    bar_spacing: Optional[float] = 0.0,
+    tick_labels: Optional[Sequence[str]] = None,
+    labels: Optional[Sequence[str]] = None,
+    orientation: str = "vertical",
+    colors: Optional[Sequence[ColorLike]] = None,
+    **kwargs: Any,
+) -> List[list]:
+    """Make a grouped bar plot: one cluster of bars per category, one bar per series.
+
+    matplotlib 3.11+ API (provisional there; implemented here directly on top of
+    repeated :func:`bar`/:func:`barh` calls -- one per series, each shifted so the bars
+    in a category sit side by side instead of stacked or overlapping).
+
+    Args:
+        heights: A dict of ``{series_name: values}``, or a sequence of value arrays (one
+            per series). Every series must have the same length -- one value per category.
+        positions (array-like, optional): Category centres. Defaults to ``0, 1, 2, ...``.
+        group_spacing (float, optional): Width available to each category's whole cluster
+            of bars, in data units. Defaults to 1.5.
+        bar_spacing (float, optional): Gap between adjacent bars within a category, as a
+            fraction of one bar's width. Defaults to 0.
+        tick_labels (sequence of str, optional): Category names, drawn at ``positions``.
+        labels (sequence of str, optional): Legend label per series. Ignored if ``heights``
+            is a dict -- the dict keys are used instead.
+        orientation ({'vertical', 'horizontal'}, optional): Vertical draws with
+            :func:`bar`; horizontal draws with :func:`barh`. Defaults to 'vertical'.
+        colors (sequence, optional): One color per series. Defaults to the style cycle.
+        **kwargs: Forwarded to :func:`bar`/:func:`barh` for every series (``alpha``,
+            ``edgecolors`` are not supported there and are ignored the same way).
+
+    Returns:
+        list: One entry per series, each the list of bar layers :func:`bar` returned for it.
+
+    Examples:
+        >>> gplt.grouped_bar({"2024": [3, 5, 2], "2025": [4, 6, 3]}, tick_labels=["a", "b", "c"])
+    """
+    if orientation not in ("vertical", "horizontal"):
+        raise ValueError(
+            f"grouped_bar(): orientation must be 'vertical' or 'horizontal', got "
+            f"{orientation!r}"
+        )
+    if isinstance(heights, dict):
+        series_names = list(heights.keys())
+        series_values = [np.asarray(v, dtype=np.float64) for v in heights.values()]
+    else:
+        series_values = [np.asarray(v, dtype=np.float64) for v in heights]
+        no_labels: List[Optional[str]] = [None] * len(series_values)
+        series_names = list(labels) if labels is not None else no_labels
+    n_series = len(series_values)
+    if n_series == 0:
+        return []
+    n_categories = len(series_values[0])
+    for v in series_values:
+        if len(v) != n_categories:
+            raise ValueError("grouped_bar(): every series must have the same length")
+
+    centres = (
+        np.arange(n_categories, dtype=np.float64)
+        if positions is None
+        else np.asarray(positions, dtype=np.float64)
+    )
+    if len(centres) != n_categories:
+        raise ValueError("grouped_bar(): positions must have one entry per category")
+
+    spacing = 1.5 if group_spacing is None else float(group_spacing)
+    gap = 0.0 if bar_spacing is None else float(bar_spacing)
+    bar_width = spacing / (n_series + (n_series - 1) * gap)
+    draw = bar if orientation == "vertical" else barh
+    # barh()'s *thickness* keyword is confusingly named "height" (its "width" is the bar's
+    # length instead, matching matplotlib's own reversal) -- so the keyword this loop
+    # passes has to swap along with the function it is calling.
+    thickness_kw = "width" if orientation == "vertical" else "height"
+
+    plot_obj = _get_or_create_plot()
+    results: List[list] = []
+    for i, values in enumerate(series_values):
+        offset = (i - (n_series - 1) / 2.0) * bar_width * (1.0 + gap)
+        color = colors[i] if colors is not None and i < len(colors) else _next_cycle_color(plot_obj)
+        results.append(
+            draw(
+                centres + offset,
+                values,
+                color=color,
+                label=series_names[i],
+                **{thickness_kw: bar_width},
+                **kwargs,
+            )
+        )
+
+    if tick_labels is not None:
+        xticks(list(centres), list(tick_labels))
+
+    return results
+
+
 def hist(
     x: Sequence[float],
     bins: Union[int, Sequence[float], str] = 10,
@@ -6655,6 +6870,7 @@ def hexbin(
     marginals: bool = False,
     edgecolors: Optional[ColorLike] = None,
     linewidths: Optional[float] = None,
+    colorizer: Optional[Any] = None,
     *,
     label: Optional[str] = None,
     data: Optional[Any] = None,
@@ -6712,13 +6928,20 @@ def hexbin(
     x, y, C = _resolve_data_args("hexbin", data, x, y, C)
     _warn_unsupported(
         "hexbin",
-        {"marginals": marginals or None, "edgecolors": edgecolors, "linewidths": linewidths},
+        {
+            "marginals": marginals or None,
+            "edgecolors": edgecolors,
+            "linewidths": linewidths,
+            "colorizer": colorizer,
+        },
         {
             "marginals": "has no effect: GLPlot has no marginal-histogram gutter. Draw the "
             "two hist() calls into their own panels instead",
             "edgecolors": "has no effect: the hexagons are one filled triangle mesh with no "
             "separate outline pass",
             "linewidths": "has no effect: the hexagons are drawn filled, without outlines",
+            "colorizer": "has no effect: pass cmap=/norm=/vmin=/vmax= directly, there is no "
+            "shared Colorizer object across artists",
         },
     )
     _warn_unsupported(
@@ -9119,6 +9342,7 @@ def voxels(
     edgecolors: Optional[Any] = None,
     shade: bool = True,
     lightsource: Optional[Any] = None,
+    axlim_clip: bool = False,
     **kwargs: Any,
 ) -> dict:
     """Draw a filled 3D boolean array as cubes (matplotlib's ``Axes3D.voxels``).
@@ -9145,6 +9369,7 @@ def voxels(
             ``"none"`` for no edges.
         shade (bool): Accepted for parity; warned about when False.
         lightsource: Accepted for parity; warned about.
+        axlim_clip (bool): Accepted for parity; warned about when True.
         **kwargs: Forwarded to the underlying :func:`bar3d` (``alpha``, ``label``,
             ``elev``, ``azim``, ``gap`` ...).
 
@@ -9183,11 +9408,14 @@ def voxels(
         {
             "shade": False if shade is False else None,
             "lightsource": lightsource,
+            "axlim_clip": True if axlim_clip else None,
         },
         {
             "shade": "has no effect: cube faces are drawn flat — ssao() is GLPlot's "
             "shading control",
             "lightsource": "has no effect: there is no lighting model to place a light in",
+            "axlim_clip": "has no effect: GLPlot's 3D renderer does not clip geometry to "
+            "the axis limits",
         },
     )
 
@@ -9841,6 +10069,9 @@ def streamplot(
     start_points: Optional[ArrayLike] = None,
     zorder: Optional[float] = None,
     transform: Optional[Any] = None,
+    num_arrows: int = 1,
+    integration_max_step_scale: float = 1.0,
+    integration_max_error_scale: float = 1.0,
     *,
     label: Optional[str] = None,
     data: Optional[Any] = None,
@@ -9862,9 +10093,12 @@ def streamplot(
         cmap (str, optional): Colour the lines by local speed instead. One colour
             per line -- see the note.
         norm (Normalize or str, optional): How speed maps onto ``cmap``.
-        arrowsize, arrowstyle: Accepted for matplotlib parity. GLPlot draws the
+        arrowsize, arrowstyle, num_arrows: Accepted for matplotlib parity. GLPlot draws the
             lines without arrowheads -- use :func:`quiver` for direction glyphs.
             Ignored.
+        integration_max_step_scale, integration_max_error_scale: Accepted for matplotlib
+            parity; ignored. GLPlot integrates streamlines with a fixed RK4 step, not
+            matplotlib's adaptive integrator.
         minlength (float, optional): Streamlines shorter than this are dropped.
         maxlength (float, optional): Maximum arc length of one streamline.
         integration_direction (str, optional): 'both' (default), 'forward' or
@@ -9910,11 +10144,23 @@ def streamplot(
         {
             "arrowsize": arrowsize if arrowsize != 1.0 else None,
             "arrowstyle": arrowstyle if arrowstyle != "-|>" else None,
+            "num_arrows": num_arrows if num_arrows != 1 else None,
+            "integration_max_step_scale": (
+                integration_max_step_scale if integration_max_step_scale != 1.0 else None
+            ),
+            "integration_max_error_scale": (
+                integration_max_error_scale if integration_max_error_scale != 1.0 else None
+            ),
         },
         {
             "arrowsize": "has no effect: GLPlot draws streamlines without arrowheads. Use "
             "quiver() for direction glyphs",
             "arrowstyle": "has no effect: GLPlot draws streamlines without arrowheads",
+            "num_arrows": "has no effect: GLPlot draws streamlines without arrowheads",
+            "integration_max_step_scale": "has no effect: GLPlot integrates with a fixed "
+            "RK4 step, not matplotlib's adaptive integrator",
+            "integration_max_error_scale": "has no effect: GLPlot integrates with a fixed "
+            "RK4 step, not matplotlib's adaptive integrator",
         },
     )
     if integration_direction not in ("both", "forward", "backward"):
@@ -10982,6 +11228,7 @@ def errorbar(
     fmt: str = "",
     ecolor: Optional[ColorLike] = None,
     elinewidth: Optional[float] = None,
+    elinestyle: Optional[str] = None,
     capsize: Optional[float] = None,
     barsabove: bool = False,
     lolims: Any = False,
@@ -11016,6 +11263,8 @@ def errorbar(
             points -- ``N`` for every N-th, ``(start, N)`` to offset the pattern so two
             series interleave. Defaults to 1.
         capthick (float, optional): Cap line width. Defaults to ``elinewidth``.
+        elinestyle (str, optional): Accepted for matplotlib parity; ignored. Error bar
+            lines are always drawn solid.
         label (str, optional): Legend label.
         data (indexable, optional): If given, the arrays may be keys into it.
         **kwargs: Forwarded to the data line -- ``color``, ``marker``, ``linestyle``...
@@ -11029,6 +11278,11 @@ def errorbar(
         >>> gplt.errorbar(x, y, yerr=sigma, errorevery=(0, 5))  # every 5th point
     """
     x, y, xerr, yerr = _resolve_data_args("errorbar", data, x, y, xerr, yerr)
+    _warn_unsupported(
+        "errorbar",
+        {"elinestyle": elinestyle},
+        {"elinestyle": "has no effect: error bar lines are always drawn solid"},
+    )
     x_arr = _as_float_array(x, ndim=1, name="x")
     y_arr = _as_float_array(y, ndim=1, name="y")
     if len(x_arr) != len(y_arr):
@@ -13184,6 +13438,14 @@ _NOT_EXPORTED: dict = {
     "FigureCanvasBase": "GLPlot renders through its own GPU backend and has no matplotlib "
     "canvas",
     "FigureManagerBase": "GLPlot manages its own windows; see figure() and close()",
+    "BackendFilter": "matplotlib-3.9+ backend-selection enum; GLPlot has exactly one "
+    "backend, so there is nothing to filter",
+    "backend_registry": "matplotlib-3.9+ backend discovery/selection registry; GLPlot has "
+    "exactly one backend and is not in it",
+    "Colorizer": "matplotlib-3.10+ shared colour-mapping object; GLPlot resolves cmap/norm/"
+    "vmin/vmax per call instead of sharing one across artists",
+    "ColorizingArtist": "matplotlib-3.10+ mixin for artists bound to a shared Colorizer; "
+    "GLPlot artists resolve their own colour mapping",
 }
 
 

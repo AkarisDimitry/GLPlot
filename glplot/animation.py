@@ -1199,7 +1199,7 @@ class Animation:
     docstring).
     """
 
-    def __init__(self, fig: Any, event_source: Any = None, blit: bool = False) -> None:
+    def __init__(self, fig: Any, event_source: Any, blit: bool = False) -> None:
         self._draw_was_started = False
         self._fig = fig
         #: Recorded exactly as requested and then never consulted. GLPlot re-renders the
@@ -1753,6 +1753,12 @@ class ArtistAnimation(TimedAnimation):
     def __init__(self, fig: Any, artists: Sequence[Any], *args: Any, **kwargs: Any) -> None:
         self._drawn_artists: Any = []
         self._framedata = artists
+        # A pre-built list of frames needs no timer to advance through -- unlike
+        # TimedAnimation, which builds a real one before this point. Animation.__init__
+        # itself has no default for event_source (matplotlib parity), so it is supplied
+        # here instead, the one place in this hierarchy that both needs and knows it can
+        # be None.
+        kwargs.setdefault("event_source", None)
         super().__init__(fig, *args, **kwargs)
 
     @property
