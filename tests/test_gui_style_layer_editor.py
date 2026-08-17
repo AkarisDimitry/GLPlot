@@ -379,7 +379,7 @@ class TestKind3DConversion:
         plot.set_ndim(3)
         layer = _select(plot, _add3d(plot, kind="scatter3d"))
         panel._replot_layer3d(layer, "line3d", {}, undoable=True)
-        plot.scene.layers = [item for item in plot.scene.layers if item is not layer]
+        plot.scene.layers = [other for other in plot.scene.layers if other is not layer]
         ws.drain()  # must not raise
 
     def test_the_picker_is_blocked_for_the_two_unconvertible_cases(self, plot, panel):

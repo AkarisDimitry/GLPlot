@@ -898,7 +898,8 @@ class GPULinePlot:
         makes the per-artist toggles in the View panel actually free.
         """
         existing = next(
-            (layer for layer in self.scene.layers if layer.metadata.get("artist") == artist), None
+            (layer for layer in self.scene.layers if layer.metadata.get("artist") == artist),
+            None,
         )
         if vertices is None or len(vertices) == 0:
             if existing is not None:
@@ -1372,8 +1373,8 @@ class GPULinePlot:
             m = mode.lower()
             if m not in mapping:
                 raise ValueError(
-                    "blend mode must be 'auto', 'alpha', 'additive', 'subtractive', "
-                    "'screen', or 'off'"
+                    "blend mode must be 'auto', 'alpha', 'additive', 'subtractive', 'screen', "
+                    "or 'off'"
                 )
             mode = mapping[m]
 
@@ -1760,6 +1761,15 @@ class GPULinePlot:
 
     def clear(self) -> None:
         self.scene = SceneData()
+        # set_lines_ab() caches this to update the line-family layer in place on a
+        # second call rather than re-inserting it -- without resetting it here, that
+        # cache survives the fresh SceneData() above and points at a Layer object no
+        # longer in scene.layers, so the very next set_lines_ab() call "updates" a
+        # layer that isn't in the scene, leaving scene.layers empty and crashing the
+        # pyplot-level plot_lines()'s scene.layers[-1] lookup with an IndexError. Hit
+        # by any script that calls cla()/clf() then plot_lines() again, e.g. a
+        # FuncAnimation whose update() does exactly that every frame.
+        self._primary_line_layer = None
         self.frame.dirty_scene = True
 
     def close(self) -> None:
@@ -2036,8 +2046,8 @@ class GPULinePlot:
         the cached impostor). Reads the active panel's camera and the engine's current pixel
         dimensions, which ``_draw_panels`` sets to the panel's rect when several panels exist.
         """
-        # Draw Axis Labels (Scale) on every frame so they update dynamically and persist
-        # when the scene is cached.
+        # Draw Axis Labels (Scale) on every frame so they update dynamically and persist when
+        # the scene is cached.
         if self.options.axis_show_labels:
             window_world = self.camera_controller.world_window(self.width, self.height)
             mvp = self.camera_controller.mvp(self.width, self.height)
@@ -2165,8 +2175,8 @@ class GPULinePlot:
         # 2. Draw using the new RendererManager (Modular Architecture)
         layers = self._get_all_layers()
 
-        # Skip 2D axis overlay for pure 3D scenes — 3D bounding box from ensure_3d_axes()
-        # takes its place
+        # Skip 2D axis overlay for pure 3D scenes — 3D bounding box from ensure_3d_axes() takes
+        # its place
         if not self._is_pure_3d_scene():
             self.axis_manager.update(ctx)
             self.renderer_manager.draw_axes(self.axis_manager, ctx)
@@ -2552,8 +2562,8 @@ class GPULinePlot:
         px, py = self.interaction.right_press_mouse
         mx, my = self.interaction.last_mouse
 
-        # We reuse the TextRenderer's unit quad or similar to avoid defining a new VAO just
-        # for this.
+        # We reuse the TextRenderer's unit quad or similar to avoid defining a new VAO just for
+        # this.
         # However, for robustness, we'll just use AxisRenderer's logic or simple GL lines.
         # Actually, let's just use the TextRenderer's draw_list approach if available,
         # but since we are in the engine, we'll do a quick VAO-less draw if possible,
@@ -2771,9 +2781,9 @@ class GPULinePlot:
                         self.interaction.drag_mode = "move"
                         layer = next(
                             (
-                                layer
-                                for layer in self.scene.layers
-                                if layer.layer_id == self.interaction.selected_layer_id
+                                candidate
+                                for candidate in self.scene.layers
+                                if candidate.layer_id == self.interaction.selected_layer_id
                             ),
                             None,
                         )
@@ -2889,9 +2899,9 @@ class GPULinePlot:
                 # MOVE MODE: Translate the layer
                 layer = next(
                     (
-                        layer
-                        for layer in self.scene.layers
-                        if layer.layer_id == self.interaction.selected_layer_id
+                        candidate
+                        for candidate in self.scene.layers
+                        if candidate.layer_id == self.interaction.selected_layer_id
                     ),
                     None,
                 )
@@ -3069,7 +3079,9 @@ class GPULinePlot:
         return b, t
 
     def savefig(self, filename: str, scale: float = 2.0) -> None:
-        """Public API for saving high-resolution figures."""
+        """
+        Public API for saving high-resolution figures.
+        """
         self.export.savefig(filename, scale=scale)
 
     def _create_rgba_fbo(self, width: int, height: int) -> Tuple[int, int, int]:
@@ -3300,8 +3312,6 @@ class GPULinePlot:
             return
 
         if action in (glfw.PRESS, glfw.REPEAT):
-            mods & glfw.MOD_SHIFT
-
             if key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(self.window, True)
 

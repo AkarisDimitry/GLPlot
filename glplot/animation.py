@@ -191,7 +191,8 @@ JS_INCLUDE = """
     if (!timer) { timer = setInterval(step, interval); toggle.textContent = "Pause"; }
   }
   function stop() {
-    if (timer) { clearInterval(timer); timer = null; } toggle.textContent = "Play";
+    if (timer) { clearInterval(timer); timer = null; }
+    toggle.textContent = "Play";
   }
   toggle.addEventListener("click", function() { timer ? stop() : play(); });
   slider.addEventListener("input", function() { stop(); show(parseInt(slider.value, 10)); });
@@ -1753,12 +1754,6 @@ class ArtistAnimation(TimedAnimation):
     def __init__(self, fig: Any, artists: Sequence[Any], *args: Any, **kwargs: Any) -> None:
         self._drawn_artists: Any = []
         self._framedata = artists
-        # A pre-built list of frames needs no timer to advance through -- unlike
-        # TimedAnimation, which builds a real one before this point. Animation.__init__
-        # itself has no default for event_source (matplotlib parity), so it is supplied
-        # here instead, the one place in this hierarchy that both needs and knows it can
-        # be None.
-        kwargs.setdefault("event_source", None)
         super().__init__(fig, *args, **kwargs)
 
     @property

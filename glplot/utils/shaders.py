@@ -267,7 +267,7 @@ layout(location = 2) in float a_size;   // per-point size multiplier (point clou
 uniform mat4 u_mvp;
 uniform float u_point_size;
 uniform float u_ref_w;   // clip-space w at scene centre (≈ camera distance);
-                         // 0 = disable perspective sizing
+                          // 0 = disable perspective sizing
 uniform vec2 u_z_range;
 uniform int u_is_points;
 

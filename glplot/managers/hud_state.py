@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -76,8 +77,6 @@ class HudController:
 
     def export(self) -> None:
         # Trigger default export
-        import time
-
         self.plot.savefig(f"plot_{int(time.time())}.png")
 
     def toggle_layer(self, layer_id: str, visible: bool) -> None:

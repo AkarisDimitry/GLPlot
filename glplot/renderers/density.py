@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 from OpenGL.GL import *
@@ -9,9 +9,6 @@ from ..options import resolve_axis_margins
 from ..utils.gl_utils import link_program
 from ..utils.shaders import DENSITY_RESOLVE_FS, INTERACTION_FULLSCREEN_VS
 from .base import GLOffscreenTarget
-
-if TYPE_CHECKING:
-    pass
 
 
 class DensityRenderer:

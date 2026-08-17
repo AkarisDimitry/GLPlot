@@ -2690,12 +2690,7 @@ def fit_distribution(y: Any, name: str, x_grid: Any) -> Dict[str, Any]:
             with np.errstate(all="ignore"):
                 params = dist.fit(data)
                 pdf = np.asarray(dist.pdf(grid, *params), dtype=np.float64)
-                # `stats.kstest(data, scipy_name, args=params)` -- passing the distribution
-                # by its string name -- hits a real bug in scipy >= 1.18 for at least
-                # `norm` ("ndtr() takes from 1 to 2 positional arguments but 3 were given").
-                # Passing the already-resolved `dist.cdf` instead produces the identical
-                # result through a code path the bug does not touch.
-                ks = stats.kstest(data, dist.cdf, args=params)
+                ks = stats.kstest(data, scipy_name, args=params)
                 log_likelihood = float(np.sum(dist.logpdf(data, *params)))
         except (ValueError, RuntimeError, TypeError, FloatingPointError) as exc:
             raise ValueError(f"the {name} fit failed on this data: {exc}") from exc

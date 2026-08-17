@@ -54,7 +54,7 @@ class TestQuiverBatching:
         assert "patch" in types
 
     def test_large_grid_creates_exactly_two_layers(self):
-        # 31 * 31 = 961 arrows, like the gallery example
+        # 31 * 31 = 961 arrows like the gallery example
         xs = np.linspace(-1, 1, 31)
         ys = np.linspace(-1, 1, 31)
         xx, yy = np.meshgrid(xs, ys)

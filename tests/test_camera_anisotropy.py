@@ -10,7 +10,7 @@ sys.modules["OpenGL"] = MagicMock()
 sys.modules["OpenGL.GL"] = mock_gl
 sys.modules["glfw"] = MagicMock()
 
-import glplot.pyplot as gplt
+import glplot.pyplot as gplt  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

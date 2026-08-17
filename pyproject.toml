@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "glplot"
-version = "0.1.6"
+version = "0.1.7"
 description = "High-performance OpenGL plotting library for Python"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,16 +30,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.23",
     "scipy>=1.9",
-    # Capped below 3.10, not just floored at 3.6: matplotlib 3.10 and 3.11 each raised
-    # their own minimum Python version (3.10 needs Python>=3.10; 3.11 needs Python>=3.11).
-    # With no ceiling, `pip install` on this project's own Python 3.9-3.12 CI matrix was
-    # silently resolving three *different* matplotlib releases depending on which Python
-    # ran it, and their APIs had already drifted from each other (e.g. 3.11 made
-    # Animation's event_source parameter mandatory, 3.9 has voxels() without the
-    # axlim_clip matplotlib added later) -- so no single GLPlot signature could match
-    # "matplotlib" across the matrix, because there wasn't one. This keeps the whole
-    # matrix on the same matplotlib release.
-    "matplotlib>=3.6,<3.10",
+    "matplotlib>=3.6",
     "glfw>=2.5",
     "PyOpenGL>=3.1.6",
     "imgui[glfw]>=2.0"

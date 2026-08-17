@@ -97,9 +97,6 @@ class PickingManager:
             if not layer.style.visible:
                 continue
 
-            # IDs are 1-based, 0 is "nothing"
-            current_offset + 1
-
             if layer.layer_type == "line_family":
                 if layer.ab is not None and hasattr(layer, "_gl"):
                     glUseProgram(self.pid_lines)

@@ -202,8 +202,8 @@ def _view_window(plot: Any) -> Optional[Tuple[float, float, float, float]]:
     if width <= 0 or height <= 0:
         return None
     try:
-        window = tuple(float(v) for v in controller.world_window(width, height))
-        return window  # type: ignore[return-value]
+        window = controller.world_window(width, height)
+        return tuple(float(v) for v in window)  # type: ignore[return-value]
     except Exception:  # pragma: no cover - defensive
         return None
 

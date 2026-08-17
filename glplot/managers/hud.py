@@ -279,8 +279,8 @@ class HudManager:
         else:
             mode = "Exact"
         imgui.text(
-            f"FPS: {fps:4.1f} | Lines: {n_lines:,} | "
-            f"3D Layers: {n_3d_layers:,} ({n_3d_vertices:,} verts) | Mode: {mode} | "
+            f"FPS: {fps:4.1f} | Lines: {n_lines:,} | 3D Layers: {n_3d_layers:,} "
+            f"({n_3d_vertices:,} verts) | Mode: {mode} | "
         )
         imgui.same_line()
         display_world = self.plot.mouse_world_display()
@@ -364,11 +364,7 @@ class HudManager:
             return
 
         layer = next(
-            (
-                candidate
-                for candidate in self.plot.scene.layers
-                if candidate.layer_id == self.state.selected_layer_id
-            ),
+            (lyr for lyr in self.plot.scene.layers if lyr.layer_id == self.state.selected_layer_id),
             None,
         )
         if not layer:
@@ -520,7 +516,7 @@ class HudManager:
             items = [m.name for m in BlendMode]
             try:
                 current = items.index(self.options.blend_mode.name)
-            except ValueError:
+            except Exception:
                 current = 0
 
             imgui.push_item_width(120)

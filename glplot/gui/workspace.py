@@ -1218,7 +1218,7 @@ class Workspace:
             keywords=("scenes", "chapters", "slides", "talk", "present", "story"),
             description=(
                 "Show the Presentation panel: the timeline's scenes as chapters you can "
-                f"name, reorder and step through. Also "
+                "name, reorder and step through. Also "
                 f"{_chord_text(_PANEL_CHORDS['presentation'])}."
             ),
             is_enabled=self._has_presentation_panel,

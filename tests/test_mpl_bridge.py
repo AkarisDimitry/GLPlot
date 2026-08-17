@@ -17,10 +17,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-import numpy as np
-import pytest
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
 
-from glplot.utils.mpl_bridge import GLPlotSnapshot, snapshot_to_matplotlib
+from glplot.utils.mpl_bridge import GLPlotSnapshot, snapshot_to_matplotlib  # noqa: E402
 
 RED = (255, 0, 0)
 BLUE = (0, 0, 255)

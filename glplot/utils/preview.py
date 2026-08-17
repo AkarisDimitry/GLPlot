@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
@@ -539,7 +538,29 @@ def _finish_axes(ax: object, has_3d: bool, engine: object) -> None:
             labelspacing=0.4,
             handlelength=1.6,
         )
-    if not has_3d:
+    if has_3d:
+        ax.autoscale(enable=True)
+        # An explicit set_xlim3d()/set_ylim3d()/set_zlim3d() call (stored on
+        # axes3d.xlim/ylim/zlim -- see glplot/pyplot.py's _set_axis3d_limit) used to be
+        # silently discarded here: ax.autoscale(enable=True) ran unconditionally on
+        # every export, so those calls had no effect on the saved file. Most visible in
+        # an animation, where the box visibly resized every frame as autoscale re-fit to
+        # whatever that frame's data happened to span -- which is why 3D animation
+        # scripts have had to fake a pinned view with invisible box-corner anchor points
+        # instead of just calling the real, documented API. Applied per-axis, after
+        # autoscale, so only the axes the caller actually pinned override the auto-fit
+        # ones -- an unset axis still autoscales normally.
+        axes3d_opts = getattr(engine, "axes3d", None)
+        xlim3d = getattr(axes3d_opts, "xlim", None)
+        if xlim3d is not None:
+            ax.set_xlim3d(*xlim3d)
+        ylim3d = getattr(axes3d_opts, "ylim", None)
+        if ylim3d is not None:
+            ax.set_ylim3d(*ylim3d)
+        zlim3d = getattr(axes3d_opts, "zlim", None)
+        if zlim3d is not None:
+            ax.set_zlim3d(*zlim3d)
+    else:
         opts = getattr(engine, "options", None)
         scale_x = getattr(opts, "axis_scale_x", "linear")
         if scale_x and scale_x != "linear":
@@ -547,7 +568,24 @@ def _finish_axes(ax: object, has_3d: bool, engine: object) -> None:
         scale_y = getattr(opts, "axis_scale_y", "linear")
         if scale_y and scale_y != "linear":
             ax.set_yscale(scale_y, **getattr(opts, "axis_scale_params_y", {}))
-    ax.autoscale(enable=True)
+        # An explicit plt.xlim()/plt.ylim() call used to be silently discarded the same
+        # way: engine._needs_initial_autoscale is False once the caller has set an
+        # explicit view (engine.py's set_view(), which xlim()/ylim() call), meaning "this
+        # view is deliberate, do not re-fit it to whichever data this particular frame
+        # happens to hold." This is the engine-level flag, not Panel.needs_initial_
+        # autoscale (a separate, per-panel flag the live run loop's one-time auto-fit
+        # uses) -- the two are not kept in sync outside that loop, so a headless script
+        # that never calls .run() only ever updates the engine-level one.
+        pinned = False
+        if not getattr(engine, "_needs_initial_autoscale", True):
+            get_xlim = getattr(engine, "get_xlim", None)
+            get_ylim = getattr(engine, "get_ylim", None)
+            if callable(get_xlim) and callable(get_ylim):
+                ax.set_xlim(*get_xlim())
+                ax.set_ylim(*get_ylim())
+                pinned = True
+        if not pinned:
+            ax.autoscale(enable=True)
     # A pinned `xticks()`/`yticks()` call (explicit positions, or -- via `_coerce_axis_values`
     # -- a categorical axis's string labels) is stored on `engine.options`, not on any layer,
     # so nothing above ever reconstructs it: this export used to always fall back to
@@ -660,6 +698,32 @@ def _autosize_title(fig: object, ax: object, min_fontsize: float = TITLE_MIN_FON
         fig.canvas.draw()
 
 
+def _reapply_pinned_limits(ax: object, has_3d: bool, engine: object) -> None:
+    """Re-apply an explicit xlim/ylim/3D-limit pin, if one is in effect, one last time.
+
+    Called after :func:`_autosize_title`'s own internal redraws, which can silently
+    regrow a 3D axes' pinned range back toward the live data's extent (see the call
+    site's comment) -- cheap enough to always call, and a no-op when nothing is pinned.
+    """
+    if has_3d:
+        axes3d_opts = getattr(engine, "axes3d", None)
+        xlim3d = getattr(axes3d_opts, "xlim", None)
+        if xlim3d is not None:
+            ax.set_xlim3d(*xlim3d)
+        ylim3d = getattr(axes3d_opts, "ylim", None)
+        if ylim3d is not None:
+            ax.set_ylim3d(*ylim3d)
+        zlim3d = getattr(axes3d_opts, "zlim", None)
+        if zlim3d is not None:
+            ax.set_zlim3d(*zlim3d)
+    elif not getattr(engine, "_needs_initial_autoscale", True):
+        get_xlim = getattr(engine, "get_xlim", None)
+        get_ylim = getattr(engine, "get_ylim", None)
+        if callable(get_xlim) and callable(get_ylim):
+            ax.set_xlim(*get_xlim())
+            ax.set_ylim(*get_ylim())
+
+
 def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_kwargs) -> None:
     """Export ``engine``'s figure to a static image file.
 
@@ -746,27 +810,43 @@ def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_
             single_3d_ax = ax
 
     if len(panels) <= 1:
-        # Meaningless (and noisy) for the multi-panel branch: `tight_layout` only adjusts
-        # the margins of Gridspec-managed axes, and every panel there was placed explicitly
-        # via `add_axes(rect_frac)` instead, which it leaves alone but warns about anyway.
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="Tight layout not applied.*")
-            fig.tight_layout()
+        # Fixed, content-independent margins -- not fig.tight_layout(). tight_layout()
+        # recomputes margins from whatever tick-label text currently exists every time
+        # render_preview() runs, which is harmless for a one-off static image but not
+        # for an animation: FuncAnimation.save() (glplot/animation.py) calls
+        # render_preview() fresh, independently, for every single frame, and a
+        # zooming/panning animation's tick labels change width frame to frame (e.g.
+        # "-1.0" vs "-0.7500") -- so tight_layout() picked a different left margin each
+        # frame, visibly shifting the whole axes box's position and size across the
+        # animation ("frame wobble", reported against examples/gallery/animations/
+        # 07_fractal_zoom.py, confirmed by comparing extracted frames). Fixed margins
+        # guarantee the box never moves, at the cost of not hugging unusually short
+        # labels as tightly as tight_layout would -- generous enough for this
+        # project's typical label lengths at the current (doubled) font sizes without
+        # clipping.
         if single_3d_ax is not None:
-            # `tight_layout()` above is a documented no-op for 3D axes (that's the exact
-            # warning it just suppressed), so a 3D export otherwise keeps matplotlib's
-            # default *2D* subplot margins -- sized for a legend/label gutter a cubic
-            # Axes3D box never needed, which is exactly the wide blank band down each
-            # side of every 3D gallery preview. Axes3D's own box also never fills its
-            # allocated rect at most view angles, so this only pushes that rect near the
-            # figure edges rather than trying to compute an exact fit.
+            # Axes3D's own box never fills its allocated rect at most view angles (and
+            # has no y-axis tick-label gutter to reserve room for), so this pushes the
+            # rect near the figure edges rather than reusing the 2D margins below.
             fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.93)
+        else:
+            fig.subplots_adjust(left=0.15, right=0.96, bottom=0.13, top=0.90)
     if title_ax is not None:
         # Must run after tight_layout()/subplots_adjust() above, not before: both can
         # shift the axes horizontally (room for y-tick labels, the 3D margin fix), and a
         # title is centered on its *axes*, not the figure -- sizing against the pre-layout
         # position measured a fit that layout then invalidated.
         _autosize_title(fig, title_ax)
+        # _autosize_title() redraws the canvas (fig.canvas.draw()) up to 20 times while it
+        # measures the title -- and matplotlib's Axes3D re-runs its own content-fitting
+        # autoscale on some of those internal draws even after set_xlim3d()/set_ylim3d()/
+        # set_zlim3d() already pinned a range, silently regrowing the box back toward
+        # the live data's own extent. Reproduced: a short title (few or zero shrink
+        # iterations) left a pinned 3D range alone; a long one (many iterations) visibly
+        # regrew it every time. Re-applying the same pin after every draw the title
+        # autosizer might have triggered -- rather than only once, before it -- is what
+        # actually survives to the saved file.
+        _reapply_pinned_limits(title_ax, single_3d_ax is not None, engine)
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
     # `dpi`/`bbox_inches`/`transparent`/`facecolor`/`pad_inches`/`format` (and anything else
     # a caller passes through `savefig()`) are real `Figure.savefig()` keywords here -- this

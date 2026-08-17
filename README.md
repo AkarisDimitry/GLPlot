@@ -50,15 +50,17 @@ That's it — a real window opens, fully interactive (pan/zoom/rotate) from the 
 
 ## Interactive Examples Gallery (Click any figure to view code)
 
-Explore 2D plots, 3D scenes, and real-time animations. **Click on any figure or title below to expand its full Python code.**
+Explore 2D plots, 3D scenes, and real-time animations. **Click on any figure or title below to expand its full Python code, or click the file link to view the script.**
 
 ### 📊 2D Visualizations
 
 <details>
 <summary>
 <img src="examples/gallery/results/02_scatter_fill.png" alt="10M-point spiral scatter" width="650"/>
-<br><b>🔍 Click to view code: 10-Million Point Spiral Scatter (<code>02_scatter_fill.py</code>)</b>
+<br><b>🔍 Click to view code: 10-Million Point Spiral Scatter (<a href="examples/gallery/02_scatter_fill.py"><code>02_scatter_fill.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/02_scatter_fill.py`](examples/gallery/02_scatter_fill.py)
 
 ```python
 import numpy as np
@@ -84,8 +86,10 @@ plt.show()
 <details>
 <summary>
 <img src="examples/gallery/results/10_massive_hist2d_density.png" alt="10M-sample 2D density histogram" width="650"/>
-<br><b>🔍 Click to view code: 10M-Sample 2D Density Histogram (<code>10_massive_hist2d_density.py</code>)</b>
+<br><b>🔍 Click to view code: 10M-Sample 2D Density Histogram (<a href="examples/gallery/10_massive_hist2d_density.py"><code>10_massive_hist2d_density.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/10_massive_hist2d_density.py`](examples/gallery/10_massive_hist2d_density.py)
 
 ```python
 import numpy as np
@@ -120,8 +124,10 @@ plt.show()
 <details>
 <summary>
 <img src="examples/gallery/results/01_line_plot.png" alt="10,072-line oscilloscope ensemble" width="650"/>
-<br><b>🔍 Click to view code: 10,072-Line Oscilloscope Ensemble (<code>01_line_plot.py</code>)</b>
+<br><b>🔍 Click to view code: 10,072-Line Oscilloscope Ensemble (<a href="examples/gallery/01_line_plot.py"><code>01_line_plot.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/01_line_plot.py`](examples/gallery/01_line_plot.py)
 
 ```python
 import colorsys
@@ -170,8 +176,10 @@ plt.show()
 <details>
 <summary>
 <img src="examples/gallery/results/07_projected_3d_cloud.png" alt="1M-point 3D Point Cloud" width="650"/>
-<br><b>🔍 Click to view code: 1M-Point Circumstellar Dust Halo (<code>07_projected_3d_cloud.py</code>)</b>
+<br><b>🔍 Click to view code: 1M-Point Circumstellar Dust Halo (<a href="examples/gallery/07_projected_3d_cloud.py"><code>07_projected_3d_cloud.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/07_projected_3d_cloud.py`](examples/gallery/07_projected_3d_cloud.py)
 
 ```python
 import numpy as np
@@ -211,8 +219,10 @@ plt.show()
 <details>
 <summary>
 <img src="examples/gallery/results/13_volumetric_nebula.png" alt="1.75M-Point Volumetric Nebula" width="650"/>
-<br><b>🔍 Click to view code: 1.75M-Point Volumetric Nebula (<code>13_volumetric_nebula.py</code>)</b>
+<br><b>🔍 Click to view code: 1.75M-Point Volumetric Nebula (<a href="examples/gallery/13_volumetric_nebula.py"><code>13_volumetric_nebula.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/13_volumetric_nebula.py`](examples/gallery/13_volumetric_nebula.py)
 
 ```python
 import numpy as np
@@ -257,8 +267,10 @@ plt.show()
 <details>
 <summary>
 <img src="examples/gallery/results/19_turbulent_vector_field_3d.png" alt="3D Turbulent Vector Field" width="650"/>
-<br><b>🔍 Click to view code: 3D Turbulent Vector Field (<code>19_turbulent_vector_field_3d.py</code>)</b>
+<br><b>🔍 Click to view code: 3D Turbulent Vector Field (<a href="examples/gallery/19_turbulent_vector_field_3d.py"><code>19_turbulent_vector_field_3d.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/19_turbulent_vector_field_3d.py`](examples/gallery/19_turbulent_vector_field_3d.py)
 
 ```python
 import numpy as np
@@ -300,8 +312,10 @@ plt.show()
 <details>
 <summary>
 <img src="examples/gallery/results/28_chladni_wave_animation.gif" alt="Chladni wave animation" width="650"/>
-<br><b>🔍 Click to view code: Animated Standing-Wave Interference (<code>28_chladni_wave_animation.py</code>)</b>
+<br><b>🔍 Click to view code: Animated Standing-Wave Interference (<a href="examples/gallery/28_chladni_wave_animation.py"><code>28_chladni_wave_animation.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/28_chladni_wave_animation.py`](examples/gallery/28_chladni_wave_animation.py)
 
 ```python
 import numpy as np
@@ -352,8 +366,10 @@ plt.show()
 <details>
 <summary>
 <img src="examples/gallery/animations/results/03_spectrum_analyzer_bars.gif" alt="Audio spectrum analyzer bars" width="650"/>
-<br><b>🔍 Click to view code: Real-Time Audio Spectrum Analyzer (<code>03_spectrum_analyzer_bars.py</code>)</b>
+<br><b>🔍 Click to view code: Real-Time Audio Spectrum Analyzer (<a href="examples/gallery/animations/03_spectrum_analyzer_bars.py"><code>03_spectrum_analyzer_bars.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/animations/03_spectrum_analyzer_bars.py`](examples/gallery/animations/03_spectrum_analyzer_bars.py)
 
 ```python
 import numpy as np
@@ -386,8 +402,10 @@ plt.show()
 <details>
 <summary>
 <img src="examples/gallery/animations/results/01_orbiting_star_cluster.gif" alt="Orbiting star cluster" width="650"/>
-<br><b>🔍 Click to view code: Differential Keplerian Star Cluster (<code>01_orbiting_star_cluster.py</code>)</b>
+<br><b>🔍 Click to view code: Differential Keplerian Star Cluster (<a href="examples/gallery/animations/01_orbiting_star_cluster.py"><code>01_orbiting_star_cluster.py</code></a>)</b>
 </summary>
+
+📄 **Full script:** [`examples/gallery/animations/01_orbiting_star_cluster.py`](examples/gallery/animations/01_orbiting_star_cluster.py)
 
 ```python
 import numpy as np
