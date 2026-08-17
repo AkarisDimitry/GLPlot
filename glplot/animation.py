@@ -1199,7 +1199,7 @@ class Animation:
     docstring).
     """
 
-    def __init__(self, fig: Any, event_source: Any, blit: bool = False) -> None:
+    def __init__(self, fig: Any, event_source: Any = None, blit: bool = False) -> None:
         self._draw_was_started = False
         self._fig = fig
         #: Recorded exactly as requested and then never consulted. GLPlot re-renders the

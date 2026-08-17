@@ -9348,7 +9348,6 @@ def voxels(
     edgecolors: Optional[Any] = None,
     shade: bool = True,
     lightsource: Optional[Any] = None,
-    axlim_clip: bool = False,
     **kwargs: Any,
 ) -> dict:
     """Draw a filled 3D boolean array as cubes (matplotlib's ``Axes3D.voxels``).
@@ -9375,7 +9374,6 @@ def voxels(
             ``"none"`` for no edges.
         shade (bool): Accepted for parity; warned about when False.
         lightsource: Accepted for parity; warned about.
-        axlim_clip (bool): Accepted for parity; warned about when True.
         **kwargs: Forwarded to the underlying :func:`bar3d` (``alpha``, ``label``,
             ``elev``, ``azim``, ``gap`` ...).
 
@@ -9414,14 +9412,11 @@ def voxels(
         {
             "shade": False if shade is False else None,
             "lightsource": lightsource,
-            "axlim_clip": True if axlim_clip else None,
         },
         {
             "shade": "has no effect: cube faces are drawn flat — ssao() is GLPlot's "
             "shading control",
             "lightsource": "has no effect: there is no lighting model to place a light in",
-            "axlim_clip": "has no effect: GLPlot's 3D renderer does not clip geometry to "
-            "the axis limits",
         },
     )
 
