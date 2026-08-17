@@ -56,14 +56,42 @@ _CORNERS = np.array([[-XLIM, -YLIM, ZLO], [XLIM, YLIM, ZHI]], dtype=np.float32)
 
 BURST_SPECS = [
     # ignite_frame, origin (x, y, z) m, hue RGB, speed range m/s, life range s
-    dict(ignite=0, origin=(-11.0, 5.0, 23.0), hue=(1.00, 0.55, 0.10), speed=(14.0, 22.0),
-         life=1.55, jitter=0.30, seed=101),  # gold -- sodium/iron
-    dict(ignite=22, origin=(10.0, -6.0, 25.0), hue=(0.10, 0.80, 1.00), speed=(15.0, 23.0),
-         life=1.60, jitter=0.30, seed=202),  # electric blue -- copper
-    dict(ignite=46, origin=(-2.0, 9.0, 22.0), hue=(1.00, 0.10, 0.60), speed=(14.0, 22.0),
-         life=1.55, jitter=0.32, seed=303),  # magenta -- strontium + copper
-    dict(ignite=68, origin=(-9.0, -9.0, 24.0), hue=(0.35, 1.00, 0.20), speed=(15.0, 24.0),
-         life=1.60, jitter=0.30, seed=404),  # green -- barium
+    dict(
+        ignite=0,
+        origin=(-11.0, 5.0, 23.0),
+        hue=(1.00, 0.55, 0.10),
+        speed=(14.0, 22.0),
+        life=1.55,
+        jitter=0.30,
+        seed=101,
+    ),  # gold -- sodium/iron
+    dict(
+        ignite=22,
+        origin=(10.0, -6.0, 25.0),
+        hue=(0.10, 0.80, 1.00),
+        speed=(15.0, 23.0),
+        life=1.60,
+        jitter=0.30,
+        seed=202,
+    ),  # electric blue -- copper
+    dict(
+        ignite=46,
+        origin=(-2.0, 9.0, 22.0),
+        hue=(1.00, 0.10, 0.60),
+        speed=(14.0, 22.0),
+        life=1.55,
+        jitter=0.32,
+        seed=303,
+    ),  # magenta -- strontium + copper
+    dict(
+        ignite=68,
+        origin=(-9.0, -9.0, 24.0),
+        hue=(0.35, 1.00, 0.20),
+        speed=(15.0, 24.0),
+        life=1.60,
+        jitter=0.30,
+        seed=404,
+    ),  # green -- barium
 ]
 
 
@@ -143,16 +171,30 @@ def update(frame: int):
     # Invisible box-corner anchors -- pins the headless export's autoscaled axes to a fixed
     # volume every frame (see the ``_CORNERS`` comment above).
     plt.scatter3d(
-        _CORNERS[:, 0], _CORNERS[:, 1], _CORNERS[:, 2],
-        color=(0.0, 0.0, 0.0, 0.0), s=0.1, alpha=0.0, elev=elev, azim=azim,
+        _CORNERS[:, 0],
+        _CORNERS[:, 1],
+        _CORNERS[:, 2],
+        color=(0.0, 0.0, 0.0, 0.0),
+        s=0.1,
+        alpha=0.0,
+        elev=elev,
+        azim=azim,
     )
 
     star_bright = 0.55 + 0.45 * np.sin(star_phase + star_rate * elapsed * 2.4)
     star_bright = np.clip(star_bright, 0.12, 1.0)
     plt.scatter3d(
-        star_x, star_y, star_z,
-        c=star_bright, cmap=STAR_CMAP, vmin=0.0, vmax=1.0,
-        s=1.3, alpha=0.55, elev=elev, azim=azim,
+        star_x,
+        star_y,
+        star_z,
+        c=star_bright,
+        cmap=STAR_CMAP,
+        vmin=0.0,
+        vmax=1.0,
+        s=1.3,
+        alpha=0.55,
+        elev=elev,
+        azim=azim,
     )
 
     n_live = 0
@@ -172,9 +214,17 @@ def update(frame: int):
                 continue
             b = brightness[alive] * mult
             plt.scatter3d(
-                pos[alive, 0], pos[alive, 1], pos[alive, 2],
-                c=b, cmap=burst["cmap"], vmin=0.0, vmax=1.0,
-                s=3.2, alpha=0.9, elev=elev, azim=azim,
+                pos[alive, 0],
+                pos[alive, 1],
+                pos[alive, 2],
+                c=b,
+                cmap=burst["cmap"],
+                vmin=0.0,
+                vmax=1.0,
+                s=3.2,
+                alpha=0.9,
+                elev=elev,
+                azim=azim,
             )
             n_live += int(alive.sum())
 
@@ -182,11 +232,19 @@ def update(frame: int):
             ox, oy, oz = burst["origin"]
             flash_fade = 1.0 - t_main / FLASH_T
             plt.scatter3d(
-                [ox], [oy], [oz], color=(1.0, 1.0, 1.0, 1.0),
-                s=16.0, alpha=float(np.clip(flash_fade, 0.0, 1.0)), elev=elev, azim=azim,
+                [ox],
+                [oy],
+                [oz],
+                color=(1.0, 1.0, 1.0, 1.0),
+                s=16.0,
+                alpha=float(np.clip(flash_fade, 0.0, 1.0)),
+                elev=elev,
+                azim=azim,
             )
 
-    plt.title(f"Fireworks over the bay -- t={elapsed:4.2f}s, {n_lit} burst(s) lit, {n_live:,} embers")
+    plt.title(
+        f"Fireworks over the bay -- t={elapsed:4.2f}s, {n_lit} burst(s) lit, {n_live:,} embers"
+    )
     plt.xlabel("x (m)")
     plt.ylabel("y (m)")
     plt.zlabel("z (m)")

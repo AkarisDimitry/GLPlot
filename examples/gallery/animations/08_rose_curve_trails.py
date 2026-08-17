@@ -29,15 +29,15 @@ import glplot.animation as animation
 import glplot.pyplot as plt
 
 FRAMES = 80
-STEPS_PER_FRAME = 40          # dense sub-steps appended to the trail each frame
-MAX_TRAIL = 1200              # points kept on screen at once -- cheap, well under budget
+STEPS_PER_FRAME = 40  # dense sub-steps appended to the trail each frame
+MAX_TRAIL = 1200  # points kept on screen at once -- cheap, well under budget
 TOTAL_STEPS = FRAMES * STEPS_PER_FRAME
 
 # --- Precompute the whole curve once: one long rose-curve arc, petal count "breathing"
 # slowly across its length so the shape keeps reshaping as the comet sweeps around it. ---
 THETA_TOTAL = 9.0 * np.pi
 theta_full = np.linspace(0.0, THETA_TOTAL, TOTAL_STEPS)
-k_full = 6.0 + 2.6 * np.sin(0.16 * theta_full)             # petal order breathes ~3.4..8.6
+k_full = 6.0 + 2.6 * np.sin(0.16 * theta_full)  # petal order breathes ~3.4..8.6
 r_full = np.cos(k_full * theta_full)
 x_full = r_full * np.cos(theta_full)
 y_full = r_full * np.sin(theta_full)

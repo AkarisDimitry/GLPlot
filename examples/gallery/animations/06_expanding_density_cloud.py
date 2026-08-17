@@ -50,7 +50,9 @@ t_values = np.linspace(0.05, T_MAX, FRAMES)  # start just after t=0 (a point has
 # frame already sized for the fully-grown one, which is the point: a fixed window you can
 # watch the blast fill.
 _spread_max = np.sqrt(2.0 * D * T_MAX)
-_r97_max = np.percentile(np.hypot(vx * T_MAX + _spread_max * zx, vy * T_MAX + _spread_max * zy), 97.0)
+_r97_max = np.percentile(
+    np.hypot(vx * T_MAX + _spread_max * zx, vy * T_MAX + _spread_max * zy), 97.0
+)
 SPAN = max(4.0, 1.15 * _r97_max)
 
 fig = plt.figure("Gallery - Expanding Density Cloud", figsize=(7.6, 6.4))
@@ -65,9 +67,7 @@ def update(frame: int):
     x = vx * t + spread * zx
     y = vy * t + spread * zy
 
-    counts, xedges, yedges = np.histogram2d(
-        x, y, bins=BINS, range=[[-SPAN, SPAN], [-SPAN, SPAN]]
-    )
+    counts, xedges, yedges = np.histogram2d(x, y, bins=BINS, range=[[-SPAN, SPAN], [-SPAN, SPAN]])
 
     plt.cla()
     plt.imshow(

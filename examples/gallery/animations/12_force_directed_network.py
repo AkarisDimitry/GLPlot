@@ -84,7 +84,9 @@ def build_scale_free_graph(n: int, m: int, rng: np.random.Generator):
     return np.asarray(edges, dtype=np.int64), degree
 
 
-def relax(pos: np.ndarray, src: np.ndarray, dst: np.ndarray, k: float, temperature: float) -> np.ndarray:
+def relax(
+    pos: np.ndarray, src: np.ndarray, dst: np.ndarray, k: float, temperature: float
+) -> np.ndarray:
     """One Fruchterman-Reingold step: all-pairs repulsion plus per-edge spring attraction.
 
     Every node's net displacement is capped at ``temperature`` -- the "annealing" that
@@ -199,7 +201,9 @@ def update(frame: int):
     plt.set_aspect("equal")
     plt.xlim(-LIM, LIM)
     plt.ylim(-LIM, LIM)
-    plt.title(f"Scale-free network layout settling -- N={N_NODES}, E={N_EDGES}, T={temperature:.3f}")
+    plt.title(
+        f"Scale-free network layout settling -- N={N_NODES}, E={N_EDGES}, T={temperature:.3f}"
+    )
     plt.xlabel("Layout x (arb. units)")
     plt.ylabel("Layout y (arb. units)")
     return []
