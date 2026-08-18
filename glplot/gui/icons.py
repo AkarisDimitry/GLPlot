@@ -66,7 +66,11 @@ def _poly(dl, cx, cy, r, col, t, pts: Sequence[Point], closed: bool = False) -> 
 def _rect(dl, cx, cy, r, col, t, x0, y0, x1, y1, rounding: float = 0.0) -> None:
     """Outlined rect in normalised icon space (``rounding`` is also normalised)."""
     dl.add_rect(
-        (cx + x0 * r, cy + y0 * r), (cx + x1 * r, cy + y1 * r), col, rounding=rounding * r, thickness=t
+        (cx + x0 * r, cy + y0 * r),
+        (cx + x1 * r, cy + y1 * r),
+        col,
+        rounding=rounding * r,
+        thickness=t,
     )
 
 

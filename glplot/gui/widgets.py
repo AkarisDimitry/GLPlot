@@ -864,9 +864,7 @@ def mini_plot(
         draw_list.add_line((px0, sy), (px1, sy), grid_col, 1.0)
         text = _fmt_tick(tick)
         size = imgui.calc_text_size(text)
-        draw_list.add_text(
-            (max(x0 + 1.0, px0 - 5.0 - size.x), sy - size.y * 0.5), muted_col, text
-        )
+        draw_list.add_text((max(x0 + 1.0, px0 - 5.0 - size.x), sy - size.y * 0.5), muted_col, text)
 
     for tick in _nice_ticks(x_lo, x_hi, 4):
         sx = px0 + (tick - x_lo) * scale_x
@@ -1219,9 +1217,7 @@ def _draw_scene3d_box(
     for i, j in _BOX_EDGES:
         if not (np.isfinite(bx[i]) and np.isfinite(bx[j])):
             continue
-        draw_list.add_line(
-            (float(bx[i]), float(by[i])), (float(bx[j]), float(by[j])), col, 1.0
-        )
+        draw_list.add_line((float(bx[i]), float(by[i])), (float(bx[j]), float(by[j])), col, 1.0)
 
 
 def _scene3d_order(
@@ -1288,9 +1284,7 @@ def _draw_scene3d_triangles(
     bx, by = sx[b].tolist(), sy[b].tolist()
     cx, cy = sx[c].tolist(), sy[c].tolist()
     for i in range(len(cols)):
-        draw_list.add_triangle_filled(
-            (ax[i], ay[i]), (bx[i], by[i]), (cx[i], cy[i]), cols[i]
-        )
+        draw_list.add_triangle_filled((ax[i], ay[i]), (bx[i], by[i]), (cx[i], cy[i]), cols[i])
 
 
 def _draw_scene3d_segments(

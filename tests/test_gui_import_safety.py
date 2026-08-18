@@ -136,8 +136,7 @@ class TestPureModuleImports:
             "        or m.startswith('imgui.')\n"
             "        or m.startswith('imgui_bundle.')\n"
             "    )\n"
-            "print(any(_is_imgui(m) for m in sys.modules))\n"
-            % (PURE_MODULES,)
+            "print(any(_is_imgui(m) for m in sys.modules))\n" % (PURE_MODULES,)
         )
         assert out.strip() == "False"
 

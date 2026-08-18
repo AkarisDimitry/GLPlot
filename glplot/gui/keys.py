@@ -166,17 +166,11 @@ if IMGUI_AVAILABLE and imgui is not None:
     )
     # Letters A-Z -> imgui.Key.a..z
     _GLFW_TO_IMGUI_KEY.update(
-        {
-            KEY_NAMES[chr(ord("A") + i)]: getattr(imgui.Key, chr(ord("a") + i))
-            for i in range(26)
-        }
+        {KEY_NAMES[chr(ord("A") + i)]: getattr(imgui.Key, chr(ord("a") + i)) for i in range(26)}
     )
     # F1-F12 only -- see the "no entry" note above for F13-F25.
     _GLFW_TO_IMGUI_KEY.update(
-        {
-            KEY_NAMES["F{0}".format(n)]: getattr(imgui.Key, "f{0}".format(n))
-            for n in range(1, 13)
-        }
+        {KEY_NAMES["F{0}".format(n)]: getattr(imgui.Key, "f{0}".format(n)) for n in range(1, 13)}
     )
 
 # Aliases accepted by parse() but never produced by key_label(): a single canonical

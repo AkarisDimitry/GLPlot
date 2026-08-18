@@ -2419,7 +2419,9 @@ class Workspace:
                     # imgui tolerates an unbalanced stack within a window. Losing one panel
                     # beats losing the render loop.
                     logger.exception("Panel %r raised while drawing.", key)
-                    imgui.text_colored((0.9, 0.35, 0.35, 1.0), "This panel failed to draw; see the log.")
+                    imgui.text_colored(
+                        (0.9, 0.35, 0.35, 1.0), "This panel failed to draw; see the log."
+                    )
             imgui.end()
         self._focused_panel = focused
 

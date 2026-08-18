@@ -7,10 +7,13 @@ name = "glplot"
 version = "0.1.8"
 description = "High-performance OpenGL plotting library for Python"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "Juan Manuel Lombardi", email = "lombardi@fhi-berlin.mpg.de" }
+    { name = "Juan Manuel Lombardi", email = "lombardi@fhi-berlin.mpg.de" },
+    { name = "Felix Riccius" },
+    { name = "Julian Holland" },
+    { name = "Gianmarco Ducci" }
 ]
 keywords = ["plotting", "opengl", "visualization", "gpu", "scientific plotting"]
 classifiers = [
@@ -20,8 +23,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -79,7 +80,7 @@ markers = [
 
 [tool.black]
 line-length = 100
-target-version = ["py310", "py311", "py312"]
+target-version = ["py311", "py312", "py313"]
 extend-exclude = '''
 /(
   # directories

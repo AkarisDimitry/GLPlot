@@ -961,7 +961,9 @@ class DataEditorPanel(Panel):
         if self._filtered:
             imgui.same_line()
             r, g, b, a = theme.get_color("warn")
-            imgui.text_colored((r, g, b, a), f"|   filtered: {self._view_rows_count(ds)} rows shown")
+            imgui.text_colored(
+                (r, g, b, a), f"|   filtered: {self._view_rows_count(ds)} rows shown"
+            )
         if ds.layer_id is not None:
             imgui.same_line()
             imgui.text_disabled("|")
@@ -1002,7 +1004,9 @@ class DataEditorPanel(Panel):
         if current:
             imgui.set_next_item_width(150.0)
             renamed, self._rename_text = imgui.input_text(
-                "##rename", self._rename_text or current, flags=imgui.InputTextFlags_.enter_returns_true
+                "##rename",
+                self._rename_text or current,
+                flags=imgui.InputTextFlags_.enter_returns_true,
             )
             imgui.same_line()
             commit = icons.icon_button("##col_ren", "check", tooltip=f"Rename {current!r}")
@@ -1692,7 +1696,9 @@ class DataEditorPanel(Panel):
         if imgui.selectable("Sort descending")[0]:
             self._sort_by(ds, index, descending=True)
         imgui.separator()
-        if imgui.selectable("Move left", False, 0 if index > 0 else imgui.SelectableFlags_.disabled)[0]:
+        if imgui.selectable(
+            "Move left", False, 0 if index > 0 else imgui.SelectableFlags_.disabled
+        )[0]:
             self._move_column(ds, index, index - 1)
         last = index < ds.n_cols() - 1
         if imgui.selectable("Move right", False, 0 if last else imgui.SelectableFlags_.disabled)[0]:
@@ -1800,7 +1806,8 @@ class DataEditorPanel(Panel):
             entered, self._edit_text = imgui.input_text(
                 f"##e{row}_{col}",
                 self._edit_text,
-                flags=imgui.InputTextFlags_.enter_returns_true | imgui.InputTextFlags_.auto_select_all,
+                flags=imgui.InputTextFlags_.enter_returns_true
+                | imgui.InputTextFlags_.auto_select_all,
             )
             if entered:
                 self._commit_edit(ds)

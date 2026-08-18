@@ -1,6 +1,8 @@
 cff-version: 1.2.0
 title: GLPlot - High-Performance GPU-Accelerated Plotting Library for Python
-message: "If you use GLPlot in your research, please cite it as below."
+message: >-
+  If you use GLPlot in your research, please cite it as below. Felix Riccius, Julian
+  Holland and Gianmarco Ducci contributed equally to this work.
 type: software
 authors:
   - family-names: Lombardi
@@ -8,6 +10,12 @@ authors:
     email: lombardi@fhi-berlin.mpg.de
     affiliation: "Fritz Haber Institute of the Max Planck Society"
     orcid: "https://orcid.org/0009-0002-3961-1426"
+  - family-names: Riccius
+    given-names: Felix
+  - family-names: Holland
+    given-names: Julian
+  - family-names: Ducci
+    given-names: Gianmarco
 identifiers:
   - type: url
     value: "https://github.com/AkarisDimitry/GLPlot"

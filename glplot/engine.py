@@ -2605,9 +2605,13 @@ class GPULinePlot:
             top = (1.0 - (y0f + hf)) * self.height  # bottom-left origin -> top-left px
             bottom = (1.0 - y0f) * self.height
             if i == self.active_panel_index:
-                draw_list.add_rect((left, top), (right, bottom), 0xFFDD9933, rounding=0.0, thickness=2.0)
+                draw_list.add_rect(
+                    (left, top), (right, bottom), 0xFFDD9933, rounding=0.0, thickness=2.0
+                )
             else:
-                draw_list.add_rect((left, top), (right, bottom), 0x55888888, rounding=0.0, thickness=1.0)
+                draw_list.add_rect(
+                    (left, top), (right, bottom), 0x55888888, rounding=0.0, thickness=1.0
+                )
 
     def _draw_marquee_box(self) -> None:
         """Rubber band for the Shift+Drag marquee selection.

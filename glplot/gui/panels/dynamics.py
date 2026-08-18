@@ -520,7 +520,9 @@ class DynamicsPanel(Panel):
         if kind_changed:
             self.kind_opts = layerops.default_kind_options(self.kind)
         imgui.same_line()
-        changed, value = imgui.color_edit3("Color", self.color, flags=imgui.ColorEditFlags_.no_inputs)
+        changed, value = imgui.color_edit3(
+            "Color", self.color, flags=imgui.ColorEditFlags_.no_inputs
+        )
         if changed:
             self.color = list(value)
 

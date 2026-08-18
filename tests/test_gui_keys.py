@@ -20,8 +20,8 @@ import importlib
 import sys
 from unittest.mock import MagicMock
 
-from imgui_bundle import imgui
 import pytest
+from imgui_bundle import imgui
 
 from glplot.gui import keys
 from glplot.gui.keys import Chord, format, is_text_safe, key_label, parse, pressed

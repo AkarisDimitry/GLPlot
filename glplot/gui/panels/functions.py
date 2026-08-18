@@ -909,7 +909,9 @@ class FunctionsPanel(Panel):
         imgui.same_line()
         # NO_INPUTS: a swatch that opens the full picker on click. The three R/G/B
         # spinboxes would eat the row and this is not a colour-grading panel.
-        changed, value = imgui.color_edit3("Color", self.color, flags=imgui.ColorEditFlags_.no_inputs)
+        changed, value = imgui.color_edit3(
+            "Color", self.color, flags=imgui.ColorEditFlags_.no_inputs
+        )
         if changed:
             self.color = list(value)
 

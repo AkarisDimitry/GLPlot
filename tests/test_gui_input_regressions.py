@@ -82,7 +82,9 @@ class TestMouseInputPipeline:
         plot = GPULinePlot()
 
         calls = []
-        plot.hud.imgui_impl = type("FakeImpl", (), {"mouse_callback": lambda self, w, x, y: calls.append((w, x, y))})()
+        plot.hud.imgui_impl = type(
+            "FakeImpl", (), {"mouse_callback": lambda self, w, x, y: calls.append((w, x, y))}
+        )()
         plot.hud.on_cursor("window", 12.0, 34.0)
         assert calls == [("window", 12.0, 34.0)]
 

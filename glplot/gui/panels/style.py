@@ -747,7 +747,11 @@ class StylePanel(Panel):
 
         if style.show_frame:
             draw_list.add_rect(
-                (x, y), (x1, y1), imgui.get_color_u32((0.5, 0.5, 0.5, 0.5)), rounding=2.0, thickness=1.0
+                (x, y),
+                (x1, y1),
+                imgui.get_color_u32((0.5, 0.5, 0.5, 0.5)),
+                rounding=2.0,
+                thickness=1.0,
             )
 
     def _draw_hand_drawn_controls(self) -> None:
@@ -1763,7 +1767,11 @@ class StylePanel(Panel):
         else:
             border, thickness = imgui.get_color_u32((0.0, 0.0, 0.0, 0.4)), 1.0
         draw_list.add_rect(
-            (ox, oy), (ox + SWATCH_WIDTH, oy + SWATCH_HEIGHT), border, rounding=2.0, thickness=thickness
+            (ox, oy),
+            (ox + SWATCH_WIDTH, oy + SWATCH_HEIGHT),
+            border,
+            rounding=2.0,
+            thickness=thickness,
         )
 
         imgui.same_line()
@@ -2268,7 +2276,11 @@ class StylePanel(Panel):
             border = imgui.get_color_u32((0.0, 0.0, 0.0, 0.4))
             thickness = 1.0
         draw_list.add_rect(
-            (ox, oy), (ox + SWATCH_WIDTH, oy + SWATCH_HEIGHT), border, rounding=2.0, thickness=thickness
+            (ox, oy),
+            (ox + SWATCH_WIDTH, oy + SWATCH_HEIGHT),
+            border,
+            rounding=2.0,
+            thickness=thickness,
         )
 
         imgui.same_line()
