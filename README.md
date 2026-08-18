@@ -4,7 +4,7 @@
 [![Lint](https://github.com/AkarisDimitry/GLPlot/workflows/Lint/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/lint.yml)
 [![Build](https://github.com/AkarisDimitry/GLPlot/workflows/Build/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python Version](https://img.shields.io/badge/Python-3.9+-blue.svg)](pyproject.toml)
+[![Python Version](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
 
 GLPlot is a Python plotting library with a Matplotlib-like API that renders on the GPU
 through OpenGL instead of the CPU. Plots that make Matplotlib chug — millions of points,
@@ -26,8 +26,8 @@ cd GLPlot
 pip install -e .
 ```
 
-Requires Python 3.9+. Core dependencies: numpy, scipy, matplotlib, glfw, PyOpenGL,
-`imgui[glfw]` (for the on-screen control panel).
+Requires Python 3.11+. Core dependencies: numpy, scipy, matplotlib, glfw, PyOpenGL,
+`imgui-bundle` (for the on-screen control panel).
 
 ## 30-second example
 
@@ -516,7 +516,7 @@ pytest tests/test_pyplot.py::test_plot_accepts_y_only_and_returns_artists  # one
 ```
 
 6,800+ tests, run fully headless (no window is ever displayed) so they work in CI. The
-matrix covers Python 3.9–3.12 on Ubuntu, macOS, and Windows; `black`, `isort`, and `flake8`
+matrix covers Python 3.11–3.13 on Ubuntu, macOS, and Windows; `black`, `isort`, and `flake8`
 are enforced on every push. See `examples/benchmark/` for reproducible performance
 comparisons against Matplotlib, VisPy, fastplotlib, Datashader, and hvPlot, and `tools/`
 for GPU/environment diagnostics.
@@ -533,7 +533,7 @@ for GPU/environment diagnostics.
 ```bibtex
 @software{lombardi2026glplot,
   title={GLPlot: High-Performance GPU-Accelerated Plotting Library for Python},
-  author={Lombardi, Juan Manuel},
+  author={Lombardi, Juan Manuel and Riccius, Felix and Holland, Julian and Ducci, Gianmarco},
   year={2026},
   url={https://github.com/AkarisDimitry/GLPlot},
   doi={10.5281/zenodo.PLACEHOLDER}
