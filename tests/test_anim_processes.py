@@ -508,9 +508,16 @@ class TestEnergyConservation:
         assert verlet_r == pytest.approx(1.6, abs=1e-3)  # back at apoapsis, a(1 + e)
 
     def test_nbody_verlet_stays_bounded(self):
-        # Measured over 5000 frames at the defaults: band 1.4e-3, final drift 9.8e-5.
+        # Measured over 3000 frames at the defaults: band 1.4e-3 on Accelerate/arm64
+        # (macOS), 7.1e-3 on OpenBLAS/x86_64 (Windows and, by architecture, Linux CI). Six
+        # gravitating bodies is chaotic -- a ULP-level difference between libm/BLAS
+        # implementations is exactly the kind of perturbation a positive Lyapunov exponent
+        # amplifies over 3000 steps, so *which* bounded orbit the integrator lands in is
+        # platform-dependent even though boundedness itself is not. The threshold is set
+        # above the largest measured value with the class's usual ~3x margin, not above
+        # the macOS number alone.
         band, drift = self._band_and_drift(energy_series("nbody", 3000, ap.NBODY.defaults()))
-        assert band < 5e-3, band
+        assert band < 2e-2, band
         assert drift < 1e-3, drift
 
     def test_nbody_softening_is_what_makes_that_possible(self):

@@ -618,7 +618,7 @@ class TestHtmlExports:
         assert 'width="' in html and 'height="' in html
 
     def test_html5_video_without_an_encoder_names_the_alternative(self, monkeypatch):
-        monkeypatch.setattr(animation.anim_export, "video_backend", staticmethod(lambda: None))
+        monkeypatch.setattr(animation.anim_export, "video_backend", lambda: None)
         with pytest.raises(RuntimeError) as excinfo:
             self._animation(frames=2).to_html5_video()
         message = str(excinfo.value)

@@ -111,6 +111,11 @@ per-quartile mean settles at -29.767, -29.772, -29.773, -29.773 and stays there.
 the property that matters, and it is the property forward Euler does not have -- an Euler
 two-body orbit gains energy monotonically and unwinds into a spiral within a few hundred
 steps, which is not a small quantitative error but a qualitatively wrong picture.
+
+The NBODY row is measured on Accelerate/arm64; six mutually gravitating bodies is a
+chaotic system, so a different libm/BLAS (OpenBLAS/x86_64, as in Windows and Linux CI)
+lands on a different point of the same bounded orbit family and measures a band around
+5x larger. The other rows are far enough from chaos, or short enough, not to show this.
 """
 
 from __future__ import annotations

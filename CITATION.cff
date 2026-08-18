@@ -1,21 +1,18 @@
 cff-version: 1.2.0
 title: GLPlot - High-Performance GPU-Accelerated Plotting Library for Python
-message: "If you use GLPlot in your research, please cite it as below. Scientific paper with full benchmarks and technical details is in preparation."
+message: "If you use GLPlot in your research, please cite it as below."
 type: software
 authors:
   - family-names: Lombardi
     given-names: Juan Manuel
     email: lombardi@fhi-berlin.mpg.de
     affiliation: "Fritz Haber Institute of the Max Planck Society"
-    orcid: "https://orcid.org/0000-0000-0000-0000"
+    orcid: "https://orcid.org/0009-0002-3961-1426"
 identifiers:
   - type: url
     value: "https://github.com/AkarisDimitry/GLPlot"
   - type: url
     value: "https://gitlab.mpcdf.mpg.de/jmlombardi/glplot"
-  - type: doi
-    description: "Zenodo deposit (pending - will be assigned upon publication)"
-    value: "10.5281/zenodo.pending"
 repository-code: "https://github.com/AkarisDimitry/GLPlot"
 repository: "https://github.com/AkarisDimitry/GLPlot"
 url: "https://github.com/AkarisDimitry/GLPlot"
@@ -41,6 +38,6 @@ keywords:
   - data visualization
 license: MIT
 status: "active development"
-version: 0.1.3
-date-released: 2026-07-07
+version: 0.1.7
+date-released: 2026-08-18
 development-status: "Beta"
