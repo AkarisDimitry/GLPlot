@@ -10,6 +10,7 @@ tags:
 authors:
   - name: Juan Manuel Lombardi
     corresponding: true
+    email: lombardi@fhi-berlin.mpg.de
     affiliation: 1
     orcid: 0009-0002-3961-1426
   - name: Felix Riccius
@@ -24,9 +25,10 @@ authors:
 affiliations:
   - name: "Fritz Haber Institute of the Max Planck Society, Berlin, Germany"
     index: 1
-    ror: "https://ror.org/03k9qs827"
+    ror: "03k9qs827"
 date: 16 August 2026
 bibliography: paper.bib
+thanks: "Software repository: \\url{https://github.com/AkarisDimitry/GLPlot}"
 ---
 
 # Summary
@@ -107,33 +109,13 @@ Dense, overlapping geometry is accumulated additively into a floating-point fram
 
 The principal scholarly contribution is the integration of multiple GPU rendering techniques into a coherent scientific plotting interface: analytical primitive expansion, viewport-relative transforms, hardware clipping, floating-point density accumulation, interaction caching, fill-rate-aware level of detail, lightweight depth cues for three-dimensional primitives, and integer-ID picking. Although these techniques are established individually in computer graphics, their combination is intended to make them usable by researchers who should not need to manage shaders and framebuffer objects directly.
 
-<!-- TODO (strongly recommended): Add reproducible comparative benchmarks on a documented hardware/software stack. At minimum compare representative large-line, line-family, and scatter workloads with relevant alternatives. Report data-transfer/setup time separately from steady-state interaction or frame time, and avoid unsupported universal performance claims. --> 
-
-<!-- TODO: Add links or citations for any further external adopters, integrations, teaching use, or research groups evaluating the software, beyond the EZGA usage cited above. -->
-
 # Limitations
 
 `GLPlot` focuses on high-performance interactive visualization rather than exhaustive Matplotlib compatibility. Complex publication layouts, specialized axis artists, advanced tick formatting, and some annotation or backend features may remain better served by Matplotlib. GPU rendering also introduces hardware, driver, and context-creation dependencies. Reproducible performance reports should therefore record the GPU model, driver and OpenGL versions, operating system, Python version, package version, viewport size, and rendering configuration.
 
 The package currently requires a functional OpenGL context and a driver supporting OpenGL 3.3 core profile, the minimum version its shaders and context request. The continuous integration suite runs fully headless on this same core-profile context, without opening a visible window, so it also serves as a compatibility check for reviewer testing and automated report generation.
 
-<!-- TODO (needs author confirmation): the paragraph above states OpenGL 3.3 core profile as the
-verified minimum, based on `#version 330 core` in glplot/utils/shaders.py and the
-CONTEXT_VERSION_MAJOR/MINOR=3.3 + OPENGL_CORE_PROFILE hints in glplot/engine.py. It has not been
-tested against every OS/driver combination; soften or qualify this claim if that matters for the
-target venue. -->
-
-<!-- TODO (needs author input): add `orcid: 0000-0000-0000-0000` to the YAML author
-entries for Felix Riccius, Julian Holland, and Gianmarco Ducci once their ORCID iDs
-are available. -->
-
 # AI usage disclosure
-
-<!-- TODO (needs author review before submission): the paragraph below is a first draft written
-by Claude (Anthropic), grounded only in what is visible to it: this repository's commit history
-and its own actions in the assisted sessions it has context for. It cannot see prior sessions it
-was not part of, so the author must verify it is complete and accurate, and amend anything it
-gets wrong before this is a truthful disclosure. -->
 
 Portions of `GLPlot`'s implementation, its test suite, its packaging configuration, and this
 manuscript (including this disclosure) were produced with assistance from Claude (Anthropic),
