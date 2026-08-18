@@ -43,7 +43,7 @@ from ..theme import COLORS
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -337,7 +337,7 @@ class DynamicsPanel(Panel):
 
         size = 24.0
         spacing = imgui.get_style().item_spacing.x
-        avail = max(size, imgui.get_content_region_available().x)
+        avail = max(size, imgui.get_content_region_avail().x)
         per_row = max(1, int((avail + spacing) // (size + spacing)))
 
         for index, system in enumerate(dynamics.SYSTEMS.values()):
@@ -520,7 +520,7 @@ class DynamicsPanel(Panel):
         if kind_changed:
             self.kind_opts = layerops.default_kind_options(self.kind)
         imgui.same_line()
-        changed, value = imgui.color_edit3("Color", *self.color, flags=imgui.COLOR_EDIT_NO_INPUTS)
+        changed, value = imgui.color_edit3("Color", self.color, flags=imgui.ColorEditFlags_.no_inputs)
         if changed:
             self.color = list(value)
 
@@ -545,11 +545,11 @@ class DynamicsPanel(Panel):
         imgui.spacing()
         ready = self._error is None and self._traj is not None
         if not ready:
-            imgui.push_style_var(imgui.STYLE_ALPHA, imgui.get_style().alpha * 0.5)
-        if imgui.button("Plot", 100.0, 0.0) and ready:
+            imgui.push_style_var(imgui.StyleVar_.alpha, imgui.get_style().alpha * 0.5)
+        if imgui.button("Plot", (100.0, 0.0)) and ready:
             self._action_plot()
         imgui.same_line()
-        if imgui.button("Create dataset", 130.0, 0.0) and ready:
+        if imgui.button("Create dataset", (130.0, 0.0)) and ready:
             self._action_create_dataset()
         if not ready:
             imgui.pop_style_var(1)
@@ -558,7 +558,7 @@ class DynamicsPanel(Panel):
             imgui.spacing()
             token = "ok" if self._status_ok else "warn"
             color = COLORS.get(token, (0.6, 0.6, 0.6, 1.0))
-            imgui.text_colored(self._status, color[0], color[1], color[2], 1.0)
+            imgui.text_colored((color[0], color[1], color[2], 1.0), self._status)
 
     # -- actions ---------------------------------------------------------------
 

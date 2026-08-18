@@ -148,7 +148,7 @@ class TestMoveStep:
 # The panel, driven through the headless imgui harness (CONTRACT 2.10).
 # ----------------------------------------------------------------------------------
 
-imgui = pytest.importorskip("imgui")
+imgui = pytest.importorskip("imgui_bundle").imgui
 
 from typing import Any, List  # noqa: E402
 
@@ -184,9 +184,7 @@ def imgui_context():
     io = imgui.get_io()
     io.display_size = 1280, 900
     io.delta_time = 1 / 60.0
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
-    io.fonts.clear_tex_data()
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     yield io
     imgui.destroy_context(ctx)
 
@@ -203,8 +201,8 @@ def _draw_frame(panel, io, pos=(0.0, 0.0), down=False):
     io.mouse_pos = pos
     io.mouse_down[0] = down
     imgui.new_frame()
-    imgui.set_next_window_position(100, 100)
-    imgui.set_next_window_size(470, 460)
+    imgui.set_next_window_pos((100, 100))
+    imgui.set_next_window_size((470, 460))
     imgui.begin("Pipeline")
     panel.draw()
     imgui.end()

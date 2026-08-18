@@ -503,8 +503,8 @@ def _add_3d_layer(
     primitive: str = "points",
     layer_type: str = "scatter3d",
     label: Optional[str] = None,
-    elev: float = 28.0,
-    azim: float = -45.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     point_size: float = 3.0,
     color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
@@ -545,9 +545,25 @@ def _add_3d_layer(
     set_layer_compositing(layer, blend=blend, depth_write=depth_write, auto_alpha=auto_alpha)
     layer.metadata.update(metadata or {})
     global_camera = getattr(plot_obj, "view3d", {})
+    if elev is not None or azim is not None:
+        # An explicit elev=/azim= from the caller always wins and persists -- e.g. an
+        # animation's update() driving the camera every frame, or a script asking for
+        # a specific starting view. This used to be backwards: `global_camera` is
+        # always a live, fully-populated proxy (View3DProxy is backed by a real
+        # Camera3D, never actually missing a key), so `global_camera.get("elev",
+        # elev)` never once fell through to the caller's `elev` -- every
+        # scatter3d(elev=..., azim=...)/plot_surface(...)/bar3d(...)/etc. call was
+        # silently ignored and the camera stayed frozen at whatever the panel's
+        # camera already was (confirmed: an animation passing a different azim=
+        # every frame rendered the same fixed angle in every single frame).
+        if elev is not None:
+            plot_obj.view3d["elev"] = float(elev)
+        if azim is not None:
+            plot_obj.view3d["azim"] = float(azim)
+        global_camera = plot_obj.view3d
     camera = {
-        "elev": float(global_camera.get("elev", elev)),
-        "azim": float(global_camera.get("azim", azim)),
+        "elev": float(global_camera.get("elev", 28.0)),
+        "azim": float(global_camera.get("azim", -45.0)),
         "fov": float(global_camera.get("fov", 42.0)),
     }
     if global_camera.get("distance") is not None:
@@ -5147,8 +5163,8 @@ def plot3d(
     y: ArrayLike,
     z: ArrayLike,
     *args: Any,
-    elev: float = 30.0,
-    azim: float = -60.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     scale_z: float = 1.0,
     **kwargs: Any,
 ) -> BaseLayer:
@@ -5533,8 +5549,8 @@ def scatter3d(
     y: ArrayLike,
     z: ArrayLike,
     *args: Any,
-    elev: float = 30.0,
-    azim: float = -60.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     scale_z: float = 1.0,
     c: Optional[Union[ColorLike, ArrayLike]] = None,
     cmap: Optional[str] = None,
@@ -9072,8 +9088,8 @@ def plot_surface(
     *,
     cmap: Optional[str] = "viridis",
     color: Optional[ColorLike] = None,
-    elev: float = 30.0,
-    azim: float = -60.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     scale_z: float = 1.0,
     rstride: int = 1,
     cstride: int = 1,
@@ -9247,8 +9263,8 @@ def mesh3d(
     c: Optional[Sequence[float]] = None,
     cmap: str = "viridis",
     alpha: Optional[float] = None,
-    elev: float = 30.0,
-    azim: float = -60.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     label: Optional[str] = None,
 ):
     verts = _as_float_array(vertices, ndim=2, name="vertices")
@@ -9280,8 +9296,8 @@ def volume3d(
     threshold: Optional[float] = None,
     cmap: str = "magma",
     alpha: float = 0.45,
-    elev: float = 30.0,
-    azim: float = -60.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     s: float = 2.0,
     label: Optional[str] = None,
     blend: Optional[Union[str, "BlendMode"]] = None,
@@ -9490,8 +9506,8 @@ def plot_wireframe(
     Y,
     Z,
     *,
-    elev: float = 30.0,
-    azim: float = -60.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     scale_z: float = 1.0,
     rstride: int = 4,
     cstride: int = 4,
@@ -9710,8 +9726,8 @@ def bar3d(
     lightsource: Optional[Any] = None,
     *,
     alpha: Optional[float] = None,
-    elev: float = 30.0,
-    azim: float = -60.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     scale_z: float = 1.0,
     label: Optional[str] = None,
     shape: str = "box",
@@ -10420,8 +10436,8 @@ def quiver3d(
     head_length: float = 0.18,
     head_width: float = 0.09,
     normalize: bool = False,
-    elev: float = 30.0,
-    azim: float = -60.0,
+    elev: Optional[float] = None,
+    azim: Optional[float] = None,
     label: Optional[str] = None,
     **kwargs: Any,
 ) -> list[BaseLayer]:

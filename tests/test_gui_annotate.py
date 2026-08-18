@@ -463,7 +463,7 @@ class TestToolProjection:
         world_to_screen reproduces renderers/text.py's projection and screen_to_world is
         the camera's own inverse; if they disagree, a placed label drifts from the cursor.
         """
-        imgui = pytest.importorskip("imgui")
+        imgui = pytest.importorskip("imgui_bundle").imgui
         annotate = pytest.importorskip("glplot.gui.panels.annotate")
         imgui.create_context()
 
@@ -488,12 +488,14 @@ class TestAnnotatePanelDraws:
     """Test the panel body through the headless imgui harness (CONTRACT §2.10)."""
 
     def _harness(self):
-        imgui = pytest.importorskip("imgui")
+        imgui = pytest.importorskip("imgui_bundle").imgui
         imgui.create_context()
         io = imgui.get_io()
         io.display_size = 900, 700
-        io.fonts.get_tex_data_as_rgba32()
-        io.fonts.texture_id = 1
+        # Font atlas is dynamic under imgui-bundle; get_tex_data_as_rgba32()/texture_id no
+        # longer exist. Telling imgui a backend owns texture building is the headless
+        # equivalent, since this harness never renders real pixels.
+        io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
         io.delta_time = 1 / 60.0
         return imgui
 

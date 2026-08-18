@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, List
 import numpy as np
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except ImportError:
@@ -57,13 +57,13 @@ class TextRenderer:
         draw_list = imgui.get_background_draw_list()
 
         color = layer.style.color if layer.style.color is not None else (0.0, 0.0, 0.0, 1.0)
-        # ImGui expects packed color or separate components depending on the call
-        # imgui.get_color_u32_rgba takes (r, g, b, a) in 0..1
-        u32_color = imgui.get_color_u32_rgba(*color)
+        # ImGui expects a packed color or a tuple depending on the call
+        # imgui.get_color_u32 takes an (r, g, b, a) tuple in 0..1
+        u32_color = imgui.get_color_u32(tuple(color))
 
         # In V1, we just use the default font.
         # Future enhancement: custom font sizes via pusher/pop
-        draw_list.add_text(screen_x, screen_y, u32_color, layer.text)
+        draw_list.add_text((screen_x, screen_y), u32_color, layer.text)
 
     def draw_all(self, layers: List[BaseLayer], ctx: RenderContext) -> None:
         """Helper to draw all text layers in the scene."""

@@ -39,12 +39,11 @@ def clean_state():
 @pytest.fixture
 def imgui_frame():
     """An imgui context and open frame, per CONTRACT section 2.10. No GL involved."""
-    imgui = pytest.importorskip("imgui")
+    imgui = pytest.importorskip("imgui_bundle").imgui
     ctx = imgui.create_context()
     io = imgui.get_io()
     io.display_size = 1280, 800
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     io.delta_time = 1 / 60.0
     imgui.new_frame()
     yield imgui
@@ -322,19 +321,19 @@ class TestDrawLegend:
         """Off by default means not one vertex."""
         gplt.plot([0, 1], [0, 1], label="A")
         plot = gplt._get_or_create_plot()
-        before = imgui_frame.get_background_draw_list().vtx_buffer_size
+        before = len(imgui_frame.get_background_draw_list().vtx_buffer)
         assert draw_legend(plot) is None
-        assert imgui_frame.get_background_draw_list().vtx_buffer_size == before
+        assert len(imgui_frame.get_background_draw_list().vtx_buffer) == before
 
     def test_draws_geometry_once_enabled(self, imgui_frame):
         """legend() makes real vertices appear on the background draw list."""
         gplt.plot([0, 1], [0, 1], label="A")
         plot = gplt._get_or_create_plot()
         gplt.legend()
-        before = imgui_frame.get_background_draw_list().vtx_buffer_size
+        before = len(imgui_frame.get_background_draw_list().vtx_buffer)
         rect = draw_legend(plot)
         assert rect is not None
-        assert imgui_frame.get_background_draw_list().vtx_buffer_size > before
+        assert len(imgui_frame.get_background_draw_list().vtx_buffer) > before
 
     def test_draws_nothing_when_no_labels(self, imgui_frame):
         """An enabled legend with nothing to say still draws nothing."""
@@ -411,13 +410,10 @@ class TestDrawLegend:
         def glyph_span(scale):
             plot.options.legend_font_scale = scale
             dl = imgui_frame.get_background_draw_list()
-            first = dl.vtx_buffer_size
+            first = len(dl.vtx_buffer)
             draw_legend(plot)
-            from glplot.renderers.axis import _ImDrawVert
-
-            n = dl.vtx_buffer_size - first
-            verts = (_ImDrawVert * (first + n)).from_address(int(dl.vtx_buffer_data))
-            xs = [verts[i].x for i in range(first, first + n)]
+            n = len(dl.vtx_buffer) - first
+            xs = [dl.vtx_buffer[i].pos.x for i in range(first, first + n)]
             return max(xs) - min(xs)
 
         assert glyph_span(2.0) > glyph_span(1.0) * 1.5
@@ -430,9 +426,9 @@ class TestDrawLegend:
 
         def verts():
             dl = imgui_frame.get_background_draw_list()
-            before = dl.vtx_buffer_size
+            before = len(dl.vtx_buffer)
             draw_legend(plot)
-            return dl.vtx_buffer_size - before
+            return len(dl.vtx_buffer) - before
 
         full = verts()
         plot.options.legend_background = False

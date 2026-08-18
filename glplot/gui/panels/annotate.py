@@ -63,7 +63,7 @@ from ..history import Command
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - GL-less import guard
@@ -122,15 +122,15 @@ _TOOL_ATTR = "_annotate_tool"
 _OVERLAY_FLAGS = 0
 if IMGUI_AVAILABLE:  # pragma: no branch - constant folding, guarded for a GL-less import
     _OVERLAY_FLAGS = (
-        imgui.WINDOW_NO_TITLE_BAR
-        | imgui.WINDOW_NO_RESIZE
-        | imgui.WINDOW_NO_MOVE
-        | imgui.WINDOW_NO_SCROLLBAR
-        | imgui.WINDOW_NO_SAVED_SETTINGS
-        | imgui.WINDOW_NO_COLLAPSE
-        | imgui.WINDOW_NO_BACKGROUND
-        | imgui.WINDOW_NO_BRING_TO_FRONT_ON_FOCUS
-        | imgui.WINDOW_NO_FOCUS_ON_APPEARING
+        imgui.WindowFlags_.no_title_bar
+        | imgui.WindowFlags_.no_resize
+        | imgui.WindowFlags_.no_move
+        | imgui.WindowFlags_.no_scrollbar
+        | imgui.WindowFlags_.no_saved_settings
+        | imgui.WindowFlags_.no_collapse
+        | imgui.WindowFlags_.no_background
+        | imgui.WindowFlags_.no_bring_to_front_on_focus
+        | imgui.WindowFlags_.no_focus_on_appearing
     )
 
 
@@ -430,19 +430,19 @@ def draw_canvas_layer(ws: Any) -> None:
 
 def _draw_overlay(ws: Any, tool: ToolController, width: float, height: float) -> None:
     """The full-canvas hit target, the live preview, and the gesture state machine."""
-    imgui.set_next_window_position(0.0, 0.0)
-    imgui.set_next_window_size(width, height)
+    imgui.set_next_window_pos((0.0, 0.0))
+    imgui.set_next_window_size((width, height))
     imgui.set_next_window_bg_alpha(0.0)
     imgui.begin("##glplot_canvas_tool", flags=_OVERLAY_FLAGS)
 
     imgui.set_cursor_screen_pos((0.0, 0.0))
-    imgui.invisible_button("##glplot_canvas_hit", max(width, 1.0), max(height, 1.0))
+    imgui.invisible_button("##glplot_canvas_hit", (max(width, 1.0), max(height, 1.0)))
     hovered = imgui.is_item_hovered()
     active = imgui.is_item_active()
 
     if hovered and not tool.is_editing:
         imgui.set_mouse_cursor(
-            imgui.MOUSE_CURSOR_TEXT_INPUT if tool.mode == TOOL_TEXT else imgui.MOUSE_CURSOR_HAND
+            imgui.MouseCursor_.text_input if tool.mode == TOOL_TEXT else imgui.MouseCursor_.hand
         )
 
     mouse = tuple(float(v) for v in imgui.get_io().mouse_pos)
@@ -927,7 +927,7 @@ def _rebuilder(layer: Any) -> Optional[Any]:
 def _u32(rgba: Sequence[float]) -> int:
     """Pack an RGBA 4-tuple for a draw list."""
     values = list(rgba) + [1.0] * (4 - len(rgba))
-    return imgui.get_color_u32_rgba(*(float(v) for v in values[:4]))
+    return imgui.get_color_u32(tuple(float(v) for v in values[:4]))
 
 
 def _draw_preview(ws: Any, tool: ToolController) -> None:
@@ -949,38 +949,30 @@ def _draw_preview(ws: Any, tool: ToolController) -> None:
     color = _u32(tool.color)
 
     if tool.mode == TOOL_ARROW:
-        dl.add_line(press[0], press[1], now[0], now[1], color, max(tool.line_width, 1.0))
+        dl.add_line((press[0], press[1]), (now[0], now[1]), color, max(tool.line_width, 1.0))
         length = float(np.hypot(now[0] - press[0], now[1] - press[1]))
         if length > 1e-6:
             ux, uy = (now[0] - press[0]) / length, (now[1] - press[1]) / length
             head = min(14.0, length * 0.35)
             bx, by = now[0] - ux * head, now[1] - uy * head
             dl.add_triangle_filled(
-                now[0],
-                now[1],
-                bx - uy * head * 0.5,
-                by + ux * head * 0.5,
-                bx + uy * head * 0.5,
-                by - ux * head * 0.5,
+                (now[0], now[1]),
+                (bx - uy * head * 0.5, by + ux * head * 0.5),
+                (bx + uy * head * 0.5, by - ux * head * 0.5),
                 color,
             )
     elif tool.mode == TOOL_RECT:
         dl.add_rect_filled(
-            min(press[0], now[0]),
-            min(press[1], now[1]),
-            max(press[0], now[0]),
-            max(press[1], now[1]),
+            (min(press[0], now[0]), min(press[1], now[1])),
+            (max(press[0], now[0]), max(press[1], now[1])),
             _u32(tool.fill_color),
         )
         dl.add_rect(
-            min(press[0], now[0]),
-            min(press[1], now[1]),
-            max(press[0], now[0]),
-            max(press[1], now[1]),
+            (min(press[0], now[0]), min(press[1], now[1])),
+            (max(press[0], now[0]), max(press[1], now[1])),
             color,
-            0.0,
-            0,
-            1.0,
+            rounding=0.0,
+            thickness=1.0,
         )
 
 
@@ -992,7 +984,7 @@ def _draw_text_handles(ws: Any, dl: Any) -> None:
     there is nothing on screen that says a string is draggable.
     """
     plot = ws.plot
-    color = imgui.get_color_u32_rgba(0.55, 0.78, 1.0, 0.65)
+    color = imgui.get_color_u32((0.55, 0.78, 1.0, 0.65))
     for layer in plot.scene.layers:
         if layerops.annotation_kind(layer) != "text":
             continue
@@ -1001,7 +993,13 @@ def _draw_text_handles(ws: Any, dl: Any) -> None:
         rect = _text_screen_rect(plot, layer)
         if rect is None:
             continue
-        dl.add_rect(rect[0] - 2.0, rect[1] - 2.0, rect[2] + 2.0, rect[3] + 2.0, color, 2.0, 0, 1.0)
+        dl.add_rect(
+            (rect[0] - 2.0, rect[1] - 2.0),
+            (rect[2] + 2.0, rect[3] + 2.0),
+            color,
+            rounding=2.0,
+            thickness=1.0,
+        )
 
 
 def _draw_hint(tool: ToolController, width: float, height: float) -> None:
@@ -1014,14 +1012,12 @@ def _draw_hint(tool: ToolController, width: float, height: float) -> None:
     y = height - float(text_h) - 14.0
     dl = imgui.get_window_draw_list()
     dl.add_rect_filled(
-        x - 8.0,
-        y - 4.0,
-        x + float(text_w) + 8.0,
-        y + float(text_h) + 4.0,
-        imgui.get_color_u32_rgba(0.0, 0.0, 0.0, 0.55),
+        (x - 8.0, y - 4.0),
+        (x + float(text_w) + 8.0, y + float(text_h) + 4.0),
+        imgui.get_color_u32((0.0, 0.0, 0.0, 0.55)),
         4.0,
     )
-    dl.add_text(x, y, imgui.get_color_u32_rgba(0.9, 0.9, 0.92, 1.0), message)
+    dl.add_text((x, y), imgui.get_color_u32((0.9, 0.9, 0.92, 1.0)), message)
 
 
 def _draw_inline_editor(ws: Any, tool: ToolController) -> None:
@@ -1044,17 +1040,17 @@ def _draw_inline_editor(ws: Any, tool: ToolController) -> None:
     pos_x = min(max(screen[0] - 6.0, 0.0), max(width - box_w - 4.0, 0.0))
     pos_y = min(max(screen[1] - 6.0, 0.0), max(height - 40.0, 0.0))
 
-    imgui.set_next_window_position(pos_x, pos_y)
-    imgui.set_next_window_size(box_w, 0.0)
+    imgui.set_next_window_pos((pos_x, pos_y))
+    imgui.set_next_window_size((box_w, 0.0))
     imgui.begin(
         "##glplot_text_edit",
         flags=(
-            imgui.WINDOW_NO_TITLE_BAR
-            | imgui.WINDOW_NO_RESIZE
-            | imgui.WINDOW_NO_MOVE
-            | imgui.WINDOW_NO_SCROLLBAR
-            | imgui.WINDOW_NO_SAVED_SETTINGS
-            | imgui.WINDOW_ALWAYS_AUTO_RESIZE
+            imgui.WindowFlags_.no_title_bar
+            | imgui.WindowFlags_.no_resize
+            | imgui.WindowFlags_.no_move
+            | imgui.WindowFlags_.no_scrollbar
+            | imgui.WindowFlags_.no_saved_settings
+            | imgui.WindowFlags_.always_auto_resize
         ),
     )
 
@@ -1068,7 +1064,7 @@ def _draw_inline_editor(ws: Any, tool: ToolController) -> None:
     entered, value = imgui.input_text(
         "##glplot_text_edit_field",
         tool._pending_text,
-        flags=imgui.INPUT_TEXT_ENTER_RETURNS_TRUE | imgui.INPUT_TEXT_AUTO_SELECT_ALL,
+        flags=imgui.InputTextFlags_.enter_returns_true | imgui.InputTextFlags_.auto_select_all,
     )
     imgui.pop_item_width()
     tool._pending_text = value
@@ -1078,7 +1074,7 @@ def _draw_inline_editor(ws: Any, tool: ToolController) -> None:
 
     if entered:
         _commit_text(ws, tool)
-    elif GLFW_AVAILABLE and imgui.is_key_pressed(glfw.KEY_ESCAPE):
+    elif GLFW_AVAILABLE and imgui.is_key_pressed(imgui.Key.escape):
         tool.cancel()
 
 
@@ -1162,11 +1158,11 @@ class AnnotatePanel(Panel):
         imgui.text("New annotation style")
         imgui.push_id("annotate_defaults")
 
-        changed, color = imgui.color_edit4("Color", *tool.color)
+        changed, color = imgui.color_edit4("Color", tool.color)
         if changed:
             tool.color = (float(color[0]), float(color[1]), float(color[2]), float(color[3]))
 
-        changed, fill = imgui.color_edit4("Fill", *tool.fill_color)
+        changed, fill = imgui.color_edit4("Fill", tool.fill_color)
         if changed:
             tool.fill_color = (float(fill[0]), float(fill[1]), float(fill[2]), float(fill[3]))
 
@@ -1255,7 +1251,7 @@ class AnnotatePanel(Panel):
 
         if "color" in spec.live_fields or "face_color" in spec.live_fields:
             current = layerops.annotation_color(layers)
-            changed, value = imgui.color_edit4("Color", *current)
+            changed, value = imgui.color_edit4("Color", current)
             if changed:
                 rgba = (float(value[0]), float(value[1]), float(value[2]), float(value[3]))
                 # Fanned across both fields: an arrow's shaft reads style.color and its
@@ -1295,7 +1291,7 @@ class AnnotatePanel(Panel):
         hunting for a background box or an ellipse deserves the reason in the UI rather
         than the conclusion that the panel is unfinished.
         """
-        expanded, _ = imgui.collapsing_header("Not available, and why")
+        expanded = imgui.collapsing_header("Not available, and why")
         if not expanded:
             return
         imgui.indent()
@@ -1303,9 +1299,9 @@ class AnnotatePanel(Panel):
             imgui.push_id(f"unreachable_{name}")
             imgui.bullet_text(name)
             imgui.indent()
-            imgui.push_text_wrap_position(0.0)
+            imgui.push_text_wrap_pos(0.0)
             imgui.text_disabled(reason)
-            imgui.pop_text_wrap_position()
+            imgui.pop_text_wrap_pos()
             imgui.unindent()
             imgui.pop_id()
         imgui.unindent()

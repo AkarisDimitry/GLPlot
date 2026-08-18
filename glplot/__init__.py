@@ -23,6 +23,18 @@ Author: Juan Manuel Lombardi
 Repository: https://github.com/AkarisDimitry/GLPlot
 """
 
+try:
+    # Must run before anything imports the `glfw` package (`.engine` does, right below).
+    # imgui-bundle points pip's `glfw` at its own bundled libglfw via the PYGLFW_LIBRARY
+    # env var, but only if it gets a chance to set that *before* `glfw` loads its own
+    # copy -- otherwise both libglfw.3.dylib's end up loaded in the same process, and
+    # macOS logs "Class GLFWWindow is implemented in both ..." for every GLFW ObjC class
+    # (verified: importing imgui_bundle first eliminates the warning entirely; importing
+    # it after `glfw`, as a naive import order would, does not).
+    import imgui_bundle as _imgui_bundle  # noqa: F401
+except Exception:  # pragma: no cover - imgui_bundle is optional at import time (GL-less use)
+    pass
+
 from .engine import GPULinePlot
 from .options import BlendMode, EngineOptions, RenderMode
 

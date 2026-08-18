@@ -68,12 +68,14 @@ def harness():
     The teardown is not optional: imgui's context is global state, and a leaked one left
     current makes any later file's own create/destroy fixture see a foreign context.
     """
-    imgui = pytest.importorskip("imgui")
+    imgui = pytest.importorskip("imgui_bundle").imgui
     ctx = imgui.create_context()
     io = imgui.get_io()
     io.display_size = 1200, 900
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
+    # Font atlas is dynamic under imgui-bundle; get_tex_data_as_rgba32()/texture_id no
+    # longer exist. Telling imgui a backend owns texture building is the headless
+    # equivalent, since this harness never renders real pixels.
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     io.delta_time = 1 / 60.0
     yield imgui
     imgui.destroy_context(ctx)
@@ -526,7 +528,7 @@ class TestPreviewDraws:
             ]
         )
         packed = widgets._pack_u32(samples).tolist()
-        expected = [harness.get_color_u32_rgba(*row) for row in samples.tolist()]
+        expected = [harness.get_color_u32(tuple(row)) for row in samples.tolist()]
         harness.end()
         harness.render()
         assert packed == expected
@@ -547,9 +549,9 @@ class TestOrbitDrag:
 
         def frame():
             imgui.new_frame()
-            imgui.set_next_window_position(0.0, 0.0)
-            imgui.set_next_window_size(400.0, 300.0)
-            imgui.begin("Orbit", flags=imgui.WINDOW_NO_TITLE_BAR)
+            imgui.set_next_window_pos((0.0, 0.0))
+            imgui.set_next_window_size((400.0, 300.0))
+            imgui.begin("Orbit", flags=imgui.WindowFlags_.no_title_bar)
             moved.append(
                 widgets.mini_scene3d("orbit", points, camera=camera, dots=True, height=200.0)
             )

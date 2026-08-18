@@ -56,7 +56,7 @@ from ..mathops import describe
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - imgui is a hard dependency in CI
@@ -498,7 +498,7 @@ class SelectionPanel(Panel):
             return
         selection = _selection_of(self.plot)
         if selection is None:
-            imgui.text_colored("This engine build has no selection model.", 0.9, 0.35, 0.35)
+            imgui.text_colored((0.9, 0.35, 0.35, 1.0), "This engine build has no selection model.")
             return
 
         # One id scope for the whole panel. Round 2 lost a combo to a label collision
@@ -523,9 +523,9 @@ class SelectionPanel(Panel):
         total = selection.count()
         n_layers = len(selection.layers())
         if total == 0:
-            imgui.text_colored("Nothing selected", 0.48, 0.51, 0.56, 1.0)
+            imgui.text_colored((0.48, 0.51, 0.56, 1.0), "Nothing selected")
             imgui.text_colored(
-                "Shift+drag on the canvas, or use Select All.", 0.48, 0.51, 0.56, 1.0
+                (0.48, 0.51, 0.56, 1.0), "Shift+drag on the canvas, or use Select All."
             )
             return
         noun = "element" if total == 1 else "elements"
@@ -557,7 +557,7 @@ class SelectionPanel(Panel):
         if icon_button("sel_invert", "refresh", tooltip="Invert Selection", enabled=enabled):
             self.invert()
         imgui.same_line()
-        imgui.text_colored(f"scope: {self._scope_label()}", 0.48, 0.51, 0.56, 1.0)
+        imgui.text_colored((0.48, 0.51, 0.56, 1.0), f"scope: {self._scope_label()}")
 
     def _draw_breakdown(self, selection: Any) -> None:
         """Per-layer "42 / 500" rows, so a multi-layer selection is legible."""
@@ -590,11 +590,11 @@ class SelectionPanel(Panel):
             sx, sy = describe(xs), describe(ys)
         except ValueError:  # pragma: no cover - _selected_xy never yields empty
             return
-        table = imgui.begin_table(
-            "stats", 3, imgui.TABLE_ROW_BACKGROUND | imgui.TABLE_BORDERS_INNER
+        table_open = imgui.begin_table(
+            "stats", 3, imgui.TableFlags_.row_bg | imgui.TableFlags_.borders_inner
         )
-        # .opened, per CONTRACT §2.2 — and end_table() only inside the guard.
-        if table.opened:
+        # end_table() only inside the guard, per CONTRACT §2.2.
+        if table_open:
             imgui.table_setup_column("")
             imgui.table_setup_column("x")
             imgui.table_setup_column("y")
@@ -639,9 +639,6 @@ class SelectionPanel(Panel):
 
         if any_sel and not pointwise:
             imgui.text_colored(
+                (0.48, 0.51, 0.56, 1.0),
                 "Selected elements are lines or patches: no per-point data to extract.",
-                0.48,
-                0.51,
-                0.56,
-                1.0,
             )

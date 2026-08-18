@@ -39,7 +39,7 @@ from .base import Panel
 from .timeline import apply_timeline, queue_playback
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -363,8 +363,8 @@ class PresentationPanel(Panel):
         count = len(timeline.scenes)
 
         if not self._presenting:
-            width = max(140.0, imgui.get_content_region_available().x * 0.42)
-            if imgui.button("Present", width, 34.0):
+            width = max(140.0, imgui.get_content_region_avail().x * 0.42)
+            if imgui.button("Present", (width, 34.0)):
                 self.enter_presentation()
             if imgui.is_item_hovered():
                 imgui.set_tooltip(
@@ -475,7 +475,7 @@ class PresentationPanel(Panel):
         label = str(scene.name).replace("##", "# #")
         marker = " *" if index == current else ""
         clicked, _ = imgui.selectable(
-            f"{index + 1}. {label}{marker}##pick", index == self._selected, 0, 190.0, 0.0
+            f"{index + 1}. {label}{marker}##pick", index == self._selected, 0, (190.0, 0.0)
         )
         if clicked:
             self._selected = index
@@ -523,13 +523,13 @@ class PresentationPanel(Panel):
         if self._focus_rename:
             imgui.set_keyboard_focus_here()
             self._focus_rename = False
-        imgui.push_item_width(max(120.0, imgui.get_content_region_available().x - 8.0))
+        imgui.push_item_width(max(120.0, imgui.get_content_region_avail().x - 8.0))
         # buffer_length stays at its -1 default (CONTRACT §2.4): an explicit length
         # shorter than the text silently truncates it.
         entered, text = imgui.input_text(
             "##rename",
             self._rename_buf,
-            flags=imgui.INPUT_TEXT_ENTER_RETURNS_TRUE | imgui.INPUT_TEXT_AUTO_SELECT_ALL,
+            flags=imgui.InputTextFlags_.enter_returns_true | imgui.InputTextFlags_.auto_select_all,
         )
         imgui.pop_item_width()
         self._rename_buf = text
@@ -538,7 +538,7 @@ class PresentationPanel(Panel):
         elif imgui.is_item_deactivated():
             # Escape has already reverted imgui's buffer, so check the key rather than
             # trusting the returned text.
-            if imgui.is_key_pressed(imgui.get_key_index(imgui.KEY_ESCAPE)):
+            if imgui.is_key_pressed(imgui.Key.escape):
                 self._cancel_rename()
             else:
                 self._commit_rename(scene, text)

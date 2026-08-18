@@ -71,12 +71,11 @@ def harness():
 
     The teardown is mandatory — see the module docstring.
     """
-    imgui = pytest.importorskip("imgui")
+    imgui = pytest.importorskip("imgui_bundle").imgui
     ctx = imgui.create_context()
     io = imgui.get_io()
     io.display_size = 1200, 900
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     io.delta_time = 1 / 60.0
     yield imgui
     imgui.destroy_context(ctx)
@@ -93,7 +92,7 @@ def all_sections(monkeypatch):
 def _layer_frame(imgui, panel, *, tab=None):
     """Draw one panel body inside a real frame and assert the frame closed cleanly."""
     imgui.new_frame()
-    imgui.set_next_window_size(420, 900)
+    imgui.set_next_window_size((420, 900))
     imgui.begin("Style")
     (tab or panel._draw_layer)()
     imgui.end()

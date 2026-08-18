@@ -29,7 +29,7 @@ class RenderPolicyManager:
 
         is_hud_interacting = False
         try:
-            import imgui
+            from imgui_bundle import imgui
 
             if imgui.get_current_context() is not None:
                 is_hud_interacting = imgui.is_any_item_active()

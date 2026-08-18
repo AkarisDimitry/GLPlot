@@ -22,9 +22,9 @@ from glplot.core.context import RenderContext
 from glplot.managers.axis import AxisManager, _decimals_for_step
 from glplot.options import STOCK_WINDOW_TITLES, EngineOptions, RenderMode
 
-imgui = pytest.importorskip("imgui")
+imgui = pytest.importorskip("imgui_bundle").imgui
 
-from glplot.renderers.axis import AxisRenderer, _ImDrawVert  # noqa: E402
+from glplot.renderers.axis import AxisRenderer  # noqa: E402
 
 _WIDTH, _HEIGHT = 1280, 720
 
@@ -43,8 +43,10 @@ def imgui_context():
     io = imgui.get_io()
     io.display_size = _WIDTH, _HEIGHT
     io.delta_time = 1 / 60.0
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
+    # Font atlas is dynamic under imgui-bundle; get_tex_data_as_rgba32()/texture_id no
+    # longer exist. Telling imgui a backend owns texture building is the headless
+    # equivalent, since this harness never renders real pixels.
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     yield io
     imgui.destroy_context(ctx)
 
@@ -74,11 +76,10 @@ def _label_vertices(live: Any) -> List[Tuple[float, float]]:
     )
     live.axis_manager.update(ctx)
     draw_list = imgui.get_background_draw_list()
-    first = draw_list.vtx_buffer_size
+    first = len(draw_list.vtx_buffer)
     AxisRenderer(live.options)._draw_labels(live.axis_manager, ctx)
-    count = draw_list.vtx_buffer_size - first
-    verts = (_ImDrawVert * (first + count)).from_address(int(draw_list.vtx_buffer_data))
-    points = [(verts[i].x, verts[i].y) for i in range(first, first + count)]
+    vb = draw_list.vtx_buffer
+    points = [(vb[i].pos.x, vb[i].pos.y) for i in range(first, len(vb))]
     imgui.end_frame()
     return points
 
@@ -194,12 +195,10 @@ class TestTitleFontsizeAndColor:
             )
             plot.axis_manager.update(ctx)
             draw_list = imgui.get_background_draw_list()
-            first = draw_list.vtx_buffer_size
             AxisRenderer(plot.options)._draw_labels(plot.axis_manager, ctx)
-            count = draw_list.vtx_buffer_size - first
-            verts = (_ImDrawVert * (first + count)).from_address(int(draw_list.vtx_buffer_data))
+            vb = draw_list.vtx_buffer
             # The title is the last run emitted, so its colour is the last vertex's.
-            col = verts[first + count - 1].col
+            col = vb[len(vb) - 1].col
             imgui.end_frame()
             return col
 
@@ -601,7 +600,7 @@ class TestAxesTab:
 
     def _draw_axes_tab(self, panel: Any) -> None:
         imgui.new_frame()
-        imgui.set_next_window_size(360, 640)
+        imgui.set_next_window_size((360, 640))
         imgui.begin("Style")
         panel._draw_axes()
         imgui.end()

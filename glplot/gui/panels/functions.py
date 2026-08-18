@@ -41,7 +41,7 @@ from ..theme import COLORS
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -520,7 +520,7 @@ class FunctionsPanel(Panel):
 
         size = 24.0
         spacing = imgui.get_style().item_spacing.x
-        avail = max(size, imgui.get_content_region_available().x)
+        avail = max(size, imgui.get_content_region_avail().x)
         per_row = max(1, int((avail + spacing) // (size + spacing)))
 
         for index, preset in enumerate(PRESETS):
@@ -562,8 +562,7 @@ class FunctionsPanel(Panel):
         changed, value = imgui.input_text_multiline(
             "##expression",
             self.expr,
-            width=-1.0,
-            height=imgui.get_text_line_height() * 3.0,
+            (-1.0, imgui.get_text_line_height() * 3.0),
         )
         if changed:
             self.expr = value
@@ -752,8 +751,8 @@ class FunctionsPanel(Panel):
         imgui.spacing()
         ready = self._error is None and self._field is not None
         if not ready:
-            imgui.push_style_var(imgui.STYLE_ALPHA, imgui.get_style().alpha * 0.5)
-        if imgui.button("Plot", 100.0, 0.0) and ready:
+            imgui.push_style_var(imgui.StyleVar_.alpha, imgui.get_style().alpha * 0.5)
+        if imgui.button("Plot", (100.0, 0.0)) and ready:
             self._action_plot_field()
         if not ready:
             imgui.pop_style_var(1)
@@ -768,7 +767,7 @@ class FunctionsPanel(Panel):
         if self._status:
             imgui.spacing()
             token = "ok" if self._status_ok else "warn"
-            imgui.text_colored(self._status, *COLORS[token])
+            imgui.text_colored(COLORS[token], self._status)
 
     def _action_plot_field(self) -> None:
         """Add the field to the scene, undoably, in whichever form ``field_output`` asks.
@@ -910,7 +909,7 @@ class FunctionsPanel(Panel):
         imgui.same_line()
         # NO_INPUTS: a swatch that opens the full picker on click. The three R/G/B
         # spinboxes would eat the row and this is not a colour-grading panel.
-        changed, value = imgui.color_edit3("Color", *self.color, flags=imgui.COLOR_EDIT_NO_INPUTS)
+        changed, value = imgui.color_edit3("Color", self.color, flags=imgui.ColorEditFlags_.no_inputs)
         if changed:
             self.color = list(value)
 
@@ -940,11 +939,11 @@ class FunctionsPanel(Panel):
         ready = self._error is None and self._curve is not None
 
         if not ready:
-            imgui.push_style_var(imgui.STYLE_ALPHA, imgui.get_style().alpha * 0.5)
-        if imgui.button("Plot", 100.0, 0.0) and ready:
+            imgui.push_style_var(imgui.StyleVar_.alpha, imgui.get_style().alpha * 0.5)
+        if imgui.button("Plot", (100.0, 0.0)) and ready:
             self._action_plot()
         imgui.same_line()
-        if imgui.button("Create dataset", 120.0, 0.0) and ready:
+        if imgui.button("Create dataset", (120.0, 0.0)) and ready:
             self._action_create_dataset()
         if not ready:
             imgui.pop_style_var(1)
@@ -954,8 +953,8 @@ class FunctionsPanel(Panel):
         # choice belongs to the user: a table of samples, or the function itself.
         live_ready = ready and not self.is_field
         if not live_ready:
-            imgui.push_style_var(imgui.STYLE_ALPHA, imgui.get_style().alpha * 0.5)
-        if imgui.button("Plot live", 100.0, 0.0) and live_ready:
+            imgui.push_style_var(imgui.StyleVar_.alpha, imgui.get_style().alpha * 0.5)
+        if imgui.button("Plot live", (100.0, 0.0)) and live_ready:
             self._action_plot_live()
         hovered = imgui.is_item_hovered()
         if not live_ready:
@@ -987,7 +986,7 @@ class FunctionsPanel(Panel):
             imgui.spacing()
             token = "ok" if self._status_ok else "warn"
             color = COLORS.get(token, (0.6, 0.6, 0.6, 1.0))
-            imgui.text_colored(self._status, color[0], color[1], color[2], 1.0)
+            imgui.text_colored((color[0], color[1], color[2], 1.0), self._status)
 
     # -- actions ---------------------------------------------------------------
 
@@ -1187,7 +1186,7 @@ def _half_field_width(*labels: str) -> float:
     style = imgui.get_style()
     label_width = max((imgui.calc_text_size(label).x for label in labels), default=0.0)
     overhead = 2.0 * (label_width + style.item_inner_spacing.x) + style.item_spacing.x
-    avail = imgui.get_content_region_available().x
+    avail = imgui.get_content_region_avail().x
     return max(48.0, (avail - overhead) * 0.5)
 
 

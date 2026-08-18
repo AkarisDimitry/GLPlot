@@ -1,16 +1,19 @@
 """Keyboard chord model for the workstation (parse, match, format).
 
-The mechanism, verified against the installed ``imgui==2.0.0`` / Dear ImGui 1.82 and
-``glfw`` rather than assumed:
+The mechanism, verified against the installed ``imgui-bundle`` (Dear ImGui bindings)
+and ``glfw`` rather than assumed:
 
-* ``imgui.KEY_*`` exists for ``A C V X Y Z`` and the named navigation keys **only** --
-  there is no ``KEY_P``, ``KEY_K``, ``KEY_F1`` or any digit. Those constants are indices
-  into ``io.key_map``, **not** key codes, so they are useless as a general keybinding
-  vocabulary.
-* ``io.keys_down`` has **512** slots and ``GlfwRenderer.keyboard_callback`` indexes it by
-  raw GLFW keycode (``glfw.KEY_LAST == 348 < 512``).
-* Therefore ``imgui.is_key_pressed(<glfw keycode>)`` works for **any** key. That is the
-  mechanism this module is built on; ``imgui.KEY_*`` is never used.
+* ``imgui.Key`` is an enum of named keys (``imgui.Key.a``, ``imgui.Key.f1``,
+  ``imgui.Key._0``, ...) -- ``imgui.is_key_pressed`` takes one of those, never a raw
+  integer keycode.
+* GLFW keycodes are a different, unrelated numbering (GLFW's own frozen ABI -- see
+  :data:`KEY_NAMES`). There is no arithmetic relationship between the two, so a keycode
+  must be translated through an explicit table before it can reach imgui.
+* :data:`_GLFW_TO_IMGUI_KEY` is that table, built once at import time to mirror
+  ``GlfwRenderer._map_keys`` (``imgui_bundle.python_backends.glfw_backend``).
+  :func:`pressed` looks a chord's key up in it and calls
+  ``imgui.is_key_pressed(imgui_key)``; a key absent from the table (e.g. F13-F25, which
+  the backend never wires to a key event) falls back to ``False`` rather than raising.
 
 **Keycodes are hardcoded literals, not read from ``glfw``.** They are part of GLFW's
 frozen public ABI, and hardcoding them keeps :data:`KEY_NAMES`, :func:`parse`,
@@ -40,7 +43,7 @@ except (ImportError, Exception):  # pragma: no cover - glfw is a hard dependency
     glfw = None
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - imgui is a hard dependency in CI
@@ -109,6 +112,72 @@ KEY_NAMES.update({"F{0}".format(n): 289 + n for n in range(1, 26)})
 #: Function keys are dispatchable while a text field has focus (see :func:`is_text_safe`).
 _FUNCTION_KEYS = frozenset(range(290, 315))
 _KEY_ESCAPE = 256
+
+# --------------------------------------------------------------------------------------
+# GLFW keycode -> imgui.Key translation
+# --------------------------------------------------------------------------------------
+#
+# imgui-bundle's ``is_key_pressed`` takes an ``imgui.Key`` enum member, not a raw
+# keycode. This table mirrors ``GlfwRenderer._map_keys``
+# (``imgui_bundle.python_backends.glfw_backend``) for every key in :data:`KEY_NAMES`.
+# F13-F25 have no entry: the backend never wires them to a key event, so
+# ``is_key_pressed`` on them would only ever read False -- :func:`pressed` treats a
+# missing entry as "no mapping" and returns False, the same observable result.
+_GLFW_TO_IMGUI_KEY: Dict[int, "imgui.Key"] = {}
+if IMGUI_AVAILABLE and imgui is not None:
+    _GLFW_TO_IMGUI_KEY.update(
+        {
+            KEY_NAMES["Space"]: imgui.Key.space,
+            KEY_NAMES["'"]: imgui.Key.apostrophe,
+            KEY_NAMES[","]: imgui.Key.comma,
+            KEY_NAMES["-"]: imgui.Key.minus,
+            KEY_NAMES["."]: imgui.Key.period,
+            KEY_NAMES["/"]: imgui.Key.slash,
+            KEY_NAMES[";"]: imgui.Key.semicolon,
+            KEY_NAMES["="]: imgui.Key.equal,
+            KEY_NAMES["["]: imgui.Key.left_bracket,
+            KEY_NAMES["\\"]: imgui.Key.backslash,
+            KEY_NAMES["]"]: imgui.Key.right_bracket,
+            KEY_NAMES["`"]: imgui.Key.grave_accent,
+            KEY_NAMES["Escape"]: imgui.Key.escape,
+            KEY_NAMES["Enter"]: imgui.Key.enter,
+            KEY_NAMES["Tab"]: imgui.Key.tab,
+            KEY_NAMES["Backspace"]: imgui.Key.backspace,
+            KEY_NAMES["Insert"]: imgui.Key.insert,
+            KEY_NAMES["Delete"]: imgui.Key.delete,
+            KEY_NAMES["Right"]: imgui.Key.right_arrow,
+            KEY_NAMES["Left"]: imgui.Key.left_arrow,
+            KEY_NAMES["Down"]: imgui.Key.down_arrow,
+            KEY_NAMES["Up"]: imgui.Key.up_arrow,
+            KEY_NAMES["PageUp"]: imgui.Key.page_up,
+            KEY_NAMES["PageDown"]: imgui.Key.page_down,
+            KEY_NAMES["Home"]: imgui.Key.home,
+            KEY_NAMES["End"]: imgui.Key.end,
+            KEY_NAMES["CapsLock"]: imgui.Key.caps_lock,
+            KEY_NAMES["PrintScreen"]: imgui.Key.print_screen,
+            KEY_NAMES["Pause"]: imgui.Key.pause,
+            KEY_NAMES["KeypadEnter"]: imgui.Key.keypad_enter,
+        }
+    )
+    # Digits 0-9 -> imgui.Key._0.._9 (leading underscore: a Python identifier can't
+    # start with a digit, so imgui-bundle's enum members are spelled that way).
+    _GLFW_TO_IMGUI_KEY.update(
+        {KEY_NAMES[str(d)]: getattr(imgui.Key, "_{0}".format(d)) for d in range(10)}
+    )
+    # Letters A-Z -> imgui.Key.a..z
+    _GLFW_TO_IMGUI_KEY.update(
+        {
+            KEY_NAMES[chr(ord("A") + i)]: getattr(imgui.Key, chr(ord("a") + i))
+            for i in range(26)
+        }
+    )
+    # F1-F12 only -- see the "no entry" note above for F13-F25.
+    _GLFW_TO_IMGUI_KEY.update(
+        {
+            KEY_NAMES["F{0}".format(n)]: getattr(imgui.Key, "f{0}".format(n))
+            for n in range(1, 13)
+        }
+    )
 
 # Aliases accepted by parse() but never produced by key_label(): a single canonical
 # spelling per keycode keeps the reverse lookup unambiguous.
@@ -263,8 +332,9 @@ def pressed(chord: Chord, *, repeat: bool = False) -> bool:
     Mod matches ``io.key_ctrl`` **or** ``io.key_super``, which is what lets a single
     ``"Mod+K"`` binding serve macOS and everything else.
 
-    Returns ``False`` when imgui is unavailable or no context is current, so callers in a
-    headless process need no guard of their own.
+    Returns ``False`` when imgui is unavailable, no context is current, or ``chord.key``
+    has no imgui-side mapping (see :data:`_GLFW_TO_IMGUI_KEY`), so callers in a headless
+    process need no guard of their own.
     """
     if not IMGUI_AVAILABLE or imgui is None or not GLFW_AVAILABLE:
         return False
@@ -274,7 +344,7 @@ def pressed(chord: Chord, *, repeat: bool = False) -> bool:
         return False
 
     # Modifiers first: three attribute reads reject the overwhelming majority of chords
-    # before touching the keys_down scan in is_key_pressed.
+    # before touching is_key_pressed.
     if bool(io.key_ctrl or io.key_super) != bool(chord.mod):
         return False
     if bool(io.key_shift) != bool(chord.shift):
@@ -282,9 +352,12 @@ def pressed(chord: Chord, *, repeat: bool = False) -> bool:
     if bool(io.key_alt) != bool(chord.alt):
         return False
 
+    imgui_key = _GLFW_TO_IMGUI_KEY.get(chord.key)
+    if imgui_key is None:
+        return False
     try:
-        return bool(imgui.is_key_pressed(chord.key, repeat))
-    except Exception:  # pragma: no cover - defensive: out-of-range keycode
+        return bool(imgui.is_key_pressed(imgui_key, repeat))
+    except Exception:  # pragma: no cover - defensive: unexpected imgui-side failure
         return False
 
 

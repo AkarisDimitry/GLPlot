@@ -478,37 +478,33 @@ def _choose_location(plot: Any, box_w: float, box_h: float) -> Tuple[float, floa
 def _add_scaled_text(imgui, draw_list, x: float, y: float, color: int, text: str, scale: float):
     """Draw ``text`` at ``scale``, working around pyimgui 2.0 having no sized ``add_text``.
 
-    ``ImDrawList::AddText`` has a ``(font, font_size, ...)`` overload in C++; pyimgui 2.0
-    wraps only ``add_text(x, y, col, text)``, so the font size cannot be passed. What
-    that overload does internally is scale the glyph quads it emits -- the atlas UVs are
-    size-independent -- so emitting at the default size and scaling the quads in place is
-    the *same operation*, not an approximation of it. It is also the idiom this repo
-    already ships: ``axis.py::_draw_text_rotated`` rotates its glyphs through the same
-    vertex buffer, and this borrows its ``_ImDrawVert`` layout rather than re-declaring a
-    struct whose correctness is measured in scribbled-over memory.
+    ``ImDrawList::AddText`` has a ``(font, font_size, ...)`` overload in C++, but the
+    Python binding only wraps ``add_text(pos, col, text)``, so the font size cannot be
+    passed. What that overload does internally is scale the glyph quads it emits -- the
+    atlas UVs are size-independent -- so emitting at the default size and scaling the
+    quads in place is the *same operation*, not an approximation of it. It is also the
+    idiom this repo already ships: ``axis.py::_draw_text_rotated`` rotates its glyphs
+    through the same ``draw_list.vtx_buffer`` sequence.
 
-    At ``scale == 1.0`` the ctypes path never runs at all, so the default legend cannot
-    be broken by it. When it does run, the emitted quads are bounds-checked against
-    ``calc_text_size`` before a byte is written -- a wrong struct layout or CPU-culled
-    glyphs leave the text unscaled instead of corrupting the frame.
+    At ``scale == 1.0`` the vertex-rewrite path never runs at all, so the default legend
+    cannot be broken by it. When it does run, the emitted quads are bounds-checked against
+    ``calc_text_size`` before a vertex is rewritten -- CPU-culled glyphs leave the text
+    unscaled instead of corrupting the frame.
     """
     if abs(scale - 1.0) < 1e-3:
-        draw_list.add_text(x, y, color, text)
+        draw_list.add_text((x, y), color, text)
         return
 
-    from .axis import _ImDrawVert
-
     width, height = imgui.calc_text_size(text)
-    first = draw_list.vtx_buffer_size
-    draw_list.add_text(x, y, color, text)
-    count = draw_list.vtx_buffer_size - first
+    first = len(draw_list.vtx_buffer)
+    draw_list.add_text((x, y), color, text)
+    count = len(draw_list.vtx_buffer) - first
     if count <= 0 or count % 4 != 0:
         return
     try:
-        verts = (_ImDrawVert * (first + count)).from_address(int(draw_list.vtx_buffer_data))
-        xs = [verts[i].x for i in range(first, first + count)]
-        ys = [verts[i].y for i in range(first, first + count)]
-    except (ValueError, TypeError, OSError):  # pragma: no cover - defensive
+        xs = [draw_list.vtx_buffer[i].pos.x for i in range(first, first + count)]
+        ys = [draw_list.vtx_buffer[i].pos.y for i in range(first, first + count)]
+    except (ValueError, TypeError, IndexError):  # pragma: no cover - defensive
         return
     slack = 2.0
     if not (
@@ -519,8 +515,9 @@ def _add_scaled_text(imgui, draw_list, x: float, y: float, color: int, text: str
     ):
         return
     for i in range(first, first + count):
-        verts[i].x = x + (verts[i].x - x) * scale
-        verts[i].y = y + (verts[i].y - y) * scale
+        v = draw_list.vtx_buffer[i]
+        v.pos.x = x + (v.pos.x - x) * scale
+        v.pos.y = y + (v.pos.y - y) * scale
 
 
 def _draw_swatch(imgui, draw_list, x: float, y: float, w: float, h: float, colors) -> None:
@@ -530,13 +527,13 @@ def _draw_swatch(imgui, draw_list, x: float, y: float, w: float, h: float, color
     if len(colors) == 1:
         r, g, b, a = colors[0]
         draw_list.add_rect_filled(
-            x, y, x + w, y + h, imgui.get_color_u32_rgba(r, g, b, max(a, 0.25)), 2.0
+            (x, y), (x + w, y + h), imgui.get_color_u32((r, g, b, max(a, 0.25))), 2.0
         )
         return
-    c0 = imgui.get_color_u32_rgba(colors[0][0], colors[0][1], colors[0][2], max(colors[0][3], 0.25))
-    c1 = imgui.get_color_u32_rgba(colors[1][0], colors[1][1], colors[1][2], max(colors[1][3], 0.25))
+    c0 = imgui.get_color_u32((colors[0][0], colors[0][1], colors[0][2], max(colors[0][3], 0.25)))
+    c1 = imgui.get_color_u32((colors[1][0], colors[1][1], colors[1][2], max(colors[1][3], 0.25)))
     # upper-left, upper-right, lower-right, lower-left
-    draw_list.add_rect_filled_multicolor(x, y, x + w, y + h, c0, c1, c1, c0)
+    draw_list.add_rect_filled_multi_color((x, y), (x + w, y + h), c0, c1, c1, c0)
 
 
 def draw_legend(plot: Any) -> Optional[Tuple[float, float, float, float]]:
@@ -553,7 +550,7 @@ def draw_legend(plot: Any) -> Optional[Tuple[float, float, float, float]]:
     if not resolve_legend_show(getattr(plot, "options", None), plot):
         return None
     try:
-        import imgui
+        from imgui_bundle import imgui
     except (ImportError, Exception):  # noqa: B014 - imgui raises non-ImportError GL-less
         return None
 
@@ -584,23 +581,23 @@ def draw_legend(plot: Any) -> Optional[Tuple[float, float, float, float]]:
 
     if getattr(options, "legend_background", True):
         fill = (
-            imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 0.78)
+            imgui.get_color_u32((1.0, 1.0, 1.0, 0.78))
             if is_light
-            else imgui.get_color_u32_rgba(0.09, 0.09, 0.11, 0.78)
+            else imgui.get_color_u32((0.09, 0.09, 0.11, 0.78))
         )
-        draw_list.add_rect_filled(ox, oy, ox + box_w, oy + box_h, fill, 4.0)
+        draw_list.add_rect_filled((ox, oy), (ox + box_w, oy + box_h), fill, 4.0)
     if getattr(options, "legend_border", True):
         edge = (
-            imgui.get_color_u32_rgba(0.15, 0.15, 0.15, 0.55)
+            imgui.get_color_u32((0.15, 0.15, 0.15, 0.55))
             if is_light
-            else imgui.get_color_u32_rgba(0.85, 0.85, 0.85, 0.45)
+            else imgui.get_color_u32((0.85, 0.85, 0.85, 0.45))
         )
-        draw_list.add_rect(ox, oy, ox + box_w, oy + box_h, edge, 4.0)
+        draw_list.add_rect((ox, oy), (ox + box_w, oy + box_h), edge, 4.0)
 
     text_color = (
-        imgui.get_color_u32_rgba(0.15, 0.15, 0.15, 1.0)
+        imgui.get_color_u32((0.15, 0.15, 0.15, 1.0))
         if is_light
-        else imgui.get_color_u32_rgba(0.85, 0.85, 0.85, 1.0)
+        else imgui.get_color_u32((0.85, 0.85, 0.85, 1.0))
     )
 
     y = oy + pad

@@ -28,7 +28,7 @@ from .keys import parse as parse_chord
 from .keys import pressed as chord_pressed
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - imgui is a hard dependency in CI

@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 import numpy as np
 import pytest
 
-imgui = pytest.importorskip("imgui")
+imgui = pytest.importorskip("imgui_bundle").imgui
 
 from glplot.gui import mathops  # noqa: E402
 from glplot.gui import widgets  # noqa: E402
@@ -74,9 +74,10 @@ def imgui_context():
     io = imgui.get_io()
     io.display_size = 1280, 900
     io.delta_time = 1 / 60.0
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
-    io.fonts.clear_tex_data()
+    # Font atlas is dynamic under imgui-bundle; get_tex_data_as_rgba32()/texture_id no
+    # longer exist. Telling imgui a backend owns texture building is the headless
+    # equivalent, since this harness never renders real pixels.
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     yield io
     imgui.destroy_context(ctx)
 
@@ -97,8 +98,8 @@ def _draw_frame(panel: MathLabPanel, io: Any, pos=(0.0, 0.0), down: bool = False
     io.mouse_pos = pos
     io.mouse_down[0] = down
     imgui.new_frame()
-    imgui.set_next_window_position(100, 100)
-    imgui.set_next_window_size(_PANEL_W, _PANEL_H)
+    imgui.set_next_window_pos((100, 100))
+    imgui.set_next_window_size((_PANEL_W, _PANEL_H))
     imgui.begin("Math Lab")
     panel.draw()
     imgui.end()
@@ -423,13 +424,13 @@ def _spy_enum_combo(monkeypatch, label: str) -> Dict[str, Any]:
         items = [str(o) for o in options]
         changed = False
         selected = current
-        combo = imgui.begin_combo(lbl, str(current))
+        opened = imgui.begin_combo(lbl, str(current))
         if lbl == label:
             mn, mx = imgui.get_item_rect_min(), imgui.get_item_rect_max()
             log["center"] = ((mn.x + mx.x) / 2.0, (mn.y + mx.y) / 2.0)
-            log["opened"] = combo.opened
+            log["opened"] = opened
             log["items"] = []
-        if combo.opened:
+        if opened:
             for item in items:
                 clicked, _ = imgui.selectable(item, item == current)
                 if lbl == label:
@@ -467,11 +468,11 @@ def _popup_open_during_frame(panel: MathLabPanel, io: Any, pos) -> bool:
     io.mouse_pos = pos
     io.mouse_down[0] = False
     imgui.new_frame()
-    imgui.set_next_window_position(100, 100)
-    imgui.set_next_window_size(_PANEL_W, _PANEL_H)
+    imgui.set_next_window_pos((100, 100))
+    imgui.set_next_window_size((_PANEL_W, _PANEL_H))
     imgui.begin("Math Lab")
     panel.draw()
-    state = imgui.is_popup_open("", imgui.POPUP_ANY_POPUP)
+    state = imgui.is_popup_open("", imgui.PopupFlags_.any_popup)
     imgui.end()
     imgui.render()
     return bool(state)

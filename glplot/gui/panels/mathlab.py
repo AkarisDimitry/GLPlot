@@ -49,7 +49,7 @@ from glplot.gui.history import Command, snapshot
 from glplot.gui.panels.base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -746,15 +746,15 @@ class MathLabPanel(Panel):
         overflowing (see ``_CATEGORIES``). The inner operation bar for a category is drawn
         inside that category's tab item, so only one operation bar exists per frame.
         """
-        cat_bar = imgui.begin_tab_bar("##mathlab_categories")
-        if not cat_bar.opened:
+        cat_bar_open = imgui.begin_tab_bar("##mathlab_categories")
+        if not cat_bar_open:
             return
         try:
             for title, keys in _CATEGORIES:
                 pending_here = self._pending_category == title
-                flags = imgui.TAB_ITEM_SET_SELECTED if pending_here else 0
-                item = imgui.begin_tab_item(title, flags=flags)
-                if not item.selected:
+                flags = imgui.TabItemFlags_.set_selected if pending_here else 0
+                selected, _ = imgui.begin_tab_item(title, flags=flags)
+                if not selected:
                     continue
                 if pending_here:
                     self._pending_category = None
@@ -767,15 +767,15 @@ class MathLabPanel(Panel):
 
     def _draw_operation_tabs(self, source: _Source, keys: Tuple[str, ...]) -> None:
         """The operation tab bar for one category. Each tab draws params, preview, Apply."""
-        tab_bar = imgui.begin_tab_bar("##mathlab_tabs")
-        if not tab_bar.opened:
+        tab_bar_open = imgui.begin_tab_bar("##mathlab_tabs")
+        if not tab_bar_open:
             return
         try:
             for key in keys:
                 title, method_name = _TAB_BY_KEY[key]
-                flags = imgui.TAB_ITEM_SET_SELECTED if self._pending_tab == key else 0
-                item = imgui.begin_tab_item(title, flags=flags)
-                if not item.selected:
+                flags = imgui.TabItemFlags_.set_selected if self._pending_tab == key else 0
+                selected, _ = imgui.begin_tab_item(title, flags=flags)
+                if not selected:
                     continue
                 if self._pending_tab == key:
                     self._pending_tab = None
@@ -806,13 +806,13 @@ class MathLabPanel(Panel):
         self-corrects on the next frame.
         """
         reserve = self._apply_reserve(key)
-        avail = imgui.get_content_region_available()[1]
+        avail = imgui.get_content_region_avail()[1]
         body_height = max(avail - reserve, _MIN_BODY_HEIGHT)
 
-        child = imgui.begin_child("##body", 0.0, body_height, border=False)
+        child_visible = imgui.begin_child("##body", (0.0, body_height))
         result: Optional[_Result] = None
         try:
-            if child.visible:
+            if child_visible:
                 imgui.spacing()
                 body: Callable[[], Tuple[Any, ...]] = getattr(self, method_name)
                 imgui.push_item_width(-140.0)
@@ -838,7 +838,7 @@ class MathLabPanel(Panel):
             before = imgui.get_cursor_pos_y()
             self._draw_apply(source, result, key)
             self._apply_heights[key] = max(0.0, imgui.get_cursor_pos_y() - before)
-        elif child.visible:
+        elif child_visible:
             # The body drew and has nothing to commit -- Statistics, or an op that
             # errored -- so give it the whole panel back. Only when the body actually
             # drew: a culled child must not clobber a good measurement with zero.
@@ -2088,17 +2088,17 @@ class MathLabPanel(Panel):
 
     def _draw_legend(self, result: _Result) -> None:
         """A colour key for the preview series. mini_plot draws the overlay/markers warn."""
-        imgui.text_colored("--", *theme.get_color("accent"))
+        imgui.text_colored(theme.get_color("accent"), "--")
         imgui.same_line()
         imgui.text(result.plot_label)
         if result.overlay is not None:
             imgui.same_line()
-            imgui.text_colored("--", *theme.get_color("warn"))
+            imgui.text_colored(theme.get_color("warn"), "--")
             imgui.same_line()
             imgui.text(result.overlay_label)
         if result.markers is not None:
             imgui.same_line()
-            imgui.text_colored("o", *theme.get_color("warn"))
+            imgui.text_colored(theme.get_color("warn"), "o")
             imgui.same_line()
             imgui.text(f"peaks ({int(np.asarray(result.markers[0]).size)})")
 
@@ -2216,7 +2216,7 @@ class MathLabPanel(Panel):
             return
 
         theme.push_accent()
-        clicked = imgui.button("Apply", 130.0, 0.0)
+        clicked = imgui.button("Apply", (130.0, 0.0))
         theme.pop_accent()
         imgui.same_line()
         widgets.help_marker(

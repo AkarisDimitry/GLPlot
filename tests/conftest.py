@@ -27,7 +27,7 @@ from __future__ import annotations
 import pytest
 
 try:  # pragma: no cover - GL-less systems skip the GUI tests anyway
-    import imgui as _imgui
+    from imgui_bundle import imgui as _imgui
 except Exception:  # pragma: no cover
     _imgui = None
 

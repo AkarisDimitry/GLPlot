@@ -61,7 +61,7 @@ if TYPE_CHECKING:
     from ..workspace import Workspace
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):
@@ -350,7 +350,7 @@ class ScenePanel(Panel):
         """The search box. Filtering is display-only — it never touches the scene."""
         icon_inline("search", size=_ROW_ICON_SIZE)
         imgui.same_line()
-        imgui.push_item_width(imgui.get_content_region_available().x - 26.0)
+        imgui.push_item_width(imgui.get_content_region_avail().x - 26.0)
         # buffer_length stays at its -1 default (CONTRACT §2.4).
         _, text = imgui.input_text("##filter", self._filter)
         imgui.pop_item_width()
@@ -412,8 +412,8 @@ class ScenePanel(Panel):
         # on screen instead of letting a long list push it below the panel.
         # end_child is unconditional per CONTRACT §2.6 — begin_child returning
         # not-visible still opens a scope that must be closed.
-        child = imgui.begin_child("##layer_list", 0.0, -reserve, border=False)
-        if child.visible:
+        child_visible = imgui.begin_child("##layer_list", (0.0, -reserve))
+        if child_visible:
             draggable = not self._filter.strip()
             show_z = layerops.zorder_is_authoritative(self.plot)
             for row, layer in enumerate(rows):
@@ -480,13 +480,9 @@ class ScenePanel(Panel):
         if field is None:
             imgui.color_button(
                 "##color_ro",
-                rgba[0],
-                rgba[1],
-                rgba[2],
-                rgba[3],
-                imgui.COLOR_EDIT_NO_TOOLTIP,
-                _CHIP_SIZE,
-                _CHIP_SIZE,
+                rgba,
+                imgui.ColorEditFlags_.no_tooltip,
+                (_CHIP_SIZE, _CHIP_SIZE),
             )
             if imgui.is_item_hovered():
                 imgui.set_tooltip(
@@ -497,13 +493,10 @@ class ScenePanel(Panel):
 
         changed, color = imgui.color_edit4(
             "##color",
-            rgba[0],
-            rgba[1],
-            rgba[2],
-            rgba[3],
-            imgui.COLOR_EDIT_NO_INPUTS
-            | imgui.COLOR_EDIT_NO_LABEL
-            | imgui.COLOR_EDIT_ALPHA_PREVIEW_HALF,
+            rgba,
+            imgui.ColorEditFlags_.no_inputs
+            | imgui.ColorEditFlags_.no_label
+            | imgui.ColorEditFlags_.alpha_preview_half,
         )
         if changed:
             self._set_color(layer, field, _as_rgba(color))
@@ -525,7 +518,7 @@ class ScenePanel(Panel):
         # Reserve every trailing widget's width so a long label cannot push them out of
         # view. calc_text_size is the only honest measure — the default font is
         # fixed-width, but the readouts are not fixed-length.
-        avail = imgui.get_content_region_available().x
+        avail = imgui.get_content_region_avail().x
         trailing = imgui.calc_text_size(size_text).x if size_text else 0.0
         if z_text:
             trailing += imgui.calc_text_size(z_text).x + 8.0
@@ -543,9 +536,8 @@ class ScenePanel(Panel):
         clicked, _ = imgui.selectable(
             f"{_display_label(layer)}##name",
             layer.layer_id in self._selection,
-            imgui.SELECTABLE_ALLOW_DOUBLE_CLICK,
-            name_w,
-            0.0,
+            imgui.SelectableFlags_.allow_double_click,
+            (name_w, 0.0),
         )
         if clicked:
             self._click_select(layer, row, rows)
@@ -622,17 +614,14 @@ class ScenePanel(Panel):
         moved: Optional[Tuple[int, int]] = None
 
         if imgui.begin_drag_drop_source():
-            imgui.set_drag_drop_payload(_DND_TYPE, str(layer.layer_id).encode("ascii"))
+            imgui.set_drag_drop_payload_py_id(_DND_TYPE, layer.layer_id)
             imgui.text(f"Moving {_display_label(layer)}...")
             imgui.end_drag_drop_source()
 
         if imgui.begin_drag_drop_target():
-            payload = imgui.accept_drag_drop_payload(_DND_TYPE)
+            payload = imgui.accept_drag_drop_payload_py_id(_DND_TYPE)
             if payload:
-                try:
-                    src_id = int(payload.decode("ascii"))
-                except (UnicodeDecodeError, ValueError):
-                    src_id = None
+                src_id = payload.data_id
                 if src_id is not None and src_id != layer.layer_id:
                     moved = (src_id, layer.layer_id)
             imgui.end_drag_drop_target()
@@ -640,8 +629,8 @@ class ScenePanel(Panel):
 
     def _draw_context_menu(self, layer: Any) -> None:
         """Right-click menu for the row."""
-        popup = imgui.begin_popup_context_item("##row_menu")
-        if not popup.opened:
+        popup_open = imgui.begin_popup_context_item("##row_menu")
+        if not popup_open:
             return
 
         # A right-click on a row outside the selection acts on that row alone, which is
@@ -679,8 +668,8 @@ class ScenePanel(Panel):
         kinds = _available_kinds()
         can_change = not many and _can_change_kind(layer)
 
-        menu = imgui.begin_menu("Change type", can_change)
-        if not menu.opened:
+        menu_open = imgui.begin_menu("Change type", can_change)
+        if not menu_open:
             if not can_change and imgui.is_item_hovered():
                 imgui.set_tooltip(
                     "This layer is not built from an x/y pair, so it cannot be "
@@ -698,13 +687,13 @@ class ScenePanel(Panel):
             imgui.set_keyboard_focus_here()
             self._focus_rename = False
 
-        imgui.push_item_width(max(80.0, imgui.get_content_region_available().x - 8.0))
+        imgui.push_item_width(max(80.0, imgui.get_content_region_avail().x - 8.0))
         # buffer_length is left at its -1 default: an explicit length shorter than the
         # text silently truncates it (CONTRACT §2.4).
         entered, text = imgui.input_text(
             "##rename",
             self._rename_buf,
-            flags=imgui.INPUT_TEXT_ENTER_RETURNS_TRUE | imgui.INPUT_TEXT_AUTO_SELECT_ALL,
+            flags=imgui.InputTextFlags_.enter_returns_true | imgui.InputTextFlags_.auto_select_all,
         )
         imgui.pop_item_width()
         self._rename_buf = text
@@ -714,7 +703,7 @@ class ScenePanel(Panel):
         elif imgui.is_item_deactivated():
             # Escape reverts imgui's own buffer, so the returned text is already the
             # original; check the key rather than trusting the value.
-            if imgui.is_key_pressed(imgui.get_key_index(imgui.KEY_ESCAPE)):
+            if imgui.is_key_pressed(imgui.Key.escape):
                 self._cancel_rename()
             else:
                 self._commit_rename(layer, text)
@@ -788,8 +777,8 @@ class ScenePanel(Panel):
             return
 
         layer = targets[0]
-        child = imgui.begin_child("##inspector", 0.0, 0.0, border=False)
-        if child.visible:
+        child_visible = imgui.begin_child("##inspector", (0.0, 0.0))
+        if child_visible:
             imgui.push_id(str(layer.layer_id))
             try:
                 self._draw_inspector_identity(layer)

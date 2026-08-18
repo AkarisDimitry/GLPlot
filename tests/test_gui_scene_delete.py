@@ -122,12 +122,11 @@ class TestRowDeleteDraws:
     """Through the real imgui frame: a button nobody can render is not a button."""
 
     def _harness(self):
-        imgui = pytest.importorskip("imgui")
+        imgui = pytest.importorskip("imgui_bundle").imgui
         imgui.create_context()
         io = imgui.get_io()
         io.display_size = 900, 700
-        io.fonts.get_tex_data_as_rgba32()
-        io.fonts.texture_id = 1
+        io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
         io.delta_time = 1 / 60.0
         return imgui
 

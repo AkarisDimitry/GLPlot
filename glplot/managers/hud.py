@@ -9,8 +9,8 @@ if TYPE_CHECKING:
     from ..engine import GPULinePlot
 
 try:
-    import imgui
-    from imgui.integrations.glfw import GlfwRenderer
+    from imgui_bundle import imgui
+    from imgui_bundle.python_backends.glfw_backend import GlfwRenderer
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):
@@ -124,9 +124,21 @@ class HudManager:
         if self.imgui_impl:
             self.imgui_impl.scroll_callback(window, dx, dy)
 
-    def on_mouse_button(self, window: Any, button: int, action: int, mods: int) -> None:
+    def on_cursor(self, window: Any, x: float, y: float) -> None:
+        # GlfwRenderer.mouse_callback ignores its args and re-reads the live cursor
+        # position itself (see its source) -- calling it on every cursor-move event is
+        # the imgui-bundle idiom for feeding continuous mouse position, replacing the
+        # per-frame glfw.get_cursor_pos() poll that pyimgui's process_inputs() used to do.
         if self.imgui_impl:
-            self.imgui_impl.mouse_callback(window, button, action, mods)
+            self.imgui_impl.mouse_callback(window, x, y)
+
+    def on_mouse_button(self, window: Any, button: int, action: int, mods: int) -> None:
+        # imgui-bundle's GlfwRenderer no longer feeds button state from process_inputs()
+        # (pyimgui's backend polled glfw.get_mouse_button() every frame; this one does
+        # not) and its mouse_callback ignores button/action/mods entirely -- it now only
+        # pushes cursor position. Button state must be pushed explicitly.
+        if imgui is not None:
+            imgui.get_io().add_mouse_button_event(button, action != 0)
 
     def on_key(self, window: Any, key: int, sc: int, action: int, mods: int) -> None:
         if self.imgui_impl:
@@ -208,32 +220,32 @@ class HudManager:
         if imgui.begin_main_menu_bar():
             if imgui.begin_menu("View"):
                 _, self.state.show_status_overlay = imgui.menu_item(
-                    "Status Overlay", None, self.state.show_status_overlay
+                    "Status Overlay", "", self.state.show_status_overlay
                 )
-                _, self.state.show_layers = imgui.menu_item("Layers", None, self.state.show_layers)
+                _, self.state.show_layers = imgui.menu_item("Layers", "", self.state.show_layers)
                 _, self.state.show_render_controls = imgui.menu_item(
-                    "Render Controls", None, self.state.show_render_controls
+                    "Render Controls", "", self.state.show_render_controls
                 )
                 _, self.state.show_profiler = imgui.menu_item(
-                    "Profiler", None, self.state.show_profiler
+                    "Profiler", "", self.state.show_profiler
                 )
                 _, self.state.show_selection = imgui.menu_item(
-                    "Selection Info", None, self.state.show_selection
+                    "Selection Info", "", self.state.show_selection
                 )
                 _, self.state.show_analysis = imgui.menu_item(
-                    "Analysis", None, self.state.show_analysis
+                    "Analysis", "", self.state.show_analysis
                 )
                 imgui.end_menu()
 
             if imgui.begin_menu("Actions"):
-                if imgui.menu_item("Reset View")[0]:
+                if imgui.menu_item("Reset View", "", False)[0]:
                     self.controller.reset_view()
-                if imgui.menu_item("Autoscale")[0]:
+                if imgui.menu_item("Autoscale", "", False)[0]:
                     self.controller.autoscale()
                 imgui.separator()
-                if imgui.menu_item("Toggle Density")[0]:
+                if imgui.menu_item("Toggle Density", "", False)[0]:
                     self.controller.toggle_density()
-                if imgui.menu_item("Export PNG")[0]:
+                if imgui.menu_item("Export PNG", "", False)[0]:
                     self.controller.export()
                 imgui.end_menu()
 
@@ -241,14 +253,14 @@ class HudManager:
 
     def _draw_status_overlay(self) -> None:
         # Transparent overlay strip at the top (below menu)
-        imgui.set_next_window_position(0, 20)
-        imgui.set_next_window_size(self.plot.width, 30)
+        imgui.set_next_window_pos((0, 20))
+        imgui.set_next_window_size((self.plot.width, 30))
         flags = (
-            imgui.WINDOW_NO_TITLE_BAR
-            | imgui.WINDOW_NO_RESIZE
-            | imgui.WINDOW_NO_MOVE
-            | imgui.WINDOW_NO_SCROLLBAR
-            | imgui.WINDOW_NO_BACKGROUND
+            imgui.WindowFlags_.no_title_bar
+            | imgui.WindowFlags_.no_resize
+            | imgui.WindowFlags_.no_move
+            | imgui.WindowFlags_.no_scrollbar
+            | imgui.WindowFlags_.no_background
         )
 
         imgui.begin("StatusOverlay", flags=flags)
@@ -292,12 +304,12 @@ class HudManager:
         imgui.same_line()
 
         mode = self.plot.interaction.drag_mode
-        imgui.text_colored(f"Drag: {mode.upper()}", 1.0, 1.0, 0.4)
+        imgui.text_colored((1.0, 1.0, 0.4, 1.0), f"Drag: {mode.upper()}")
 
         imgui.end()
 
     def _draw_layers_panel(self) -> None:
-        imgui.set_next_window_size(300, 400, imgui.FIRST_USE_EVER)
+        imgui.set_next_window_size((300, 400), imgui.Cond_.first_use_ever)
         imgui.begin("Layers & Stacking", True)
 
         imgui.text_disabled("Drag to reorder (List order = Render order)")
@@ -337,14 +349,14 @@ class HudManager:
                 pass
 
             if imgui.begin_drag_drop_source():
-                imgui.set_drag_drop_payload("LAYER_ORDER", str(i).encode())
+                imgui.set_drag_drop_payload_py_id("LAYER_ORDER", i)
                 imgui.text(f"Moving {layer.label}...")
                 imgui.end_drag_drop_source()
 
             if imgui.begin_drag_drop_target():
-                payload = imgui.accept_drag_drop_payload("LAYER_ORDER")
+                payload = imgui.accept_drag_drop_payload_py_id("LAYER_ORDER")
                 if payload:
-                    src_idx = int(payload.decode())
+                    src_idx = payload.data_id
                     to_move = (src_idx, i)
                 imgui.end_drag_drop_target()
 
@@ -375,7 +387,7 @@ class HudManager:
             self.plot.frame.dirty_scene = True
             self.plot.cache.refresh_requested = True
 
-        imgui.set_next_window_size(300, 300, imgui.FIRST_USE_EVER)
+        imgui.set_next_window_size((300, 300), imgui.Cond_.first_use_ever)
         imgui.begin("Layer Inspector", True)
 
         imgui.text(f"ID: {layer.layer_id}")
@@ -388,7 +400,7 @@ class HudManager:
         imgui.separator()
 
         style = layer.style
-        if imgui.collapsing_header("Style Properties", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+        if imgui.collapsing_header("Style Properties", imgui.TreeNodeFlags_.default_open):
             # Alpha
             changed, alpha = imgui.slider_float("Alpha", style.alpha, 0.0, 1.0)
             if changed:
@@ -397,7 +409,7 @@ class HudManager:
 
             # Color (if applicable)
             if style.color is not None:
-                changed, color = imgui.color_edit4("Primary Color", *style.color)
+                changed, color = imgui.color_edit4("Primary Color", style.color)
                 if changed:
                     style.color = color
                     _mark_dirty()
@@ -423,7 +435,7 @@ class HudManager:
                     style.point_outline_enabled = out_en
                     _mark_dirty()
 
-                changed, out_col = imgui.color_edit4("Outline Color", *style.point_outline_color)
+                changed, out_col = imgui.color_edit4("Outline Color", style.point_outline_color)
                 if changed:
                     style.point_outline_color = out_col
                     _mark_dirty()
@@ -467,10 +479,10 @@ class HudManager:
                     layer.metadata["camera"] = camera
                     _mark_dirty()
 
-        if imgui.collapsing_header("Transformation", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+        if imgui.collapsing_header("Transformation", imgui.TreeNodeFlags_.default_open):
             imgui.text("World space offset")
             tx, ty = layer.translation
-            changed, n_trans = imgui.drag_float2("Translation", tx, ty, 0.05)
+            changed, n_trans = imgui.drag_float2("Translation", (tx, ty), 0.05)
             if changed:
                 layer.translation = (n_trans[0], n_trans[1])
                 self.plot.frame.dirty_scene = True
@@ -484,14 +496,14 @@ class HudManager:
         imgui.end()
 
     def _draw_render_panel(self) -> None:
-        imgui.set_next_window_size(300, 450, imgui.FIRST_USE_EVER)
+        imgui.set_next_window_size((300, 450), imgui.Cond_.first_use_ever)
         imgui.begin("Render & Style", True)
 
-        if imgui.collapsing_header("Global Style", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+        if imgui.collapsing_header("Global Style", imgui.TreeNodeFlags_.default_open):
             ov = self.options.visual.overrides
             vis = self.options.visual
 
-            _, vis.background_color = imgui.color_edit3("Background Color", *vis.background_color)
+            _, vis.background_color = imgui.color_edit3("Background Color", vis.background_color)
             if imgui.is_item_deactivated_after_edit():
                 self.plot.frame.dirty_scene = True
 
@@ -532,7 +544,7 @@ class HudManager:
                 self.options.enable_antialiasing = aa_en
                 self.plot.frame.dirty_scene = True
 
-        if imgui.collapsing_header("Density Engine", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+        if imgui.collapsing_header("Density Engine", imgui.TreeNodeFlags_.default_open):
             from ..utils.shaders import DENSITY_SCHEMES
 
             # Mode Toggle
@@ -634,17 +646,17 @@ class HudManager:
                         norm = v
 
                 c = eval_colormap(scheme_idx, norm)
-                color = imgui.get_color_u32_rgba(
-                    max(0, min(1, c[0])), max(0, min(1, c[1])), max(0, min(1, c[2])), 1.0
+                color = imgui.get_color_u32(
+                    (max(0, min(1, c[0])), max(0, min(1, c[1])), max(0, min(1, c[2])), 1.0)
                 )
                 draw_list.add_rect_filled(
-                    pos.x + i * (w / 20), pos.y, pos.x + (i + 1) * (w / 20), pos.y + h, color
+                    (pos.x + i * (w / 20), pos.y), (pos.x + (i + 1) * (w / 20), pos.y + h), color
                 )
 
-            imgui.dummy(w, h + 5)
+            imgui.dummy((w, h + 5))
 
         if hasattr(self.plot, "is_3d_scene") and self.plot.is_3d_scene():
-            if imgui.collapsing_header("3D Camera", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+            if imgui.collapsing_header("3D Camera", imgui.TreeNodeFlags_.default_open):
                 imgui.text_disabled("Drag: rotate   Scroll: zoom   Reset: button below")
                 imgui.separator()
 
@@ -710,7 +722,7 @@ class HudManager:
                     ssao.radius = radius
                     self.plot.frame.dirty_scene = True
 
-        if imgui.collapsing_header("Plot Framework", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+        if imgui.collapsing_header("Plot Framework", imgui.TreeNodeFlags_.default_open):
             _, self.options.axis_show_grid = imgui.checkbox(
                 "Show Grid", self.options.axis_show_grid
             )
@@ -724,7 +736,7 @@ class HudManager:
 
                 imgui.indent(10)
                 _, self.options.axis_grid_color = imgui.color_edit3(
-                    "Grid Color", *self.options.axis_grid_color
+                    "Grid Color", self.options.axis_grid_color
                 )
                 imgui.unindent(10)
 
@@ -735,7 +747,7 @@ class HudManager:
                 "Show Framework", self.options.axis_show_frame
             )
 
-        if imgui.collapsing_header("LOD Configuration", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+        if imgui.collapsing_header("LOD Configuration", imgui.TreeNodeFlags_.default_open):
             changed, lod_en = imgui.checkbox("LOD Enabled (Sub-sampling)", self.options.lod_enabled)
             if changed:
                 self.controller.set_lod_enabled(lod_en)
@@ -751,24 +763,24 @@ class HudManager:
                 imgui.pop_item_width()
                 imgui.text_disabled("Higher = More detail, lower FPS")
 
-        if imgui.collapsing_header("Visual Effects", imgui.TREE_NODE_DEFAULT_OPEN)[0]:
+        if imgui.collapsing_header("Visual Effects", imgui.TreeNodeFlags_.default_open):
             v = self.options.visual
 
             # --- Background ---
-            if imgui.tree_node("Gradient Background", imgui.TREE_NODE_DEFAULT_OPEN):
+            if imgui.tree_node_ex("Gradient Background", imgui.TreeNodeFlags_.default_open):
                 _, v.gradient_background.enabled = imgui.checkbox(
                     "Enabled##BG", v.gradient_background.enabled
                 )
                 _, v.gradient_background.top_color = imgui.color_edit3(
-                    "Top Color", *v.gradient_background.top_color
+                    "Top Color", v.gradient_background.top_color
                 )
                 _, v.gradient_background.bottom_color = imgui.color_edit3(
-                    "Bottom Color", *v.gradient_background.bottom_color
+                    "Bottom Color", v.gradient_background.bottom_color
                 )
                 imgui.tree_pop()
 
             # --- Bloom ---
-            if imgui.tree_node("Bloom / Glow", imgui.TREE_NODE_DEFAULT_OPEN):
+            if imgui.tree_node_ex("Bloom / Glow", imgui.TreeNodeFlags_.default_open):
                 _, v.glow.enabled = imgui.checkbox("Enabled##Bloom", v.glow.enabled)
                 imgui.push_item_width(120)
                 _, v.glow.intensity = imgui.slider_float("Intensity", v.glow.intensity, 0.0, 5.0)
@@ -780,7 +792,7 @@ class HudManager:
         imgui.end()
 
     def _draw_profiler_panel(self) -> None:
-        imgui.set_next_window_size(350, 420, imgui.FIRST_USE_EVER)
+        imgui.set_next_window_size((350, 420), imgui.Cond_.first_use_ever)
         expanded, opened = imgui.begin("Profiler", True)
         if not opened:
             self.state.show_profiler = False
@@ -789,7 +801,7 @@ class HudManager:
 
         if expanded:
             # 1. Performance Overview
-            imgui.text_colored("PERFORMANCE OVERVIEW", 0.3, 0.8, 1.0)
+            imgui.text_colored((0.3, 0.8, 1.0, 1.0), "PERFORMANCE OVERVIEW")
             if self.state.cpu_frame_times:
                 avg_ms = sum(self.state.cpu_frame_times) / len(self.state.cpu_frame_times) * 1000.0
                 imgui.text(f"Avg CPU Frame: {avg_ms:5.2f} ms ({1000.0/avg_ms:.1f} FPS)")
@@ -810,14 +822,14 @@ class HudManager:
             imgui.separator()
 
             # 2. Rendering Pipelines Detailed Timings
-            imgui.text_colored("SUB-OPERATION TIMINGS", 0.3, 0.8, 1.0)
+            imgui.text_colored((0.3, 0.8, 1.0, 1.0), "SUB-OPERATION TIMINGS")
             for k, v in sorted(self.state.gpu_timings.items()):
                 imgui.text(f" - {k}: {v*1000.0:5.2f} ms")
 
             imgui.separator()
 
             # 3. Engine State & Statistics
-            imgui.text_colored("ENGINE STATISTICS", 0.3, 0.8, 1.0)
+            imgui.text_colored((0.3, 0.8, 1.0, 1.0), "ENGINE STATISTICS")
             mode_str = self.plot.policy.runtime.current_mode.name
             imgui.text(f"Render Mode: {mode_str}")
 
@@ -837,11 +849,11 @@ class HudManager:
         imgui.end()
 
     def _draw_selection_panel(self) -> None:
-        imgui.set_next_window_size(250, 180, imgui.FIRST_USE_EVER)
+        imgui.set_next_window_size((250, 180), imgui.Cond_.first_use_ever)
         imgui.begin("Selection Info", True)
 
         info = self.state.selected_object
-        imgui.text_colored(f"Type: {info.get('type', 'N/A').upper()}", 1.0, 0.8, 0.4)
+        imgui.text_colored((1.0, 0.8, 0.4, 1.0), f"Type: {info.get('type', 'N/A').upper()}")
         imgui.text(f"Dataset: {info.get('dataset_idx', 0)}")
         imgui.text(f"Index: {info.get('element_idx', 0)}")
         imgui.separator()
@@ -858,7 +870,7 @@ class HudManager:
         imgui.end()
 
     def _draw_analysis_panel(self) -> None:
-        imgui.set_next_window_size(400, 300, imgui.FIRST_USE_EVER)
+        imgui.set_next_window_size((400, 300), imgui.Cond_.first_use_ever)
         imgui.begin("Analysis (Sampled)", True)
 
         if self.state.sampled_histogram_a is not None:

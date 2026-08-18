@@ -356,12 +356,11 @@ def imgui_frame():
     imgui's context is global state, so the teardown keeps the suite order-independent
     (see ``tests/test_gui_3d_panels.py`` for the failure that taught us this).
     """
-    imgui = pytest.importorskip("imgui")
+    imgui = pytest.importorskip("imgui_bundle").imgui
     ctx = imgui.create_context()
     io = imgui.get_io()
     io.display_size = 900, 700
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     io.delta_time = 1 / 60.0
     imgui.new_frame()
     yield imgui
@@ -427,23 +426,23 @@ class TestDrawLabelsReally:
         from glplot.renderers.axis import draw_text_scaled
 
         draw_list = imgui_frame.get_background_draw_list()
-        color = imgui_frame.get_color_u32_rgba(1.0, 1.0, 1.0, 1.0)
+        color = imgui_frame.get_color_u32((1.0, 1.0, 1.0, 1.0))
         assert draw_text_scaled(imgui_frame, draw_list, "Z axis", color, (40.0, 40.0), 1.25)
 
     def test_scale_of_one_is_a_plain_draw(self, imgui_frame):
         from glplot.renderers.axis import draw_text_scaled
 
         draw_list = imgui_frame.get_background_draw_list()
-        color = imgui_frame.get_color_u32_rgba(1.0, 1.0, 1.0, 1.0)
-        before = draw_list.vtx_buffer_size
+        color = imgui_frame.get_color_u32((1.0, 1.0, 1.0, 1.0))
+        before = len(draw_list.vtx_buffer)
         assert draw_text_scaled(imgui_frame, draw_list, "x", color, (10.0, 10.0), 1.0)
-        assert draw_list.vtx_buffer_size > before
+        assert len(draw_list.vtx_buffer) > before
 
     def test_empty_text_scales_to_nothing(self, imgui_frame):
         from glplot.renderers.axis import draw_text_scaled
 
         draw_list = imgui_frame.get_background_draw_list()
-        color = imgui_frame.get_color_u32_rgba(1.0, 1.0, 1.0, 1.0)
+        color = imgui_frame.get_color_u32((1.0, 1.0, 1.0, 1.0))
         assert draw_text_scaled(imgui_frame, draw_list, "", color, (10.0, 10.0), 2.0)
 
 

@@ -3,7 +3,7 @@ import numpy as np
 import glplot.pyplot as plt
 
 rng = np.random.default_rng(4)
-n = 10_000_000
+n = 1_220_000
 theta = rng.uniform(0, 18 * np.pi, n)
 radius = 0.025 * theta + rng.gamma(1.5, 0.006, n)
 x_pc = radius * np.cos(theta) + rng.normal(scale=0.012, size=n)

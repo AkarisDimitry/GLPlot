@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -120,7 +120,7 @@ def _as_rgba(color: Any) -> Tuple[float, float, float, float]:
 def _u32(color: Any, alpha_scale: float = 1.0) -> int:
     """Pack a color tuple into an ImU32, optionally scaling its alpha."""
     r, g, b, a = _as_rgba(color)
-    return imgui.get_color_u32_rgba(r, g, b, max(0.0, min(1.0, a * alpha_scale)))
+    return imgui.get_color_u32((r, g, b, max(0.0, min(1.0, a * alpha_scale))))
 
 
 def _icon(draw_list: Any, shape: str, cx: float, cy: float, radius: float, col: int) -> bool:
@@ -393,7 +393,7 @@ def project_points_3d(
 def _pack_u32(rgba: np.ndarray) -> np.ndarray:
     """Pack an ``(N, 4)`` float RGBA array into ImU32s, as imgui's own ``IM_COL32`` does.
 
-    Vectorised rather than looping over :func:`imgui.get_color_u32_rgba` because a
+    Vectorised rather than looping over :func:`imgui.get_color_u32` because a
     thumbnail packs a few thousand colours per frame and that call is not free. Verified
     bit-for-bit identical to the imgui helper for the default style; the one thing it does
     not reproduce is ``style.Alpha``, the global fade imgui applies to disabled content,
@@ -453,9 +453,9 @@ def section(label: str, *, default_open: bool = True) -> bool:
     """A styled collapsing header. Returns True when the body should be drawn."""
     if not IMGUI_AVAILABLE:
         return False
-    flags = imgui.TREE_NODE_DEFAULT_OPEN if default_open else 0
-    imgui.push_style_var(imgui.STYLE_FRAME_PADDING, (6.0, 4.0))
-    expanded, _ = imgui.collapsing_header(label, flags=flags)
+    flags = imgui.TreeNodeFlags_.default_open if default_open else 0
+    imgui.push_style_var(imgui.StyleVar_.frame_padding, (6.0, 4.0))
+    expanded = imgui.collapsing_header(label, flags=flags)
     imgui.pop_style_var(1)
     return bool(expanded)
 
@@ -522,9 +522,9 @@ def labeled_drag_float(
     changed, new_value = imgui.drag_float(
         label,
         float(value),
-        change_speed=float(speed),
-        min_value=float(vmin),
-        max_value=float(vmax),
+        v_speed=float(speed),
+        v_min=float(vmin),
+        v_max=float(vmax),
         format=fmt,
     )
     _trailing_help(help)
@@ -549,8 +549,8 @@ def enum_combo(
     items = [str(o) for o in options]
     changed = False
     selected = current
-    combo = imgui.begin_combo(label, str(current))
-    if combo.opened:
+    combo_opened = imgui.begin_combo(label, str(current))
+    if combo_opened:
         for item in items:
             is_selected = item == current
             clicked, _ = imgui.selectable(item, is_selected)
@@ -637,8 +637,8 @@ def toolbar_separator() -> None:
     pos = imgui.get_cursor_screen_pos()
     height = imgui.get_frame_height()
     col = _u32(_token("grid"))
-    draw_list.add_line(pos.x + 3.0, pos.y + 2.0, pos.x + 3.0, pos.y + height - 2.0, col, 1.0)
-    imgui.dummy(7.0, height)
+    draw_list.add_line((pos.x + 3.0, pos.y + 2.0), (pos.x + 3.0, pos.y + height - 2.0), col, 1.0)
+    imgui.dummy((7.0, height))
     imgui.same_line()
 
 
@@ -663,34 +663,38 @@ def error_box(msg: str) -> None:
     err = _token("err")
     draw_list = imgui.get_window_draw_list()
     origin = imgui.get_cursor_screen_pos()
-    width = max(32.0, imgui.get_content_region_available().x)
+    width = max(32.0, imgui.get_content_region_avail().x)
 
     text = str(msg)
     wrap_width = max(16.0, width - 36.0)
-    text_size = imgui.calc_text_size(text, False, wrap_width)
+    text_size = imgui.calc_text_size(text, hide_text_after_double_hash=False, wrap_width=wrap_width)
     height = max(24.0, text_size.y + 10.0)
 
     # Panel body + border, drawn behind the text.
     draw_list.add_rect_filled(
-        origin.x, origin.y, origin.x + width, origin.y + height, _u32(err, 0.12), 4.0
+        (origin.x, origin.y), (origin.x + width, origin.y + height), _u32(err, 0.12), 4.0
     )
     draw_list.add_rect(
-        origin.x, origin.y, origin.x + width, origin.y + height, _u32(err, 0.55), 4.0, 0, 1.0
+        (origin.x, origin.y),
+        (origin.x + width, origin.y + height),
+        _u32(err, 0.55),
+        rounding=4.0,
+        thickness=1.0,
     )
     icon_col = _u32(err)
     cy = origin.y + height * 0.5
     if not _icon(draw_list, "warning", origin.x + 15.0, cy, 6.0, icon_col):
-        draw_list.add_circle(origin.x + 15.0, cy, 6.0, icon_col, 12, 1.5)
+        draw_list.add_circle((origin.x + 15.0, cy), 6.0, icon_col, 12, 1.5)
 
     # Lay the wrapped message inside the panel, then advance past the whole box.
     imgui.set_cursor_screen_pos((origin.x + 28.0, origin.y + 5.0))
     imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + wrap_width)
-    imgui.push_style_color(imgui.COLOR_TEXT, err[0], err[1], err[2], 1.0)
+    imgui.push_style_color(imgui.Col_.text, (err[0], err[1], err[2], 1.0))
     imgui.text_unformatted(text)
     imgui.pop_style_color(1)
     imgui.pop_text_wrap_pos()
     imgui.set_cursor_screen_pos((origin.x, origin.y + height + 4.0))
-    imgui.dummy(0.0, 0.0)
+    imgui.dummy((0.0, 0.0))
 
 
 def confirm_popup(id_str: str, message: str) -> Optional[bool]:
@@ -703,7 +707,7 @@ def confirm_popup(id_str: str, message: str) -> Optional[bool]:
     if not IMGUI_AVAILABLE:
         return None
     result: Optional[bool] = None
-    opened, _visible = imgui.begin_popup_modal(id_str, flags=imgui.WINDOW_ALWAYS_AUTO_RESIZE)
+    opened, _visible = imgui.begin_popup_modal(id_str, flags=imgui.WindowFlags_.always_auto_resize)
     if opened:
         imgui.push_text_wrap_pos(imgui.get_font_size() * 24.0)
         imgui.text_unformatted(str(message))
@@ -711,11 +715,11 @@ def confirm_popup(id_str: str, message: str) -> Optional[bool]:
         imgui.spacing()
         imgui.separator()
         imgui.spacing()
-        if imgui.button("OK", 110.0, 0.0):
+        if imgui.button("OK", (110.0, 0.0)):
             result = True
             imgui.close_current_popup()
         imgui.same_line()
-        if imgui.button("Cancel", 110.0, 0.0):
+        if imgui.button("Cancel", (110.0, 0.0)):
             result = False
             imgui.close_current_popup()
         imgui.end_popup()
@@ -793,20 +797,20 @@ def mini_plot(
 
     # Reserve the widget rect. invisible_button (not dummy) so hover honours window
     # stacking and clipping.
-    avail = imgui.get_content_region_available()
+    avail = imgui.get_content_region_avail()
     width = max(64.0, float(avail.x))
     box_height = max(32.0, float(height))
     origin = imgui.get_cursor_screen_pos()
     x0, y0 = float(origin.x), float(origin.y)
 
     imgui.push_id(id_str)
-    imgui.invisible_button("##miniplot", width, box_height)
+    imgui.invisible_button("##miniplot", (width, box_height))
     hovered = imgui.is_item_hovered()
     imgui.pop_id()
 
     x1, y1 = x0 + width, y0 + box_height
     draw_list = imgui.get_window_draw_list()
-    draw_list.add_rect_filled(x0, y0, x1, y1, bg_col, 3.0)
+    draw_list.add_rect_filled((x0, y0), (x1, y1), bg_col, 3.0)
 
     px0 = x0 + _MARGIN_LEFT
     py0 = y0 + _MARGIN_TOP
@@ -815,26 +819,26 @@ def mini_plot(
     inner_w = px1 - px0
     inner_h = py1 - py0
     if inner_w < 8.0 or inner_h < 8.0:
-        draw_list.add_rect(x0, y0, x1, y1, frame_col, 3.0, 0, 1.0)
+        draw_list.add_rect((x0, y0), (x1, y1), frame_col, rounding=3.0, thickness=1.0)
         return
 
     if y_data.size == 0:
-        draw_list.add_rect(px0, py0, px1, py1, frame_col, 0.0, 0, 1.0)
+        draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
         text = "no data"
         size = imgui.calc_text_size(text)
         draw_list.add_text(
-            px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5, muted_col, text
+            (px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5), muted_col, text
         )
         return
 
     x_range = _finite_range(x_data)
     y_range = _finite_range(y_data, ov_data)
     if x_range is None or y_range is None:
-        draw_list.add_rect(px0, py0, px1, py1, frame_col, 0.0, 0, 1.0)
+        draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
         text = "no finite data"
         size = imgui.calc_text_size(text)
         draw_list.add_text(
-            px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5, muted_col, text
+            (px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5), muted_col, text
         )
         return
 
@@ -857,31 +861,33 @@ def mini_plot(
         sy = py1 - (tick - y_lo) * scale_y
         if sy < py0 - 0.5 or sy > py1 + 0.5:
             continue
-        draw_list.add_line(px0, sy, px1, sy, grid_col, 1.0)
+        draw_list.add_line((px0, sy), (px1, sy), grid_col, 1.0)
         text = _fmt_tick(tick)
         size = imgui.calc_text_size(text)
-        draw_list.add_text(max(x0 + 1.0, px0 - 5.0 - size.x), sy - size.y * 0.5, muted_col, text)
+        draw_list.add_text(
+            (max(x0 + 1.0, px0 - 5.0 - size.x), sy - size.y * 0.5), muted_col, text
+        )
 
     for tick in _nice_ticks(x_lo, x_hi, 4):
         sx = px0 + (tick - x_lo) * scale_x
         if sx < px0 - 0.5 or sx > px1 + 0.5:
             continue
-        draw_list.add_line(sx, py0, sx, py1, grid_col, 1.0)
+        draw_list.add_line((sx, py0), (sx, py1), grid_col, 1.0)
         text = _fmt_tick(tick)
         size = imgui.calc_text_size(text)
         tx = min(max(sx - size.x * 0.5, px0 - 4.0), px1 - size.x)
-        draw_list.add_text(tx, py1 + 2.0, muted_col, text)
+        draw_list.add_text((tx, py1 + 2.0), muted_col, text)
 
     if y_lo < 0.0 < y_hi:
         sy = py1 + y_lo * scale_y
-        draw_list.add_line(px0, sy, px1, sy, zero_col, 1.5)
+        draw_list.add_line((px0, sy), (px1, sy), zero_col, 1.5)
 
-    draw_list.add_rect(px0, py0, px1, py1, frame_col, 0.0, 0, 1.0)
+    draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
 
     # --- series -----------------------------------------------------------------
     # One bucket per pixel column, capped so each series stays under MAX_PLOT_POINTS.
     columns = min(int(inner_w), MAX_PLOT_POINTS // 2)
-    draw_list.push_clip_rect(px0, py0, px1, py1, True)
+    draw_list.push_clip_rect((px0, py0), (px1, py1), True)
     try:
         if ov_data is not None:
             ox, oy = _minmax_decimate(x_data[: ov_data.size], ov_data, columns)
@@ -897,8 +903,8 @@ def mini_plot(
             # A thin panel-coloured ring keeps a dot legible where it sits on the line.
             ring_u32 = _u32(_token("panel_bg"))
             for cx, cy in zip(msx.tolist(), msy.tolist()):
-                draw_list.add_circle_filled(cx, cy, 3.5, dot_u32)
-                draw_list.add_circle(cx, cy, 3.5, ring_u32, 0, 1.0)
+                draw_list.add_circle_filled((cx, cy), 3.5, dot_u32)
+                draw_list.add_circle((cx, cy), 3.5, ring_u32, 0, 1.0)
 
         # --- hover crosshair + readout ------------------------------------------
         if hovered:
@@ -910,16 +916,16 @@ def mini_plot(
                 sample_y = float(y_data[index])
                 if math.isfinite(sample_x):
                     sx = px0 + (sample_x - x_lo) * scale_x
-                    draw_list.add_line(sx, py0, sx, py1, muted_col, 1.0)
+                    draw_list.add_line((sx, py0), (sx, py1), muted_col, 1.0)
                     if math.isfinite(sample_y):
                         sy = py1 - (sample_y - y_lo) * scale_y
-                        draw_list.add_circle_filled(sx, sy, 3.0, _u32(series_color))
+                        draw_list.add_circle_filled((sx, sy), 3.0, _u32(series_color))
                     _hover_tooltip(label, index, sample_x, sample_y, ov_data, y_data.size)
     finally:
         draw_list.pop_clip_rect()
 
     if label:
-        draw_list.add_text(px0 + 4.0, py0 + 2.0, muted_col, str(label))
+        draw_list.add_text((px0 + 4.0, py0 + 2.0), muted_col, str(label))
 
 
 def _draw_series(
@@ -935,10 +941,10 @@ def _draw_series(
     for run in runs:
         if run.size >= 2:
             points = [(xs[i], ys[i]) for i in run.tolist()]
-            draw_list.add_polyline(points, col, 0, thickness)
+            draw_list.add_polyline(points, col, thickness=thickness, flags=0)
         else:
             i = int(run[0])
-            draw_list.add_circle_filled(xs[i], ys[i], thickness * 0.9, col)
+            draw_list.add_circle_filled((xs[i], ys[i]), thickness * 0.9, col)
 
 
 def _hover_tooltip(
@@ -1112,14 +1118,14 @@ def mini_scene3d(
     bg_col = _u32(_token("panel_bg"))
     default_rgba = _token("accent")
 
-    avail = imgui.get_content_region_available()
+    avail = imgui.get_content_region_avail()
     width = max(64.0, float(avail.x))
     box_height = max(48.0, float(height))
     origin = imgui.get_cursor_screen_pos()
     x0, y0 = float(origin.x), float(origin.y)
 
     imgui.push_id(id_str)
-    imgui.invisible_button("##scene3d", width, box_height)
+    imgui.invisible_button("##scene3d", (width, box_height))
     active = imgui.is_item_active()
     imgui.pop_id()
 
@@ -1137,7 +1143,7 @@ def mini_scene3d(
 
     x1, y1 = x0 + width, y0 + box_height
     draw_list = imgui.get_window_draw_list()
-    draw_list.add_rect_filled(x0, y0, x1, y1, bg_col, 3.0)
+    draw_list.add_rect_filled((x0, y0), (x1, y1), bg_col, 3.0)
 
     px0 = x0 + _SCENE3D_MARGIN
     py0 = y0 + _SCENE3D_MARGIN
@@ -1145,16 +1151,16 @@ def mini_scene3d(
     py1 = y1 - _SCENE3D_MARGIN
     inner_w, inner_h = px1 - px0, py1 - py0
     if inner_w < 8.0 or inner_h < 8.0:
-        draw_list.add_rect(x0, y0, x1, y1, frame_col, 3.0, 0, 1.0)
+        draw_list.add_rect((x0, y0), (x1, y1), frame_col, rounding=3.0, thickness=1.0)
         return orbited
 
     bounds = bounds3d(verts)
     if bounds is None:
-        draw_list.add_rect(x0, y0, x1, y1, frame_col, 3.0, 0, 1.0)
+        draw_list.add_rect((x0, y0), (x1, y1), frame_col, rounding=3.0, thickness=1.0)
         text = "no data" if len(verts) == 0 else "no finite data"
         size = imgui.calc_text_size(text)
         draw_list.add_text(
-            px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5, muted_col, text
+            (px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5), muted_col, text
         )
         return orbited
 
@@ -1162,7 +1168,7 @@ def mini_scene3d(
     try:
         mvp = camera.mvp(inner_w / max(inner_h, 1e-6), framed)
     except Exception:  # pragma: no cover - a camera that cannot build a matrix
-        draw_list.add_rect(x0, y0, x1, y1, frame_col, 3.0, 0, 1.0)
+        draw_list.add_rect((x0, y0), (x1, y1), frame_col, rounding=3.0, thickness=1.0)
         return orbited
 
     rect = (px0, py0, px1, py1)
@@ -1173,7 +1179,7 @@ def mini_scene3d(
     if rgba is None:
         rgba = np.tile(np.asarray(default_rgba, dtype=np.float64), (len(verts), 1))
 
-    draw_list.push_clip_rect(px0, py0, px1, py1, True)
+    draw_list.push_clip_rect((px0, py0), (px1, py1), True)
     try:
         if show_box:
             _draw_scene3d_box(draw_list, _box_points(bounds), mvp, rect, grid_col)
@@ -1188,12 +1194,12 @@ def mini_scene3d(
     finally:
         draw_list.pop_clip_rect()
 
-    draw_list.add_rect(x0, y0, x1, y1, frame_col, 3.0, 0, 1.0)
+    draw_list.add_rect((x0, y0), (x1, y1), frame_col, rounding=3.0, thickness=1.0)
     if label:
-        draw_list.add_text(px0 + 4.0, py0 + 2.0, muted_col, str(label))
+        draw_list.add_text((px0 + 4.0, py0 + 2.0), muted_col, str(label))
     if hint:
         size = imgui.calc_text_size(hint)
-        draw_list.add_text(px0 + 4.0, py1 - size.y - 2.0, muted_col, str(hint))
+        draw_list.add_text((px0 + 4.0, py1 - size.y - 2.0), muted_col, str(hint))
     return orbited
 
 
@@ -1213,7 +1219,9 @@ def _draw_scene3d_box(
     for i, j in _BOX_EDGES:
         if not (np.isfinite(bx[i]) and np.isfinite(bx[j])):
             continue
-        draw_list.add_line(float(bx[i]), float(by[i]), float(bx[j]), float(by[j]), col, 1.0)
+        draw_list.add_line(
+            (float(bx[i]), float(by[i])), (float(bx[j]), float(by[j])), col, 1.0
+        )
 
 
 def _scene3d_order(
@@ -1280,7 +1288,9 @@ def _draw_scene3d_triangles(
     bx, by = sx[b].tolist(), sy[b].tolist()
     cx, cy = sx[c].tolist(), sy[c].tolist()
     for i in range(len(cols)):
-        draw_list.add_triangle_filled(ax[i], ay[i], bx[i], by[i], cx[i], cy[i], cols[i])
+        draw_list.add_triangle_filled(
+            (ax[i], ay[i]), (bx[i], by[i]), (cx[i], cy[i]), cols[i]
+        )
 
 
 def _draw_scene3d_segments(
@@ -1308,7 +1318,7 @@ def _draw_scene3d_segments(
     ax, ay = sx[a].tolist(), sy[a].tolist()
     bx, by = sx[b].tolist(), sy[b].tolist()
     for i in range(len(cols)):
-        draw_list.add_line(ax[i], ay[i], bx[i], by[i], cols[i], thickness)
+        draw_list.add_line((ax[i], ay[i]), (bx[i], by[i]), cols[i], thickness)
 
 
 def _draw_scene3d_dots(
@@ -1333,4 +1343,4 @@ def _draw_scene3d_dots(
     xs, ys = sx[keep].tolist(), sy[keep].tolist()
     r = max(0.75, float(radius))
     for i in range(len(cols)):
-        draw_list.add_circle_filled(xs[i], ys[i], r, cols[i])
+        draw_list.add_circle_filled((xs[i], ys[i]), r, cols[i])

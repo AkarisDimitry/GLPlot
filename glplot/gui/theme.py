@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - imgui is a hard dependency in CI
@@ -148,7 +148,7 @@ def color_u32(name: str, alpha: Optional[float] = None) -> int:
     if not IMGUI_AVAILABLE:
         return 0
     c = get_color(name, alpha)
-    return imgui.get_color_u32_rgba(c[0], c[1], c[2], c[3])
+    return imgui.get_color_u32((c[0], c[1], c[2], c[3]))
 
 
 def _apply_style_vars() -> None:
@@ -191,14 +191,13 @@ def _apply_style_vars() -> None:
 
     style.anti_aliased_lines = True
     style.anti_aliased_fill = True
-    style.curve_tessellation_tolerance = 1.25
+    style.curve_tessellation_tol = 1.25
     style.alpha = 1.0
 
 
 def _apply_style_colors() -> None:
     """Colour half of the theme: the full imgui ramp, derived from COLORS."""
     style = imgui.get_style()
-    c = style.colors
 
     bg = COLORS["bg"]
     panel = COLORS["panel_bg"]
@@ -211,77 +210,77 @@ def _apply_style_colors() -> None:
     accent_h = COLORS["accent_hover"]
     accent_a = COLORS["accent_active"]
 
-    c[imgui.COLOR_TEXT] = text
-    c[imgui.COLOR_TEXT_DISABLED] = dim
+    style.set_color_(imgui.Col_.text, text)
+    style.set_color_(imgui.Col_.text_disabled, dim)
 
-    c[imgui.COLOR_WINDOW_BACKGROUND] = panel
-    c[imgui.COLOR_CHILD_BACKGROUND] = _alpha(bg, 0.40)
-    c[imgui.COLOR_POPUP_BACKGROUND] = _mix(panel, bg, 0.35)
-    c[imgui.COLOR_BORDER] = border
-    c[imgui.COLOR_BORDER_SHADOW] = (0.0, 0.0, 0.0, 0.0)
+    style.set_color_(imgui.Col_.window_bg, panel)
+    style.set_color_(imgui.Col_.child_bg, _alpha(bg, 0.40))
+    style.set_color_(imgui.Col_.popup_bg, _mix(panel, bg, 0.35))
+    style.set_color_(imgui.Col_.border, border)
+    style.set_color_(imgui.Col_.border_shadow, (0.0, 0.0, 0.0, 0.0))
 
-    c[imgui.COLOR_FRAME_BACKGROUND] = frame
-    c[imgui.COLOR_FRAME_BACKGROUND_HOVERED] = raised
-    c[imgui.COLOR_FRAME_BACKGROUND_ACTIVE] = _mix(raised, accent, 0.22)
+    style.set_color_(imgui.Col_.frame_bg, frame)
+    style.set_color_(imgui.Col_.frame_bg_hovered, raised)
+    style.set_color_(imgui.Col_.frame_bg_active, _mix(raised, accent, 0.22))
 
-    c[imgui.COLOR_TITLE_BACKGROUND] = bg
-    c[imgui.COLOR_TITLE_BACKGROUND_ACTIVE] = _mix(bg, accent, 0.14)
-    c[imgui.COLOR_TITLE_BACKGROUND_COLLAPSED] = _alpha(bg, 0.75)
-    c[imgui.COLOR_MENUBAR_BACKGROUND] = bg
+    style.set_color_(imgui.Col_.title_bg, bg)
+    style.set_color_(imgui.Col_.title_bg_active, _mix(bg, accent, 0.14))
+    style.set_color_(imgui.Col_.title_bg_collapsed, _alpha(bg, 0.75))
+    style.set_color_(imgui.Col_.menu_bar_bg, bg)
 
-    c[imgui.COLOR_SCROLLBAR_BACKGROUND] = _alpha(bg, 0.60)
-    c[imgui.COLOR_SCROLLBAR_GRAB] = raised
-    c[imgui.COLOR_SCROLLBAR_GRAB_HOVERED] = _mix(raised, text, 0.20)
-    c[imgui.COLOR_SCROLLBAR_GRAB_ACTIVE] = accent
+    style.set_color_(imgui.Col_.scrollbar_bg, _alpha(bg, 0.60))
+    style.set_color_(imgui.Col_.scrollbar_grab, raised)
+    style.set_color_(imgui.Col_.scrollbar_grab_hovered, _mix(raised, text, 0.20))
+    style.set_color_(imgui.Col_.scrollbar_grab_active, accent)
 
-    c[imgui.COLOR_CHECK_MARK] = accent_h
-    c[imgui.COLOR_SLIDER_GRAB] = accent
-    c[imgui.COLOR_SLIDER_GRAB_ACTIVE] = accent_h
+    style.set_color_(imgui.Col_.check_mark, accent_h)
+    style.set_color_(imgui.Col_.slider_grab, accent)
+    style.set_color_(imgui.Col_.slider_grab_active, accent_h)
 
     # Rest-state buttons are quiet: a frame-coloured fill with a border. The
     # accent is reserved for push_accent() primaries and for hover feedback.
-    c[imgui.COLOR_BUTTON] = frame
-    c[imgui.COLOR_BUTTON_HOVERED] = _mix(frame, accent, 0.45)
-    c[imgui.COLOR_BUTTON_ACTIVE] = accent_a
+    style.set_color_(imgui.Col_.button, frame)
+    style.set_color_(imgui.Col_.button_hovered, _mix(frame, accent, 0.45))
+    style.set_color_(imgui.Col_.button_active, accent_a)
 
-    c[imgui.COLOR_HEADER] = _alpha(accent, 0.22)
-    c[imgui.COLOR_HEADER_HOVERED] = _alpha(accent, 0.38)
-    c[imgui.COLOR_HEADER_ACTIVE] = _alpha(accent, 0.55)
+    style.set_color_(imgui.Col_.header, _alpha(accent, 0.22))
+    style.set_color_(imgui.Col_.header_hovered, _alpha(accent, 0.38))
+    style.set_color_(imgui.Col_.header_active, _alpha(accent, 0.55))
 
-    c[imgui.COLOR_SEPARATOR] = border
-    c[imgui.COLOR_SEPARATOR_HOVERED] = _alpha(accent, 0.70)
-    c[imgui.COLOR_SEPARATOR_ACTIVE] = accent
+    style.set_color_(imgui.Col_.separator, border)
+    style.set_color_(imgui.Col_.separator_hovered, _alpha(accent, 0.70))
+    style.set_color_(imgui.Col_.separator_active, accent)
 
-    c[imgui.COLOR_RESIZE_GRIP] = _alpha(dim, 0.30)
-    c[imgui.COLOR_RESIZE_GRIP_HOVERED] = _alpha(accent, 0.55)
-    c[imgui.COLOR_RESIZE_GRIP_ACTIVE] = _alpha(accent, 0.85)
+    style.set_color_(imgui.Col_.resize_grip, _alpha(dim, 0.30))
+    style.set_color_(imgui.Col_.resize_grip_hovered, _alpha(accent, 0.55))
+    style.set_color_(imgui.Col_.resize_grip_active, _alpha(accent, 0.85))
 
-    c[imgui.COLOR_TAB] = _mix(bg, frame, 0.50)
-    c[imgui.COLOR_TAB_HOVERED] = _alpha(accent, 0.45)
-    c[imgui.COLOR_TAB_ACTIVE] = _mix(frame, accent, 0.30)
-    c[imgui.COLOR_TAB_UNFOCUSED] = bg
-    c[imgui.COLOR_TAB_UNFOCUSED_ACTIVE] = _mix(bg, frame, 0.70)
+    style.set_color_(imgui.Col_.tab, _mix(bg, frame, 0.50))
+    style.set_color_(imgui.Col_.tab_hovered, _alpha(accent, 0.45))
+    style.set_color_(imgui.Col_.tab_selected, _mix(frame, accent, 0.30))
+    style.set_color_(imgui.Col_.tab_dimmed, bg)
+    style.set_color_(imgui.Col_.tab_dimmed_selected, _mix(bg, frame, 0.70))
 
-    c[imgui.COLOR_PLOT_LINES] = COLORS["plot_line"]
-    c[imgui.COLOR_PLOT_LINES_HOVERED] = COLORS["plot_overlay"]
-    c[imgui.COLOR_PLOT_HISTOGRAM] = COLORS["plot_line"]
-    c[imgui.COLOR_PLOT_HISTOGRAM_HOVERED] = COLORS["plot_overlay"]
+    style.set_color_(imgui.Col_.plot_lines, COLORS["plot_line"])
+    style.set_color_(imgui.Col_.plot_lines_hovered, COLORS["plot_overlay"])
+    style.set_color_(imgui.Col_.plot_histogram, COLORS["plot_line"])
+    style.set_color_(imgui.Col_.plot_histogram_hovered, COLORS["plot_overlay"])
 
     # Table colours matter as much as anything here: the data editor is a grid
     # the user stares at for minutes at a time. Alternating rows stay under 3%
     # contrast -- enough to track a row, not enough to strobe.
-    c[imgui.COLOR_TABLE_HEADER_BACKGROUND] = _mix(frame, bg, 0.30)
-    c[imgui.COLOR_TABLE_BORDER_STRONG] = border
-    c[imgui.COLOR_TABLE_BORDER_LIGHT] = _mix(bg, border, 0.55)
-    c[imgui.COLOR_TABLE_ROW_BACKGROUND] = (0.0, 0.0, 0.0, 0.0)
-    c[imgui.COLOR_TABLE_ROW_BACKGROUND_ALT] = _alpha(text, 0.025)
+    style.set_color_(imgui.Col_.table_header_bg, _mix(frame, bg, 0.30))
+    style.set_color_(imgui.Col_.table_border_strong, border)
+    style.set_color_(imgui.Col_.table_border_light, _mix(bg, border, 0.55))
+    style.set_color_(imgui.Col_.table_row_bg, (0.0, 0.0, 0.0, 0.0))
+    style.set_color_(imgui.Col_.table_row_bg_alt, _alpha(text, 0.025))
 
-    c[imgui.COLOR_TEXT_SELECTED_BACKGROUND] = COLORS["selection"]
-    c[imgui.COLOR_DRAG_DROP_TARGET] = _alpha(COLORS["warn"], 0.90)
-    c[imgui.COLOR_NAV_HIGHLIGHT] = accent
-    c[imgui.COLOR_NAV_WINDOWING_HIGHLIGHT] = _alpha(text, 0.70)
-    c[imgui.COLOR_NAV_WINDOWING_DIM_BACKGROUND] = _alpha(dim, 0.20)
-    c[imgui.COLOR_MODAL_WINDOW_DIM_BACKGROUND] = (0.0, 0.0, 0.0, 0.55)
+    style.set_color_(imgui.Col_.text_selected_bg, COLORS["selection"])
+    style.set_color_(imgui.Col_.drag_drop_target, _alpha(COLORS["warn"], 0.90))
+    style.set_color_(imgui.Col_.nav_cursor, accent)
+    style.set_color_(imgui.Col_.nav_windowing_highlight, _alpha(text, 0.70))
+    style.set_color_(imgui.Col_.nav_windowing_dim_bg, _alpha(dim, 0.20))
+    style.set_color_(imgui.Col_.modal_window_dim_bg, (0.0, 0.0, 0.0, 0.55))
 
 
 def apply_theme(dark: bool = True) -> None:
@@ -315,10 +314,10 @@ def push_accent() -> None:
     ah = COLORS["accent_hover"]
     aa = COLORS["accent_active"]
     on = COLORS["on_accent"]
-    imgui.push_style_color(imgui.COLOR_BUTTON, a[0], a[1], a[2], a[3])
-    imgui.push_style_color(imgui.COLOR_BUTTON_HOVERED, ah[0], ah[1], ah[2], ah[3])
-    imgui.push_style_color(imgui.COLOR_BUTTON_ACTIVE, aa[0], aa[1], aa[2], aa[3])
-    imgui.push_style_color(imgui.COLOR_TEXT, on[0], on[1], on[2], on[3])
+    imgui.push_style_color(imgui.Col_.button, a)
+    imgui.push_style_color(imgui.Col_.button_hovered, ah)
+    imgui.push_style_color(imgui.Col_.button_active, aa)
+    imgui.push_style_color(imgui.Col_.text, on)
 
 
 def pop_accent() -> None:

@@ -1830,6 +1830,10 @@ class GPULinePlot:
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+        # Required on macOS for any core-profile context >= 3.2 (NSGL rejects window
+        # creation without it: "only supports forward-compatible core profile contexts");
+        # a no-op on Windows/Linux, so it is set unconditionally rather than per-platform.
+        glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE)
         glfw.window_hint(glfw.DOUBLEBUFFER, glfw.TRUE)
         if self.options.enable_multisample:
             glfw.window_hint(glfw.SAMPLES, 4)
@@ -2578,8 +2582,8 @@ class GPULinePlot:
         draw_list = self.hud.get_draw_list()
         if draw_list:
             color = 0x4C3366CC  # Abgr: (0.3, 0.4, 0.8, 1.0) approx
-            draw_list.add_rect_filled(px, py, mx, my, color)
-            draw_list.add_rect(px, py, mx, my, 0xCC3366CC)
+            draw_list.add_rect_filled((px, py), (mx, my), color)
+            draw_list.add_rect((px, py), (mx, my), 0xCC3366CC)
 
     def _draw_panel_borders(self) -> None:
         """Outline each panel and highlight the active one, so the current axes is obvious.
@@ -2601,9 +2605,9 @@ class GPULinePlot:
             top = (1.0 - (y0f + hf)) * self.height  # bottom-left origin -> top-left px
             bottom = (1.0 - y0f) * self.height
             if i == self.active_panel_index:
-                draw_list.add_rect(left, top, right, bottom, 0xFFDD9933, 0.0, 0, 2.0)
+                draw_list.add_rect((left, top), (right, bottom), 0xFFDD9933, rounding=0.0, thickness=2.0)
             else:
-                draw_list.add_rect(left, top, right, bottom, 0x55888888, 0.0, 0, 1.0)
+                draw_list.add_rect((left, top), (right, bottom), 0x55888888, rounding=0.0, thickness=1.0)
 
     def _draw_marquee_box(self) -> None:
         """Rubber band for the Shift+Drag marquee selection.
@@ -2619,8 +2623,8 @@ class GPULinePlot:
         if draw_list:
             # Packed ABGR literals, as in _draw_zoom_box. Cyan, to read as
             # distinct from the right-drag box-zoom rectangle.
-            draw_list.add_rect_filled(px, py, mx, my, 0x40CCAA33)
-            draw_list.add_rect(px, py, mx, my, 0xFFCCAA33)
+            draw_list.add_rect_filled((px, py), (mx, my), 0x40CCAA33)
+            draw_list.add_rect((px, py), (mx, my), 0xFFCCAA33)
 
     def _run_marquee_pick(self, mx: float, my: float) -> None:
         """Resolve a Shift+Drag marquee into the element selection.
@@ -2861,6 +2865,7 @@ class GPULinePlot:
                 self.frame.dirty_scene = True
 
     def _on_cursor(self, window: Any, x: float, y: float) -> None:
+        self.hud.on_cursor(window, x, y)
         if (x, y) == self.interaction.last_mouse:
             return
 

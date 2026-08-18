@@ -35,7 +35,7 @@ from .. import expressions, fuzzy, keys
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - GL-less import guard
@@ -947,8 +947,7 @@ class HelpPanel(Panel):
         if panel is None:
             self._status = "The {0} panel is not available.".format(key)
             return False
-        self.ws.open[key] = True
-        imgui.set_window_focus_labeled(panel.title)
+        self.ws.open_panel(key)
         return True
 
     def _run_step(self, step: Step) -> None:
@@ -991,8 +990,7 @@ class HelpPanel(Panel):
         else:
             new = "{0} + {1}".format(current, snippet)
         panel.expr = new
-        self.ws.open["functions"] = True
-        imgui.set_window_focus_labeled(panel.title)
+        self.ws.open_panel("functions")
         self._status = "Inserted {0} into Functions.".format(snippet)
 
     # -- search ------------------------------------------------------------------------
@@ -1072,7 +1070,7 @@ class HelpPanel(Panel):
         if changed:
             self._query = value
         imgui.same_line()
-        if imgui.button("Clear", 74.0, 0.0):
+        if imgui.button("Clear", (74.0, 0.0)):
             self._query = ""
         # pyimgui 2.0's input_text has no placeholder/hint parameter, so the prompt lives
         # under the field rather than inside it.
@@ -1083,19 +1081,19 @@ class HelpPanel(Panel):
 
     def _draw_tabs(self) -> None:
         """The tab bar; each tab scrolls its own child region."""
-        tab_bar = imgui.begin_tab_bar("##help_tabs")
-        if not tab_bar.opened:
+        tab_bar_open = imgui.begin_tab_bar("##help_tabs")
+        if not tab_bar_open:
             return
         for tab in _TABS:
             flags = 0
             if self._pending_tab == tab.id:
-                flags = imgui.TAB_ITEM_SET_SELECTED
-            item = imgui.begin_tab_item(tab.title, flags=flags)
-            if item.selected:
+                flags = imgui.TabItemFlags_.set_selected
+            selected, _ = imgui.begin_tab_item(tab.title, flags=flags)
+            if selected:
                 if self._pending_tab == tab.id:
                     self._pending_tab = None
                 self._active_tab = tab.id
-                imgui.begin_child("##help_body_{0}".format(tab.id), 0.0, 0.0, False)
+                imgui.begin_child("##help_body_{0}".format(tab.id), (0.0, 0.0))
                 try:
                     self._draw_tab_body(tab.id)
                 finally:
@@ -1165,7 +1163,7 @@ class HelpPanel(Panel):
         # Default open, every section: a Help tab that greets the reader with a column of
         # collapsed headers has hidden the answer behind a click they have no reason to
         # make. imgui remembers whatever they collapse themselves.
-        expanded, _ = imgui.collapsing_header(section.title, flags=imgui.TREE_NODE_DEFAULT_OPEN)
+        expanded = imgui.collapsing_header(section.title, flags=imgui.TreeNodeFlags_.default_open)
         if self._pending_section == section.title:
             imgui.set_scroll_here_y(0.15)
             self._pending_section = None
@@ -1186,26 +1184,26 @@ class HelpPanel(Panel):
     def _draw_entries(self, section: Section) -> None:
         """The two- or three-column entry table.
 
-        ``begin_table`` reports ``opened=False`` when it is clipped or out of space
-        (CONTRACT §2.3), so ``end_table`` is called only inside the guard.
+        ``begin_table`` returns False when it is clipped or out of space (CONTRACT
+        §2.3), so ``end_table`` is called only inside the guard.
         """
         columns = 3 if section.insertable else 2
-        flags = imgui.TABLE_ROW_BACKGROUND | imgui.TABLE_BORDERS_INNER_HORIZONTAL
-        table = imgui.begin_table("##entries_{0}".format(section.title), columns, flags=flags)
-        if not table.opened:
+        flags = imgui.TableFlags_.row_bg | imgui.TableFlags_.borders_inner_h
+        table_open = imgui.begin_table("##entries_{0}".format(section.title), columns, flags=flags)
+        if not table_open:
             return
         try:
             if section.insertable:
                 imgui.table_setup_column(
-                    "Name", imgui.TABLE_COLUMN_WIDTH_FIXED, _SIGNATURE_COLUMN_W
+                    "Name", imgui.TableColumnFlags_.width_fixed, _SIGNATURE_COLUMN_W
                 )
-                imgui.table_setup_column("What it does", imgui.TABLE_COLUMN_WIDTH_STRETCH)
-                imgui.table_setup_column("", imgui.TABLE_COLUMN_WIDTH_FIXED, 62.0)
+                imgui.table_setup_column("What it does", imgui.TableColumnFlags_.width_stretch)
+                imgui.table_setup_column("", imgui.TableColumnFlags_.width_fixed, 62.0)
             else:
-                imgui.table_setup_column("Action", imgui.TABLE_COLUMN_WIDTH_STRETCH)
+                imgui.table_setup_column("Action", imgui.TableColumnFlags_.width_stretch)
                 imgui.table_setup_column(
                     section.value_header or "Key",
-                    imgui.TABLE_COLUMN_WIDTH_FIXED,
+                    imgui.TableColumnFlags_.width_fixed,
                     section.value_width or _KEY_COLUMN_W,
                 )
                 if section.value_header:

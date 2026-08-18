@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
@@ -42,23 +41,6 @@ _MPL_DEFAULT_TITLE_PT = 12.0
 _MPL_DEFAULT_LABEL_PT = 10.0
 
 
-class _ImDrawVert(ctypes.Structure):
-    """Dear ImGui's vertex, as ``imgui.core`` builds it: ``{ImVec2 pos; ImVec2 uv; ImU32 col;}``.
-
-    Used only by :func:`_draw_text_rotated`, and only after the layout has been proven
-    against the draw list at runtime -- see that function for why the assumption is checked
-    rather than trusted.
-    """
-
-    _fields_ = [
-        ("x", ctypes.c_float),
-        ("y", ctypes.c_float),
-        ("u", ctypes.c_float),
-        ("v", ctypes.c_float),
-        ("col", ctypes.c_uint32),
-    ]
-
-
 def _draw_text_rotated(
     imgui,
     draw_list,
@@ -74,11 +56,10 @@ def _draw_text_rotated(
     which the caller must therefore choose to be a position it is happy to live with.
 
     **Why this way.** imgui has no rotated-text call, and rotated glyph quads cannot be
-    built by hand either: pyimgui 2.0 does not wrap ``ImFont::FindGlyph``, so the per-glyph
-    atlas UVs are unreachable from Python. What is reachable is the vertex buffer
-    ``add_text`` just wrote (``vtx_buffer_data``/``vtx_buffer_size``), so the glyphs are
-    emitted horizontally and then transformed in place -- the standard Dear ImGui rotation
-    idiom, done through ctypes because the buffer is a raw pointer here.
+    built by hand either: the per-glyph atlas UVs are not reachable from Python. What is
+    reachable is the vertex buffer ``add_text`` just wrote (``draw_list.vtx_buffer``, a
+    live sequence of ``ImDrawVert``), so the glyphs are emitted horizontally and then
+    transformed in place -- the standard Dear ImGui rotation idiom.
 
     The alternatives were both rejected against the "do not ship something ugly" bar:
     per-glyph vertical stacking (letters stacked like a totem, with no kerning and no
@@ -86,23 +67,21 @@ def _draw_text_rotated(
     as the fallback below, but a rotated y-label is what every plotting tool a scientist
     has used puts there, so it is what we draw when we can.
 
-    **Why the layout is checked, not trusted.** ``_ImDrawVert`` mirrors a C struct across a
-    ctypes boundary; a mismatch would not raise, it would scribble garbage floats into a
-    live vertex buffer. So the glyphs are emitted at `anchor` first and the vertices are
-    read back and bounds-checked against what ``calc_text_size`` promised before a single
-    byte is written. If the check fails -- wrong struct layout, or glyphs CPU-culled
-    against the clip rect because the text is wider than the viewport -- nothing is poked
-    and the text simply stays where it was drawn. The fallback is the unmodified draw,
-    which is why this cannot corrupt the frame it is unsure about.
+    **Why the layout is checked, not trusted.** The vertex range just emitted is
+    bounds-checked against what ``calc_text_size`` promised before a single vertex is
+    rewritten. If the check fails -- glyphs CPU-culled against the clip rect because the
+    text is wider than the viewport, say -- nothing is touched and the text simply stays
+    where it was drawn. The fallback is the unmodified draw, which is why this cannot
+    corrupt the frame it is unsure about.
     """
     ax, ay = anchor
     width, height = imgui.calc_text_size(text)
     if width <= 0.0 or height <= 0.0:
         return True  # Nothing to place (empty string, or all-whitespace).
 
-    first = draw_list.vtx_buffer_size
-    draw_list.add_text(ax, ay, color, text)
-    count = draw_list.vtx_buffer_size - first
+    first = len(draw_list.vtx_buffer)
+    draw_list.add_text((ax, ay), color, text)
+    count = len(draw_list.vtx_buffer) - first
 
     # Glyph quads only. A non-multiple of 4 means something other than text landed in the
     # range and the arithmetic below would not be addressing glyph corners.
@@ -110,10 +89,9 @@ def _draw_text_rotated(
         return count <= 0  # No verts at all == nothing drawn == nothing to fall back to.
 
     try:
-        verts = (_ImDrawVert * (first + count)).from_address(int(draw_list.vtx_buffer_data))
-        xs = [verts[i].x for i in range(first, first + count)]
-        ys = [verts[i].y for i in range(first, first + count)]
-    except (ValueError, TypeError, OSError):  # pragma: no cover - defensive
+        xs = [draw_list.vtx_buffer[i].pos.x for i in range(first, first + count)]
+        ys = [draw_list.vtx_buffer[i].pos.y for i in range(first, first + count)]
+    except (ValueError, TypeError, IndexError):  # pragma: no cover - defensive
         return False
 
     # The proof: every glyph corner must sit inside the box `add_text` was asked to fill
@@ -139,9 +117,10 @@ def _draw_text_rotated(
     ox, oy = ax + width * 0.5, ay + height * 0.5
     cx, cy = center
     for i in range(first, first + count):
-        dx, dy = (verts[i].x - ox) * scale, (verts[i].y - oy) * scale
-        verts[i].x = cx + dy
-        verts[i].y = cy - dx
+        v = draw_list.vtx_buffer[i]
+        dx, dy = (v.pos.x - ox) * scale, (v.pos.y - oy) * scale
+        v.pos.x = cx + dy
+        v.pos.y = cy - dx
     return True
 
 
@@ -168,7 +147,7 @@ def draw_text_scaled(
     treated as "nothing to do" and returns True without touching memory.
     """
     if scale <= 1.0 + 1e-6:
-        draw_list.add_text(anchor[0], anchor[1], color, text)
+        draw_list.add_text((anchor[0], anchor[1]), color, text)
         return True
 
     ax, ay = anchor
@@ -176,9 +155,9 @@ def draw_text_scaled(
     if width <= 0.0 or height <= 0.0:
         return True  # Nothing to place (empty string, or all-whitespace).
 
-    first = draw_list.vtx_buffer_size
-    draw_list.add_text(ax, ay, color, text)
-    count = draw_list.vtx_buffer_size - first
+    first = len(draw_list.vtx_buffer)
+    draw_list.add_text((ax, ay), color, text)
+    count = len(draw_list.vtx_buffer) - first
 
     # Glyph quads only. A non-multiple of 4 means something other than text landed in the
     # range and the arithmetic below would not be addressing glyph corners.
@@ -186,10 +165,9 @@ def draw_text_scaled(
         return count <= 0
 
     try:
-        verts = (_ImDrawVert * (first + count)).from_address(int(draw_list.vtx_buffer_data))
-        xs = [verts[i].x for i in range(first, first + count)]
-        ys = [verts[i].y for i in range(first, first + count)]
-    except (ValueError, TypeError, OSError):  # pragma: no cover - defensive
+        xs = [draw_list.vtx_buffer[i].pos.x for i in range(first, first + count)]
+        ys = [draw_list.vtx_buffer[i].pos.y for i in range(first, first + count)]
+    except (ValueError, TypeError, IndexError):  # pragma: no cover - defensive
         return False
 
     # The same proof as the rotated path: every glyph corner must sit inside the box
@@ -206,8 +184,9 @@ def draw_text_scaled(
 
     ox, oy = ax + width * 0.5, ay + height * 0.5
     for i in range(first, first + count):
-        verts[i].x = ox + (verts[i].x - ox) * scale
-        verts[i].y = oy + (verts[i].y - oy) * scale
+        v = draw_list.vtx_buffer[i]
+        v.pos.x = ox + (v.pos.x - ox) * scale
+        v.pos.y = oy + (v.pos.y - oy) * scale
     return True
 
 
@@ -290,12 +269,12 @@ class AxisRenderer:
         if color is None:
             return fallback
         try:
-            import imgui
+            from imgui_bundle import imgui
 
             from ..pyplot import _normalize_rgba
 
             r, g, b, a = _normalize_rgba(color)
-            return imgui.get_color_u32_rgba(float(r), float(g), float(b), float(a))
+            return imgui.get_color_u32((float(r), float(g), float(b), float(a)))
         except (ImportError, ValueError, TypeError):
             return fallback
 
@@ -497,7 +476,7 @@ class AxisRenderer:
     def _draw_labels(self, axis: AxisManager, ctx: RenderContext) -> None:
         """Draw numeric labels along the axes."""
         try:
-            import imgui
+            from imgui_bundle import imgui
         except ImportError:
             return
 
@@ -526,9 +505,9 @@ class AxisRenderer:
         is_light = lum > 0.5
 
         if is_light:
-            color = imgui.get_color_u32_rgba(0.15, 0.15, 0.15, 1.0)
+            color = imgui.get_color_u32((0.15, 0.15, 0.15, 1.0))
         else:
-            color = imgui.get_color_u32_rgba(0.85, 0.85, 0.85, 1.0)
+            color = imgui.get_color_u32((0.85, 0.85, 0.85, 1.0))
 
         win = ctx.window_world
 
@@ -555,7 +534,7 @@ class AxisRenderer:
         for val, label in zip(axis.ticks_x.major, axis.ticks_x.labels):
             sx, sy = project(val, win[2])
             # Offset labels slightly below the spine
-            draw_list.add_text(sx - imgui.calc_text_size(label)[0] * 0.5, sy + 5, color, label)
+            draw_list.add_text((sx - imgui.calc_text_size(label)[0] * 0.5, sy + 5), color, label)
 
         # Y-Axis Labels (along left).
         #
@@ -570,7 +549,7 @@ class AxisRenderer:
             sx, sy = project(win[0], val)
             text_w = imgui.calc_text_size(label)[0]
             widest_tick = max(widest_tick, text_w)
-            draw_list.add_text(sx - _TICK_LABEL_GAP - text_w, sy - 7, color, label)
+            draw_list.add_text((sx - _TICK_LABEL_GAP - text_w, sy - 7), color, label)
 
         self._draw_annotations(imgui, draw_list, axis, ctx, project, color, widest_tick)
 

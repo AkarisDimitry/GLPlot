@@ -2,15 +2,17 @@
 
 No OpenGL context and no window are created here: every check either inspects
 ``glplot.gui`` in-process or runs a short script in a subprocess whose ``sys.meta_path``
-carries a finder that makes ``import imgui`` raise ImportError.
+carries a finder that makes ``import imgui`` (and ``import imgui_bundle``) raise
+ImportError.
 
 A fact these tests deliberately encode rather than fight: ``import glplot`` DOES import
-imgui, via the module-level *guarded* ``import imgui`` in ``glplot/managers/hud.py``.
-That guard is pre-existing upstream behaviour and is why a missing imgui degrades to
-``IMGUI_AVAILABLE = False`` instead of exploding. The property under test is the one
-that actually holds and matters: importing ``glplot.gui`` and its pure submodules never
-hard-fails when imgui is absent, and ``glplot/gui/__init__.py`` does not eagerly import
-the imgui-dependent modules (it resolves them lazily via PEP 562 ``__getattr__``).
+imgui, via the module-level *guarded* ``from imgui_bundle import imgui`` in
+``glplot/managers/hud.py``. That guard is pre-existing upstream behaviour and is why a
+missing imgui degrades to ``IMGUI_AVAILABLE = False`` instead of exploding. The property
+under test is the one that actually holds and matters: importing ``glplot.gui`` and its
+pure submodules never hard-fails when imgui is absent, and ``glplot/gui/__init__.py``
+does not eagerly import the imgui-dependent modules (it resolves them lazily via PEP 562
+``__getattr__``).
 """
 
 from __future__ import annotations
@@ -28,21 +30,32 @@ import glplot.gui
 PURE_MODULES = ["commands", "history", "datasets", "clipboard", "expressions", "mathops"]
 
 #: Installed at the head of ``sys.meta_path`` in the subprocess: any attempt to import
-#: imgui (or a submodule of it) raises ImportError, exactly as a missing install would.
+#: imgui or imgui_bundle (or a submodule of either) raises ImportError, exactly as a
+#: missing install would. Both names are blocked because hud.py imports the real thing
+#: as ``from imgui_bundle import imgui`` -- blocking only the legacy pyimgui name would
+#: leave imgui_bundle importable and defeat the "imgui is unavailable" simulation.
 _BLOCKER = '''
 import sys
 
 
+def _is_imgui(fullname):
+    return (
+        fullname in ("imgui", "imgui_bundle")
+        or fullname.startswith("imgui.")
+        or fullname.startswith("imgui_bundle.")
+    )
+
+
 class _ImguiBlocker:
-    """Meta-path finder that makes ``import imgui`` fail as if never installed."""
+    """Meta-path finder that makes ``import imgui``/``imgui_bundle`` fail as if never installed."""
 
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == "imgui" or fullname.startswith("imgui."):
+        if _is_imgui(fullname):
             raise ImportError("No module named %r (blocked by test)" % fullname)
         return None
 
 
-for _name in [m for m in list(sys.modules) if m == "imgui" or m.startswith("imgui.")]:
+for _name in [m for m in list(sys.modules) if _is_imgui(m)]:
     del sys.modules[_name]
 sys.meta_path.insert(0, _ImguiBlocker())
 '''
@@ -117,7 +130,13 @@ class TestPureModuleImports:
             "import sys, importlib\n"
             "for name in %r:\n"
             "    importlib.import_module('glplot.gui.' + name)\n"
-            "print(any(m == 'imgui' or m.startswith('imgui.') for m in sys.modules))\n"
+            "def _is_imgui(m):\n"
+            "    return (\n"
+            "        m in ('imgui', 'imgui_bundle')\n"
+            "        or m.startswith('imgui.')\n"
+            "        or m.startswith('imgui_bundle.')\n"
+            "    )\n"
+            "print(any(_is_imgui(m) for m in sys.modules))\n"
             % (PURE_MODULES,)
         )
         assert out.strip() == "False"

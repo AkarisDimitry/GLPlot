@@ -26,7 +26,7 @@ from glplot.gui.history import Command
 from glplot.gui.panels.base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -221,16 +221,16 @@ class PipelinePanel(Panel):
             "Drag a step into the chain below, or click to append it. Drag steps over one "
             "another to reorder. The chain runs top to bottom."
         )
-        avail = max(1.0, imgui.get_content_region_available()[0])
+        avail = max(1.0, imgui.get_content_region_avail()[0])
         per_row = max(1, int(avail // 96.0))
         for i, key in enumerate(pipeline.STEP_KEYS):
             step_type = pipeline.STEP_TYPES[key]
             if i % per_row != 0:
                 imgui.same_line()
-            if imgui.button(step_type.label, 90.0, 0.0):
+            if imgui.button(step_type.label, (90.0, 0.0)):
                 self._steps.append(pipeline.new_step(key))
             if imgui.begin_drag_drop_source():
-                imgui.set_drag_drop_payload(_PAYLOAD_ADD, key.encode("ascii"))
+                imgui.set_drag_drop_payload_py_id(_PAYLOAD_ADD, i)
                 imgui.text(step_type.label)
                 imgui.end_drag_drop_source()
             if imgui.is_item_hovered():
@@ -259,7 +259,7 @@ class PipelinePanel(Panel):
             # Drag handle + header. The selectable is the grab surface and the drop target.
             imgui.selectable(f"=  {index + 1}. {step_type.label}", False)
             if imgui.begin_drag_drop_source():
-                imgui.set_drag_drop_payload(_PAYLOAD_MOVE, str(index).encode("ascii"))
+                imgui.set_drag_drop_payload_py_id(_PAYLOAD_MOVE, index)
                 imgui.text(step_type.label)
                 imgui.end_drag_drop_source()
             self._accept_drops(index)
@@ -283,27 +283,27 @@ class PipelinePanel(Panel):
         if not imgui.begin_drag_drop_target():
             return
         try:
-            move = imgui.accept_drag_drop_payload(_PAYLOAD_MOVE)
+            move = imgui.accept_drag_drop_payload_py_id(_PAYLOAD_MOVE)
             if move is not None:
-                self._pending = ("move", int(bytes(move).decode("ascii")), index)
-            add = imgui.accept_drag_drop_payload(_PAYLOAD_ADD)
+                self._pending = ("move", move.data_id, index)
+            add = imgui.accept_drag_drop_payload_py_id(_PAYLOAD_ADD)
             if add is not None:
-                self._pending = ("insert", bytes(add).decode("ascii"), index)
+                self._pending = ("insert", pipeline.STEP_KEYS[add.data_id], index)
         finally:
             imgui.end_drag_drop_target()
 
     def _draw_drop_zone(self, index: int) -> None:
         """An append target at the end of the list (and the whole area when empty)."""
-        imgui.dummy(1.0, 6.0)
+        imgui.dummy((1.0, 6.0))
         if not imgui.begin_drag_drop_target():
             return
         try:
-            move = imgui.accept_drag_drop_payload(_PAYLOAD_MOVE)
+            move = imgui.accept_drag_drop_payload_py_id(_PAYLOAD_MOVE)
             if move is not None:
-                self._pending = ("move", int(bytes(move).decode("ascii")), max(0, index - 1))
-            add = imgui.accept_drag_drop_payload(_PAYLOAD_ADD)
+                self._pending = ("move", move.data_id, max(0, index - 1))
+            add = imgui.accept_drag_drop_payload_py_id(_PAYLOAD_ADD)
             if add is not None:
-                self._pending = ("insert", bytes(add).decode("ascii"), index)
+                self._pending = ("insert", pipeline.STEP_KEYS[add.data_id], index)
         finally:
             imgui.end_drag_drop_target()
 
@@ -397,12 +397,12 @@ class PipelinePanel(Panel):
             color=theme.get_color("accent"),
             overlay_color=theme.get_color("warn"),
         )
-        imgui.text_colored("--", *theme.get_color("accent"))
+        imgui.text_colored(theme.get_color("accent"), "--")
         imgui.same_line()
         imgui.text("result")
         if overlay is not None:
             imgui.same_line()
-            imgui.text_colored("--", *theme.get_color("warn"))
+            imgui.text_colored(theme.get_color("warn"), "--")
             imgui.same_line()
             imgui.text("source")
 
@@ -443,7 +443,7 @@ class PipelinePanel(Panel):
             imgui.pop_item_width()
 
         theme.push_accent()
-        clicked = imgui.button("Apply", 130.0, 0.0)
+        clicked = imgui.button("Apply", (130.0, 0.0))
         theme.pop_accent()
         imgui.same_line()
         widgets.help_marker("Queued for the next frame and recorded on the undo stack.")

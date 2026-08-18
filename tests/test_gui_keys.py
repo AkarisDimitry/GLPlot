@@ -5,11 +5,13 @@ the one that actually matters -- exact modifier matching in pressed(), which is
 what keeps undo off the redo chord.
 
 pressed() is exercised against a REAL imgui context driven headlessly (no OpenGL,
-no GPU, no window): the context is created, io.keys_down is indexed by raw GLFW
-keycode exactly as GlfwRenderer.keyboard_callback does it, and new_frame/end_frame
-are stepped so is_key_pressed sees genuine rising edges. Mocking imgui away here
-would defeat the purpose -- the whole module rests on the claim that
-is_key_pressed() accepts a GLFW keycode, and only a real frame can falsify it.
+no GPU, no window): the context is created, a harness-owned ``keys_down`` array is
+indexed by raw GLFW keycode exactly as the old GlfwRenderer.keyboard_callback used
+to index the real one, and new_frame/end_frame are stepped so is_key_pressed sees
+genuine rising edges. Mocking imgui away here would defeat the purpose -- the whole
+module rests on the claim that pressed() correctly translates a raw GLFW keycode
+into the imgui.Key is_key_pressed() now requires, and only a real frame can
+falsify it.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import importlib
 import sys
 from unittest.mock import MagicMock
 
-import imgui
+from imgui_bundle import imgui
 import pytest
 
 from glplot.gui import keys
@@ -110,11 +112,59 @@ def _workspace_chord_specs():
     return sorted(specs)
 
 
+class _KeysDownIO:
+    """Wraps a real imgui IO object, restoring a writable ``keys_down`` array.
+
+    imgui-bundle deleted ``io.keys_down`` (see the migration cheat sheet's keyboard
+    section): the low-level query is now ``is_key_pressed(imgui.Key, repeat)``, fed by
+    queued ``io.add_key_event(imgui.Key, bool)`` calls rather than a synchronous
+    512-slot array indexed by raw GLFW keycode. Rather than rewrite every call site
+    that pokes ``io.keys_down[code]`` by raw GLFW keycode -- exactly as the old
+    ``GlfwRenderer.keyboard_callback`` did -- this proxy keeps that array alive as a
+    plain Python list and translates it into real imgui events on :meth:`sync`, called
+    once per simulated frame just before ``new_frame()``. Every other attribute passes
+    straight through to the real IO object.
+
+    :meth:`sync` diffs the desired array against imgui's own current ``is_key_down``
+    rather than blindly resending every call, which matters: two events queued for the
+    same key in one batch -- a release from the previous simulated frame's cleanup
+    immediately followed by a fresh press -- collapse to a single "still down"
+    transition instead of a rising edge, silently swallowing the next press. Sending an
+    event only when the desired state actually differs from where imgui already is
+    reproduces the plain-array semantics callers were written against.
+    """
+
+    def __init__(self, io):
+        object.__setattr__(self, "_io", io)
+        object.__setattr__(self, "keys_down", [False] * 512)
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_io"), name)
+
+    def __setattr__(self, name, value):
+        if name in ("_io", "keys_down"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(object.__getattribute__(self, "_io"), name, value)
+
+    def sync(self):
+        """Forward keys_down's pending transitions to imgui via add_key_event."""
+        io = object.__getattribute__(self, "_io")
+        for code, imgui_key in keys._GLFW_TO_IMGUI_KEY.items():
+            desired = bool(self.keys_down[code])
+            if desired != imgui.is_key_down(imgui_key):
+                io.add_key_event(imgui_key, desired)
+
+
 class _Keyboard:
     """Drives a real headless imgui context one frame at a time.
 
-    Mirrors GlfwRenderer.keyboard_callback: io.keys_down is indexed by raw GLFW
-    keycode, and the modifier booleans are set from the GLFW mods bitfield.
+    ``io.keys_down`` here is a harness-owned array (kept alive by :class:`_KeysDownIO`,
+    since imgui-bundle deleted the real one): ``step()`` still indexes it by raw GLFW
+    keycode, and its ``sync()`` -- called once per frame -- diffs it against imgui's own
+    key state and forwards the transitions via ``io.add_key_event(imgui.Key, bool)``,
+    translating through the same ``_GLFW_TO_IMGUI_KEY`` table :func:`pressed` uses. The
+    modifier booleans are real ``io`` attributes, set from the GLFW mods bitfield.
     """
 
     def __init__(self, io) -> None:
@@ -127,11 +177,15 @@ class _Keyboard:
             self.io.keys_down[i] = False
         for code in down:
             self.io.keys_down[code] = True
+        self.io.sync()
+        imgui.new_frame()
+        # Modifiers must be set *after* new_frame(): imgui-bundle recomputes
+        # io.key_ctrl/key_shift/key_alt/key_super from live per-key state at the top
+        # of new_frame(), silently discarding any assignment made before the call.
         self.io.key_ctrl = ctrl
         self.io.key_shift = shift
         self.io.key_alt = alt
         self.io.key_super = super_
-        imgui.new_frame()
         imgui.begin("probe")
         imgui.end()
         imgui.end_frame()
@@ -157,10 +211,13 @@ def kbd():
     ctx = imgui.create_context()
     io = imgui.get_io()
     io.display_size = 800, 600
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
+    # imgui-bundle's dynamic-texture atlas defers building to the renderer; telling it
+    # the (nonexistent) backend already owns textures skips the eager "font atlas not
+    # built" assertion new_frame() used to need fonts.get_tex_data_as_rgba32() for --
+    # that call no longer exists on the atlas object.
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     io.delta_time = 1.0 / 60.0
-    yield _Keyboard(io)
+    yield _Keyboard(_KeysDownIO(io))
     imgui.destroy_context(ctx)
 
 
@@ -503,9 +560,9 @@ class TestPressedHeadless:
         assert not pressed(parse("F1"))
 
     def test_glfw_keycode_reaches_is_key_pressed(self, kbd):
-        """The module's core claim: is_key_pressed() accepts a raw GLFW keycode.
+        """The module's core claim: pressed() turns a raw GLFW keycode into a real hit.
 
-        P has no imgui.KEY_P constant, so this can only work via the keys_down index.
+        P has no imgui.KEY_P constant, so this can only work via _GLFW_TO_IMGUI_KEY.
         """
         assert not hasattr(imgui, "KEY_P")
         assert kbd.tap("P", down=[KEY["P"]]) == (True,)

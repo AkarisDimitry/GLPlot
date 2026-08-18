@@ -70,7 +70,7 @@ from ..history import Command
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -577,8 +577,8 @@ class StylePanel(Panel):
 
         self._maybe_apply_default()
 
-        tab_bar = imgui.begin_tab_bar("##style_tabs")
-        if not tab_bar.opened:
+        tab_bar_open = imgui.begin_tab_bar("##style_tabs")
+        if not tab_bar_open:
             return
 
         for label, body in (
@@ -590,8 +590,8 @@ class StylePanel(Panel):
             ("Axes", self._draw_axes),
             ("Perf", self._draw_performance),
         ):
-            item = imgui.begin_tab_item(label)
-            if item.selected:
+            selected, _ = imgui.begin_tab_item(label)
+            if selected:
                 body()
                 imgui.end_tab_item()
 
@@ -669,40 +669,40 @@ class StylePanel(Panel):
         look like".
         """
         selected = style.key == self._style_key
-        width = max(180.0, min(float(imgui.get_content_region_available()[0]), 420.0))
+        width = max(180.0, min(float(imgui.get_content_region_avail()[0]), 420.0))
 
         draw_list = imgui.get_window_draw_list()
         # CONTRACT §3: read the cursor BEFORE the item — afterwards it has already advanced.
         ox, oy = imgui.get_cursor_screen_pos()
-        clicked = imgui.invisible_button(f"##style_{style.key}", width, CARD_HEIGHT)
+        clicked = imgui.invisible_button(f"##style_{style.key}", (width, CARD_HEIGHT))
         hovered = imgui.is_item_hovered()
 
         self._draw_style_thumbnail(draw_list, style, ox + PAD, oy + PAD)
 
         text_x = ox + PAD + THUMB_WIDTH + 10.0
         draw_list.add_text(
-            text_x,
-            oy + PAD + 2.0,
-            imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 1.0 if selected or hovered else 0.85),
+            (text_x, oy + PAD + 2.0),
+            imgui.get_color_u32((1.0, 1.0, 1.0, 1.0 if selected or hovered else 0.85)),
             style.name,
         )
         draw_list.add_text(
-            text_x,
-            oy + PAD + 20.0,
-            imgui.get_color_u32_rgba(0.65, 0.66, 0.70, 1.0),
+            (text_x, oy + PAD + 20.0),
+            imgui.get_color_u32((0.65, 0.66, 0.70, 1.0)),
             style.description,
         )
 
         if selected:
-            border = imgui.get_color_u32_rgba(0.55, 0.78, 1.0, 1.0)
+            border = imgui.get_color_u32((0.55, 0.78, 1.0, 1.0))
             thickness = 2.0
         elif hovered:
-            border = imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 0.45)
+            border = imgui.get_color_u32((1.0, 1.0, 1.0, 0.45))
             thickness = 1.0
         else:
-            border = imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 0.12)
+            border = imgui.get_color_u32((1.0, 1.0, 1.0, 0.12))
             thickness = 1.0
-        draw_list.add_rect(ox, oy, ox + width, oy + CARD_HEIGHT, border, 4.0, 0, thickness)
+        draw_list.add_rect(
+            (ox, oy), (ox + width, oy + CARD_HEIGHT), border, rounding=4.0, thickness=thickness
+        )
         return clicked
 
     def _draw_style_thumbnail(self, draw_list: Any, style: Any, x: float, y: float) -> None:
@@ -713,15 +713,15 @@ class StylePanel(Panel):
         if style.gradient is None:
             bg = style.background
             draw_list.add_rect_filled(
-                x, y, x1, y1, imgui.get_color_u32_rgba(bg[0], bg[1], bg[2], 1.0), 2.0
+                (x, y), (x1, y1), imgui.get_color_u32((bg[0], bg[1], bg[2], 1.0)), rounding=2.0
             )
         else:
             top, bottom = style.gradient
-            top_u32 = imgui.get_color_u32_rgba(top[0], top[1], top[2], 1.0)
-            bottom_u32 = imgui.get_color_u32_rgba(bottom[0], bottom[1], bottom[2], 1.0)
-            # add_rect_filled_multicolor takes its four corners in TL, TR, BR, BL order.
-            draw_list.add_rect_filled_multicolor(
-                x, y, x1, y1, top_u32, top_u32, bottom_u32, bottom_u32
+            top_u32 = imgui.get_color_u32((top[0], top[1], top[2], 1.0))
+            bottom_u32 = imgui.get_color_u32((bottom[0], bottom[1], bottom[2], 1.0))
+            # add_rect_filled_multi_color takes its four corners in TL, TR, BR, BL order.
+            draw_list.add_rect_filled_multi_color(
+                (x, y), (x1, y1), top_u32, top_u32, bottom_u32, bottom_u32
             )
 
         if style.show_grid and style.grid_alpha > 0.0:
@@ -729,25 +729,25 @@ class StylePanel(Panel):
             # The thumbnail is 44px tall; the live grid alpha would be invisible at that
             # size, so it is floored just enough to read as "there is a grid".
             alpha = max(float(style.grid_alpha), 0.18)
-            col = imgui.get_color_u32_rgba(grid[0], grid[1], grid[2], alpha)
+            col = imgui.get_color_u32((grid[0], grid[1], grid[2], alpha))
             for frac in (0.33, 0.66):
-                draw_list.add_line(x, y + THUMB_HEIGHT * frac, x1, y + THUMB_HEIGHT * frac, col)
+                draw_list.add_line((x, y + THUMB_HEIGHT * frac), (x1, y + THUMB_HEIGHT * frac), col)
             for frac in (0.25, 0.5, 0.75):
-                draw_list.add_line(x + THUMB_WIDTH * frac, y, x + THUMB_WIDTH * frac, y1, col)
+                draw_list.add_line((x + THUMB_WIDTH * frac, y), (x + THUMB_WIDTH * frac, y1), col)
 
         for index, curve in enumerate(_preview_curves(style)):
             color = style.palette[index % len(style.palette)]
             points = [(x + px * THUMB_WIDTH, y + py * THUMB_HEIGHT) for px, py in curve]
             draw_list.add_polyline(
                 points,
-                imgui.get_color_u32_rgba(color[0], color[1], color[2], color[3]),
-                0,
-                max(1.0, float(style.line_width) * 0.8),
+                imgui.get_color_u32((color[0], color[1], color[2], color[3])),
+                thickness=max(1.0, float(style.line_width) * 0.8),
+                flags=0,
             )
 
         if style.show_frame:
             draw_list.add_rect(
-                x, y, x1, y1, imgui.get_color_u32_rgba(0.5, 0.5, 0.5, 0.5), 2.0, 0, 1.0
+                (x, y), (x1, y1), imgui.get_color_u32((0.5, 0.5, 0.5, 0.5)), rounding=2.0, thickness=1.0
             )
 
     def _draw_hand_drawn_controls(self) -> None:
@@ -825,7 +825,7 @@ class StylePanel(Panel):
         self._draw_layout_section()
 
         if widgets.section("Background"):
-            changed, color = imgui.color_edit3("Clear Color", *visual.background_color[:3])
+            changed, color = imgui.color_edit3("Clear Color", visual.background_color[:3])
             if changed:
                 self._set(visual, "background_color", tuple(color))
             imgui.text_disabled("Density mode overrides this with the colormap's low end.")
@@ -1261,7 +1261,7 @@ class StylePanel(Panel):
         current = layerops3d.kind3d_spec(kind).label if kind is not None else "(unknown)"
 
         if not convertible:
-            imgui.push_style_var(imgui.STYLE_ALPHA, imgui.get_style().alpha * 0.5)
+            imgui.push_style_var(imgui.StyleVar_.alpha, imgui.get_style().alpha * 0.5)
         changed_kind, picked = widgets.enum_combo("Plot type", current, labels)
         if not convertible:
             imgui.pop_style_var(1)
@@ -1555,7 +1555,7 @@ class StylePanel(Panel):
 
         if mode is not None:
             fallback = DEFAULT_LINE_COLOR
-            changed, color = imgui.color_edit4("Color", *_as_rgba(style.color, fallback))
+            changed, color = imgui.color_edit4("Color", _as_rgba(style.color, fallback))
             if changed:
                 self._set_style(layer, color=tuple(color))
             if mode == "3d_upload":
@@ -1573,7 +1573,7 @@ class StylePanel(Panel):
             )
             if fill_on:
                 changed, color = imgui.color_edit4(
-                    "Fill Color", *_as_rgba(style.face_color, DEFAULT_FACE_COLOR)
+                    "Fill Color", _as_rgba(style.face_color, DEFAULT_FACE_COLOR)
                 )
                 if changed:
                     self._set_style(layer, face_color=tuple(color))
@@ -1743,7 +1743,7 @@ class StylePanel(Panel):
         draw_list = imgui.get_window_draw_list()
         ox, oy = imgui.get_cursor_screen_pos()
 
-        clicked = imgui.invisible_button(f"##{key}", SWATCH_WIDTH, SWATCH_HEIGHT)
+        clicked = imgui.invisible_button(f"##{key}", (SWATCH_WIDTH, SWATCH_HEIGHT))
         hovered = imgui.is_item_hovered()
 
         step = SWATCH_WIDTH / float(max(len(colors), 1))
@@ -1751,20 +1751,20 @@ class StylePanel(Panel):
             x0 = ox + i * step
             # +1 on the right edge: adjacent fills must overlap or seams show through.
             draw_list.add_rect_filled(
-                x0,
-                oy,
-                x0 + step + 1.0,
-                oy + SWATCH_HEIGHT,
-                imgui.get_color_u32_rgba(rgb[0], rgb[1], rgb[2], 1.0),
+                (x0, oy),
+                (x0 + step + 1.0, oy + SWATCH_HEIGHT),
+                imgui.get_color_u32((rgb[0], rgb[1], rgb[2], 1.0)),
             )
 
         if selected:
-            border, thickness = imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 1.0), 2.0
+            border, thickness = imgui.get_color_u32((1.0, 1.0, 1.0, 1.0)), 2.0
         elif hovered:
-            border, thickness = imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 0.7), 1.5
+            border, thickness = imgui.get_color_u32((1.0, 1.0, 1.0, 0.7)), 1.5
         else:
-            border, thickness = imgui.get_color_u32_rgba(0.0, 0.0, 0.0, 0.4), 1.0
-        draw_list.add_rect(ox, oy, ox + SWATCH_WIDTH, oy + SWATCH_HEIGHT, border, 2.0, 0, thickness)
+            border, thickness = imgui.get_color_u32((0.0, 0.0, 0.0, 0.4)), 1.0
+        draw_list.add_rect(
+            (ox, oy), (ox + SWATCH_WIDTH, oy + SWATCH_HEIGHT), border, rounding=2.0, thickness=thickness
+        )
 
         imgui.same_line()
         if selected:
@@ -1852,7 +1852,7 @@ class StylePanel(Panel):
             )
             if style.point_outline_enabled:
                 changed, color = imgui.color_edit4(
-                    "Outline Color", *_as_rgba(style.point_outline_color, DEFAULT_OUTLINE_COLOR)
+                    "Outline Color", _as_rgba(style.point_outline_color, DEFAULT_OUTLINE_COLOR)
                 )
                 if changed:
                     self._set_style(layer, point_outline_color=tuple(color))
@@ -1910,7 +1910,7 @@ class StylePanel(Panel):
 
         changed, color = imgui.color_edit4(
             "Silhouette Color",
-            *_as_rgba(getattr(style, "outline_color", None), DEFAULT_OUTLINE_COLOR),
+            _as_rgba(getattr(style, "outline_color", None), DEFAULT_OUTLINE_COLOR),
         )
         if changed:
             self._set_style(layer, outline_color=tuple(color))
@@ -2061,7 +2061,7 @@ class StylePanel(Panel):
             return
 
         tx, ty = getattr(layer, "translation", (0.0, 0.0))
-        changed, values = imgui.drag_float2("Offset", float(tx), float(ty), 0.05)
+        changed, values = imgui.drag_float2("Offset", (float(tx), float(ty)), 0.05)
         if changed:
             self._set_style(layer, translation=(values[0], values[1]))
         imgui.same_line()
@@ -2246,7 +2246,7 @@ class StylePanel(Panel):
         draw_list = imgui.get_window_draw_list()
         ox, oy = imgui.get_cursor_screen_pos()
 
-        clicked = imgui.invisible_button(f"##cmap_{index}", SWATCH_WIDTH, SWATCH_HEIGHT)
+        clicked = imgui.invisible_button(f"##cmap_{index}", (SWATCH_WIDTH, SWATCH_HEIGHT))
         hovered = imgui.is_item_hovered()
 
         colors = colormap_strip_colors(index, invert=invert, light_to_color=light_to_color)
@@ -2255,19 +2255,21 @@ class StylePanel(Panel):
             x0 = ox + i * step
             # +1 on the right edge: adjacent fills must overlap or seams show through.
             draw_list.add_rect_filled(
-                x0, oy, x0 + step + 1.0, oy + SWATCH_HEIGHT, imgui.get_color_u32_rgba(r, g, b, 1.0)
+                (x0, oy), (x0 + step + 1.0, oy + SWATCH_HEIGHT), imgui.get_color_u32((r, g, b, 1.0))
             )
 
         if selected:
-            border = imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 1.0)
+            border = imgui.get_color_u32((1.0, 1.0, 1.0, 1.0))
             thickness = 2.0
         elif hovered:
-            border = imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 0.7)
+            border = imgui.get_color_u32((1.0, 1.0, 1.0, 0.7))
             thickness = 1.5
         else:
-            border = imgui.get_color_u32_rgba(0.0, 0.0, 0.0, 0.4)
+            border = imgui.get_color_u32((0.0, 0.0, 0.0, 0.4))
             thickness = 1.0
-        draw_list.add_rect(ox, oy, ox + SWATCH_WIDTH, oy + SWATCH_HEIGHT, border, 2.0, 0, thickness)
+        draw_list.add_rect(
+            (ox, oy), (ox + SWATCH_WIDTH, oy + SWATCH_HEIGHT), border, rounding=2.0, thickness=thickness
+        )
 
         imgui.same_line()
         if selected:
@@ -2367,11 +2369,11 @@ class StylePanel(Panel):
             imgui.same_line()
             widgets.help_marker("Replaces the flat clear color with a vertical ramp.")
 
-            changed, color = imgui.color_edit3("Top", *grad.top_color[:3])
+            changed, color = imgui.color_edit3("Top", grad.top_color[:3])
             if changed:
                 self._set(grad, "top_color", tuple(color))
 
-            changed, color = imgui.color_edit3("Bottom", *grad.bottom_color[:3])
+            changed, color = imgui.color_edit3("Bottom", grad.bottom_color[:3])
             if changed:
                 self._set(grad, "bottom_color", tuple(color))
 
@@ -2455,7 +2457,7 @@ class StylePanel(Panel):
             )
 
             if not auto:
-                changed, color = imgui.color_edit3("Grid Color", *grid_color[:3])
+                changed, color = imgui.color_edit3("Grid Color", grid_color[:3])
                 if changed:
                     self._set(options, "axis_grid_color", tuple(color))
 

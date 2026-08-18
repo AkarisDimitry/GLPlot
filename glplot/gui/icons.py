@@ -28,7 +28,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from .theme import COLORS
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - imgui is a hard dependency in CI
@@ -54,44 +54,43 @@ def _stroke(r: float) -> float:
 
 def _line(dl, cx: float, cy: float, r: float, col: int, t: float, x0, y0, x1, y1) -> None:
     """Line in normalised icon space."""
-    dl.add_line(cx + x0 * r, cy + y0 * r, cx + x1 * r, cy + y1 * r, col, t)
+    dl.add_line((cx + x0 * r, cy + y0 * r), (cx + x1 * r, cy + y1 * r), col, t)
 
 
 def _poly(dl, cx, cy, r, col, t, pts: Sequence[Point], closed: bool = False) -> None:
     """Polyline in normalised icon space."""
-    flags = imgui.DRAW_CLOSED if closed else 0
+    flags = imgui.ImDrawFlags_.closed if closed else 0
     dl.add_polyline([(cx + x * r, cy + y * r) for x, y in pts], col, flags=flags, thickness=t)
 
 
 def _rect(dl, cx, cy, r, col, t, x0, y0, x1, y1, rounding: float = 0.0) -> None:
     """Outlined rect in normalised icon space (``rounding`` is also normalised)."""
-    dl.add_rect(cx + x0 * r, cy + y0 * r, cx + x1 * r, cy + y1 * r, col, rounding * r, 0, t)
+    dl.add_rect(
+        (cx + x0 * r, cy + y0 * r), (cx + x1 * r, cy + y1 * r), col, rounding=rounding * r, thickness=t
+    )
 
 
 def _rect_filled(dl, cx, cy, r, col, x0, y0, x1, y1, rounding: float = 0.0) -> None:
     """Filled rect in normalised icon space."""
-    dl.add_rect_filled(cx + x0 * r, cy + y0 * r, cx + x1 * r, cy + y1 * r, col, rounding * r, 0)
+    dl.add_rect_filled((cx + x0 * r, cy + y0 * r), (cx + x1 * r, cy + y1 * r), col, rounding * r, 0)
 
 
 def _circle(dl, cx, cy, r, col, t, x, y, rad, segments: int = 20) -> None:
     """Outlined circle in normalised icon space."""
-    dl.add_circle(cx + x * r, cy + y * r, rad * r, col, segments, t)
+    dl.add_circle((cx + x * r, cy + y * r), rad * r, col, segments, t)
 
 
 def _dot(dl, cx, cy, r, col, x, y, rad) -> None:
     """Filled circle in normalised icon space."""
-    dl.add_circle_filled(cx + x * r, cy + y * r, rad * r, col, 14)
+    dl.add_circle_filled((cx + x * r, cy + y * r), rad * r, col, 14)
 
 
 def _tri_filled(dl, cx, cy, r, col, p0: Point, p1: Point, p2: Point) -> None:
     """Filled triangle in normalised icon space."""
     dl.add_triangle_filled(
-        cx + p0[0] * r,
-        cy + p0[1] * r,
-        cx + p1[0] * r,
-        cy + p1[1] * r,
-        cx + p2[0] * r,
-        cy + p2[1] * r,
+        (cx + p0[0] * r, cy + p0[1] * r),
+        (cx + p1[0] * r, cy + p1[1] * r),
+        (cx + p2[0] * r, cy + p2[1] * r),
         col,
     )
 
@@ -99,14 +98,10 @@ def _tri_filled(dl, cx, cy, r, col, p0: Point, p1: Point, p2: Point) -> None:
 def _bezier(dl, cx, cy, r, col, t, p0: Point, p1: Point, p2: Point, p3: Point) -> None:
     """Cubic bezier in normalised icon space. ``thickness`` is required in pyimgui 2.0."""
     dl.add_bezier_cubic(
-        cx + p0[0] * r,
-        cy + p0[1] * r,
-        cx + p1[0] * r,
-        cy + p1[1] * r,
-        cx + p2[0] * r,
-        cy + p2[1] * r,
-        cx + p3[0] * r,
-        cy + p3[1] * r,
+        (cx + p0[0] * r, cy + p0[1] * r),
+        (cx + p1[0] * r, cy + p1[1] * r),
+        (cx + p2[0] * r, cy + p2[1] * r),
+        (cx + p3[0] * r, cy + p3[1] * r),
         col,
         t,
     )
@@ -114,8 +109,8 @@ def _bezier(dl, cx, cy, r, col, t, p0: Point, p1: Point, p2: Point, p3: Point) -
 
 def _arc(dl, cx, cy, r, col, t, x, y, rad, a_min, a_max, segments: int = 24) -> None:
     """Stroked arc in normalised icon space. Angles are radians, clockwise (y is down)."""
-    dl.path_arc_to(cx + x * r, cy + y * r, rad * r, a_min, a_max, segments)
-    dl.path_stroke(col, 0, t)
+    dl.path_arc_to((cx + x * r, cy + y * r), rad * r, a_min, a_max, segments)
+    dl.path_stroke(col, thickness=t)
 
 
 # --- shapes: edit ------------------------------------------------------------
@@ -345,8 +340,8 @@ def _filter(dl, cx, cy, r, col, t) -> None:
 
 
 def _eye(dl, cx, cy, r, col, t) -> None:
-    dl.add_bezier_quadratic(cx - 0.95 * r, cy, cx, cy - 1.3 * r, cx + 0.95 * r, cy, col, t)
-    dl.add_bezier_quadratic(cx - 0.95 * r, cy, cx, cy + 1.3 * r, cx + 0.95 * r, cy, col, t)
+    dl.add_bezier_quadratic((cx - 0.95 * r, cy), (cx, cy - 1.3 * r), (cx + 0.95 * r, cy), col, t)
+    dl.add_bezier_quadratic((cx - 0.95 * r, cy), (cx, cy + 1.3 * r), (cx + 0.95 * r, cy), col, t)
     _circle(dl, cx, cy, r, col, t, 0.0, 0.0, 0.32, 14)
     _dot(dl, cx, cy, r, col, 0.0, 0.0, 0.12)
 
@@ -979,7 +974,7 @@ def _icon_color(name: str, alpha: Optional[float] = None) -> int:
     """Pack a theme token for draw_list use, tolerating a theme that never got applied."""
     c = COLORS.get(name, (0.85, 0.86, 0.88, 1.0))
     a = c[3] if alpha is None else alpha
-    return imgui.get_color_u32_rgba(c[0], c[1], c[2], a)
+    return imgui.get_color_u32((c[0], c[1], c[2], a))
 
 
 def icon_button(
@@ -1008,7 +1003,7 @@ def icon_button(
     # Read it before invisible_button advances it, or every icon lands one slot late.
     ox, oy = imgui.get_cursor_screen_pos()
 
-    clicked = imgui.invisible_button(id_str, size, size)
+    clicked = imgui.invisible_button(id_str, (size, size))
     hovered = imgui.is_item_hovered()
     held = imgui.is_item_active()
 
@@ -1041,7 +1036,7 @@ def icon_button(
 
 def _rect_bg(dl, ox: float, oy: float, size: float, col: int, rounding: float) -> None:
     """Fill the button's hit rect. Kept separate so the state ladder above stays readable."""
-    dl.add_rect_filled(ox, oy, ox + size, oy + size, col, rounding, 0)
+    dl.add_rect_filled((ox, oy), (ox + size, oy + size), col, rounding, 0)
 
 
 def icon_inline(shape: str, *, size: float = 16.0, color: Optional[str] = None) -> None:
@@ -1056,4 +1051,4 @@ def icon_inline(shape: str, *, size: float = 16.0, color: Optional[str] = None) 
     ox, oy = imgui.get_cursor_screen_pos()
     col = _icon_color(color) if color else _icon_color("text", 0.82)
     draw_icon(dl, shape, ox + size * 0.5, oy + size * 0.5, size * 0.34, col)
-    imgui.dummy(size, size)
+    imgui.dummy((size, size))

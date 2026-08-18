@@ -18,18 +18,69 @@ from glplot.gui.keys import Chord
 from glplot.gui.keys import parse as parse_chord
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - imgui is a hard dependency in CI
     IMGUI_AVAILABLE = False
     imgui = None
 
+if IMGUI_AVAILABLE:
+    # The same GLFW-keycode -> imgui.Key table glplot.gui.keys.pressed() uses, imported
+    # rather than re-derived so the harness cannot silently drift from the real thing.
+    from glplot.gui.keys import _GLFW_TO_IMGUI_KEY
+else:  # pragma: no cover - imgui is a hard dependency in CI
+    _GLFW_TO_IMGUI_KEY = {}
+
 # GLFW keycodes, hardcoded exactly as glplot.gui.keys does (frozen GLFW ABI).
 KEY_D = 68
 KEY_Z = 90
 KEY_F1 = 290
 KEY_ESCAPE = 256
+
+
+class _KeysDownIO:
+    """Wraps a real imgui IO object, restoring a writable ``keys_down`` array.
+
+    imgui-bundle deleted ``io.keys_down`` (see the migration cheat sheet's keyboard
+    section): the low-level query is now ``is_key_pressed(imgui.Key, repeat)``, fed by
+    queued ``io.add_key_event(imgui.Key, bool)`` calls rather than a synchronous
+    512-slot array indexed by raw GLFW keycode. Rather than rewrite every test body
+    that pokes ``io.keys_down[code]`` by raw GLFW keycode -- exactly as the old
+    ``GlfwRenderer.keyboard_callback`` did -- this proxy keeps that array alive as a
+    plain Python list and translates it into real imgui events on :meth:`sync`, called
+    once per simulated frame just before ``new_frame()``. Every other attribute passes
+    straight through to the real IO object.
+
+    :meth:`sync` diffs the desired array against imgui's own current ``is_key_down``
+    rather than blindly resending every call, which matters: two events queued for the
+    same key in one batch -- a release from the previous simulated frame's cleanup
+    immediately followed by a fresh press -- collapse to a single "still down"
+    transition instead of a rising edge, silently swallowing the next press. Sending an
+    event only when the desired state actually differs from where imgui already is
+    reproduces the plain-array semantics the test bodies were written against.
+    """
+
+    def __init__(self, io):
+        object.__setattr__(self, "_io", io)
+        object.__setattr__(self, "keys_down", [False] * 512)
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_io"), name)
+
+    def __setattr__(self, name, value):
+        if name in ("_io", "keys_down"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(object.__getattribute__(self, "_io"), name, value)
+
+    def sync(self):
+        """Forward keys_down's pending transitions to imgui via add_key_event."""
+        io = object.__getattribute__(self, "_io")
+        for code, imgui_key in _GLFW_TO_IMGUI_KEY.items():
+            desired = bool(self.keys_down[code])
+            if desired != imgui.is_key_down(imgui_key):
+                io.add_key_event(imgui_key, desired)
 
 
 class _Recorder:
@@ -394,10 +445,13 @@ class TestDispatch:
         ctx = imgui.create_context()
         gui_io = imgui.get_io()
         gui_io.display_size = 800, 600
-        gui_io.fonts.get_tex_data_as_rgba32()
-        gui_io.fonts.texture_id = 1
+        # imgui-bundle's dynamic-texture atlas defers building to the renderer; telling
+        # it the (nonexistent) backend already owns textures skips the eager "font atlas
+        # not built" assertion new_frame() used to need fonts.get_tex_data_as_rgba32()
+        # for -- that call no longer exists on the atlas object.
+        gui_io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
         gui_io.delta_time = 1.0 / 60.0
-        yield gui_io
+        yield _KeysDownIO(gui_io)
         imgui.destroy_context(ctx)
 
     def _frame(self, io, registry=None, keys=(), ctrl=False, shift=False, alt=False, field=False):
@@ -408,10 +462,14 @@ class TestDispatch:
         """
         for key in keys:
             io.keys_down[key] = True
+        io.sync()
+        imgui.new_frame()
+        # Modifiers must be set *after* new_frame(): imgui-bundle recomputes
+        # io.key_ctrl/key_shift/key_alt from live per-key state at the top of
+        # new_frame(), silently discarding any assignment made before the call.
         io.key_ctrl = ctrl
         io.key_shift = shift
         io.key_alt = alt
-        imgui.new_frame()
         imgui.begin("harness")
         fired = registry.dispatch() if registry is not None else None
         if field:

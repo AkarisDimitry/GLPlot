@@ -1030,7 +1030,7 @@ def draw_labels(engine: object) -> int:
     not be able to take the frame down.
     """
     try:
-        import imgui
+        from imgui_bundle import imgui
     except (ImportError, Exception):  # pragma: no cover - GL-less import guard
         return 0
 
@@ -1066,11 +1066,11 @@ def draw_labels(engine: object) -> int:
         background = tuple(getattr(visual, "background_color", (0.0, 0.0, 0.0)))[:3]
     luminance = 0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
     if luminance > 0.5:
-        tick_color = imgui.get_color_u32_rgba(0.15, 0.15, 0.15, 1.0)
-        title_color = imgui.get_color_u32_rgba(0.05, 0.05, 0.05, 1.0)
+        tick_color = imgui.get_color_u32((0.15, 0.15, 0.15, 1.0))
+        title_color = imgui.get_color_u32((0.05, 0.05, 0.05, 1.0))
     else:
-        tick_color = imgui.get_color_u32_rgba(0.82, 0.86, 0.92, 1.0)
-        title_color = imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 1.0)
+        tick_color = imgui.get_color_u32((0.82, 0.86, 0.92, 1.0))
+        title_color = imgui.get_color_u32((1.0, 1.0, 1.0, 1.0))
 
     # pyimgui 2.0's ``add_text`` takes ``(x, y, col, text)`` and nothing else — the
     # font/size overload is unwrapped and there is no ``imgui.get_font()`` to feed it.
@@ -1168,5 +1168,5 @@ def draw_labels(engine: object) -> int:
         if is_title:
             draw_text_scaled(imgui, draw_list, text, title_color, (px, py), TITLE_SCALE)
         else:
-            draw_list.add_text(px, py, tick_color, text)
+            draw_list.add_text((px, py), tick_color, text)
     return len(to_draw)

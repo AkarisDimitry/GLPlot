@@ -85,7 +85,7 @@ from ..theme import COLORS
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -1098,20 +1098,24 @@ def queue_playback(panel: Panel) -> None:
 def _col(name: str, alpha: Optional[float] = None) -> int:
     """Pack a theme token for draw-list use, tolerating a theme that never applied."""
     rgba = COLORS.get(name, (0.85, 0.86, 0.88, 1.0))
-    return imgui.get_color_u32_rgba(rgba[0], rgba[1], rgba[2], rgba[3] if alpha is None else alpha)
+    return imgui.get_color_u32((rgba[0], rgba[1], rgba[2], rgba[3] if alpha is None else alpha))
 
 
 def _diamond(draw_list: Any, cx: float, cy: float, half: float, fill: int, edge: int) -> None:
     """One keyframe glyph: a filled diamond with a contrasting outline."""
-    draw_list.add_quad_filled(cx, cy - half, cx + half, cy, cx, cy + half, cx - half, cy, fill)
-    draw_list.add_quad(cx, cy - half, cx + half, cy, cx, cy + half, cx - half, cy, edge, 1.2)
+    draw_list.add_quad_filled(
+        (cx, cy - half), (cx + half, cy), (cx, cy + half), (cx - half, cy), fill
+    )
+    draw_list.add_quad(
+        (cx, cy - half), (cx + half, cy), (cx, cy + half), (cx - half, cy), edge, 1.2
+    )
 
 
 def _playhead(draw_list: Any, x: float, y0: float, y1: float, col: int, head: bool) -> None:
     """The vertical playhead, optionally with the triangular grab handle on top."""
-    draw_list.add_line(x, y0, x, y1, col, 1.6)
+    draw_list.add_line((x, y0), (x, y1), col, 1.6)
     if head:
-        draw_list.add_triangle_filled(x - 6.0, y0, x + 6.0, y0, x, y0 + 9.0, col)
+        draw_list.add_triangle_filled((x - 6.0, y0), (x + 6.0, y0), (x, y0 + 9.0), col)
 
 
 class TimelinePanel(Panel):
@@ -1522,7 +1526,7 @@ class TimelinePanel(Panel):
         rather than an icon in the track header.
         """
         count = self.capture_count()
-        if imgui.button("Capture keyframe", 150.0, 0.0):
+        if imgui.button("Capture keyframe", (150.0, 0.0)):
             self.capture()
         if imgui.is_item_hovered():
             imgui.set_tooltip(_HELP_CAPTURE.format(count=count))
@@ -1623,7 +1627,7 @@ class TimelinePanel(Panel):
         Both the ruler and every track row call this at the same indent, which is what
         makes a keyframe at t and the playhead at t land on the same pixel.
         """
-        avail = float(imgui.get_content_region_available().x)
+        avail = float(imgui.get_content_region_avail().x)
         width = max(80.0, avail - _LABEL_W - _SCROLLBAR_W)
         imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + _LABEL_W)
         self._axis_w = width
@@ -1644,14 +1648,14 @@ class TimelinePanel(Panel):
 
         x0, width = self._time_axis()
         y0 = float(imgui.get_cursor_screen_pos().y)
-        imgui.invisible_button("##tl_scrub", width, _RULER_H)
+        imgui.invisible_button("##tl_scrub", (width, _RULER_H))
         hovered = imgui.is_item_hovered()
         active = imgui.is_item_active()
         y1 = y0 + _RULER_H
 
         draw_list = imgui.get_window_draw_list()
-        draw_list.add_rect_filled(x0, y0, x0 + width, y1, _col("frame_bg"), 3.0)
-        draw_list.add_rect(x0, y0, x0 + width, y1, _col("border"), 3.0, 0, 1.0)
+        draw_list.add_rect_filled((x0, y0), (x0 + width, y1), _col("frame_bg"), 3.0)
+        draw_list.add_rect((x0, y0), (x0 + width, y1), _col("border"), rounding=3.0, thickness=1.0)
 
         step = _tick_step(timeline.duration, width)
         tick_col = _col("axis", 0.65)
@@ -1662,12 +1666,12 @@ class TimelinePanel(Panel):
             if seconds > timeline.duration:
                 break
             x = self._x_of(timeline, x0, width, seconds)
-            draw_list.add_line(x, y1 - 8.0, x, y1, tick_col, 1.0)
-            draw_list.add_text(x + 3.0, y0 + 3.0, label_col, _fmt_time(seconds, step))
+            draw_list.add_line((x, y1 - 8.0), (x, y1), tick_col, 1.0)
+            draw_list.add_text((x + 3.0, y0 + 3.0), label_col, _fmt_time(seconds, step))
 
         # Elapsed fill: the cheapest possible "how far through am I" cue.
         head_x = self._x_of(timeline, x0, width, timeline.time)
-        draw_list.add_rect_filled(x0, y1 - 5.0, head_x, y1 - 1.0, _col("accent", 0.55), 2.0)
+        draw_list.add_rect_filled((x0, y1 - 5.0), (head_x, y1 - 1.0), _col("accent", 0.55), 2.0)
         _playhead(draw_list, head_x, y0, y1, _col("accent"), True)
 
         if hovered:
@@ -1710,11 +1714,12 @@ class TimelinePanel(Panel):
 
         # Zero window padding so the child's content starts at the same x as the ruler's;
         # any padding here would offset every diamond from the playhead above it.
-        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (0.0, 0.0))
+        imgui.push_style_var(imgui.StyleVar_.window_padding, (0.0, 0.0))
         height = max(_TRACKS_H, min(len(timeline.tracks) * _ROW_H + 6.0, 320.0))
         # end_child is unconditional per CONTRACT §2.6.
-        child = imgui.begin_child("##tl_tracks", 0.0, height, border=False)
-        if child.visible:
+        # begin_child() returns a plain bool in imgui-bundle (no .visible attribute).
+        child = imgui.begin_child("##tl_tracks", (0.0, height))
+        if child:
             for index, track in enumerate(list(timeline.tracks)):
                 self._draw_track_row(timeline, track, index)
         imgui.end_child()
@@ -1754,7 +1759,7 @@ class TimelinePanel(Panel):
 
             imgui.align_text_to_frame_padding()
             clicked, _ = imgui.selectable(
-                f"{track_label(track)}##name", selected, 0, _LABEL_W - 96.0, 0.0
+                f"{track_label(track)}##name", selected, 0, (_LABEL_W - 96.0, 0.0)
             )
             if imgui.is_item_hovered():
                 imgui.set_tooltip(
@@ -1785,7 +1790,7 @@ class TimelinePanel(Panel):
         width = max(40.0, float(self._axis_w))
         pos = imgui.get_cursor_screen_pos()
         x0, y0 = float(pos.x), float(pos.y)
-        imgui.invisible_button("##keys", width, _ROW_H)
+        imgui.invisible_button("##keys", (width, _ROW_H))
         activated = imgui.is_item_activated()
         active = imgui.is_item_active()
         deactivated = imgui.is_item_deactivated()
@@ -1795,8 +1800,8 @@ class TimelinePanel(Panel):
         draw_list = imgui.get_window_draw_list()
         selected_track = track is self._sel_track
         background = "raised_bg" if selected_track else ("frame_bg" if index % 2 == 0 else "bg")
-        draw_list.add_rect_filled(x0, y0, x0 + width, y1 - 1.0, _col(background), 2.0)
-        draw_list.add_line(x0, cy, x0 + width, cy, _col("border"), 1.0)
+        draw_list.add_rect_filled((x0, y0), (x0 + width, y1 - 1.0), _col(background), 2.0)
+        draw_list.add_line((x0, cy), (x0 + width, cy), _col("border"), 1.0)
 
         muted = not track.enabled
         fill = _col("muted" if muted else "accent", 0.55 if muted else 1.0)
@@ -1857,7 +1862,7 @@ class TimelinePanel(Panel):
         imgui.text_disabled("Nothing is animated yet.")
         imgui.same_line()
         count = self.capture_count()
-        if imgui.button("Capture the current view", 200.0, 0.0):
+        if imgui.button("Capture the current view", (200.0, 0.0)):
             self.capture()
         if imgui.is_item_hovered():
             imgui.set_tooltip(_HELP_CAPTURE.format(count=count))
@@ -1892,7 +1897,7 @@ class TimelinePanel(Panel):
 
         imgui.same_line()
         if preset_available(self.plot, current):
-            if imgui.button("Build", 70.0, 0.0):
+            if imgui.button("Build", (70.0, 0.0)):
                 self.build_preset(current.key)
             if imgui.is_item_hovered():
                 imgui.set_tooltip(f"{current.label}\n\n{current.description}")

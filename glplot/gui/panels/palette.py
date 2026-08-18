@@ -58,7 +58,7 @@ from ..keys import Chord
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - imgui is a hard dependency in CI
@@ -221,21 +221,17 @@ def _panel_of(ws: Any, key: str) -> Optional[Any]:
 def _open_and_focus(ws: Any, key: str) -> None:
     """Open panel ``key`` and raise it to the front on the next frame.
 
-    Focus goes through ``set_window_focus_labeled`` on the panel's public ``title`` rather
-    than ``Workspace._focus``: the palette must not reach into a private method of the
-    object that owns it, and the title is the panel contract's documented window key.
+    Goes through the public ``Workspace.open_panel``, not a direct ``imgui.set_window_focus``
+    by name: that call segfaults in imgui-bundle when the named window is not the one
+    currently being drawn (verified — not a Python-catchable exception), so focusing by
+    name from outside the panel's own ``begin()`` is never safe.
     """
     panel = _panel_of(ws, key)
     if panel is None:
         return
-    open_map = getattr(ws, "open", None)
-    if isinstance(open_map, dict):
-        open_map[key] = True
-    if IMGUI_AVAILABLE:
-        try:
-            imgui.set_window_focus_labeled(panel.title)
-        except Exception:  # pragma: no cover - defensive: never break a draw callback
-            logger.exception("Could not focus panel %r", key)
+    open_panel = getattr(ws, "open_panel", None)
+    if callable(open_panel):
+        open_panel(key)
 
 
 def _best(query: str, *texts: str) -> Optional[Tuple[int, List[int]]]:
@@ -996,19 +992,19 @@ class CommandPalette(Panel):
         self._draw_backdrop(vw, vh)
 
         width = min(PALETTE_WIDTH, vw - 40.0)
-        imgui.set_next_window_position(vw * 0.5, vh * 0.14, imgui.ALWAYS, 0.5, 0.0)
-        imgui.set_next_window_size(width, 0.0, imgui.ALWAYS)
+        imgui.set_next_window_pos((vw * 0.5, vh * 0.14), imgui.Cond_.always, (0.5, 0.0))
+        imgui.set_next_window_size((width, 0.0), imgui.Cond_.always)
         imgui.set_next_window_focus()
         flags = (
-            imgui.WINDOW_NO_TITLE_BAR
-            | imgui.WINDOW_NO_RESIZE
-            | imgui.WINDOW_NO_MOVE
-            | imgui.WINDOW_NO_COLLAPSE
-            | imgui.WINDOW_NO_SAVED_SETTINGS
-            | imgui.WINDOW_ALWAYS_AUTO_RESIZE
-            | imgui.WINDOW_NO_SCROLLBAR
+            imgui.WindowFlags_.no_title_bar
+            | imgui.WindowFlags_.no_resize
+            | imgui.WindowFlags_.no_move
+            | imgui.WindowFlags_.no_collapse
+            | imgui.WindowFlags_.no_saved_settings
+            | imgui.WindowFlags_.always_auto_resize
+            | imgui.WindowFlags_.no_scrollbar
         )
-        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (10.0, 10.0))
+        imgui.push_style_var(imgui.StyleVar_.window_padding, (10.0, 10.0))
         imgui.begin("##glplot_palette", flags=flags)
         try:
             submitted = self._draw_input()
@@ -1034,7 +1030,7 @@ class CommandPalette(Panel):
         recedes. The foreground list would paint over the palette itself.
         """
         dl = imgui.get_background_draw_list()
-        dl.add_rect_filled(0.0, 0.0, vw, vh, imgui.get_color_u32_rgba(0.0, 0.0, 0.0, 0.45))
+        dl.add_rect_filled((0.0, 0.0), (vw, vh), imgui.get_color_u32((0.0, 0.0, 0.0, 0.45)))
 
     def _draw_input(self) -> bool:
         """The search field. Returns True when Enter was pressed this frame."""
@@ -1052,7 +1048,7 @@ class CommandPalette(Panel):
         submitted, value = imgui.input_text(
             "##palette_query",
             self.query,
-            flags=imgui.INPUT_TEXT_ENTER_RETURNS_TRUE,
+            flags=imgui.InputTextFlags_.enter_returns_true,
         )
         imgui.pop_item_width()
 
@@ -1082,12 +1078,12 @@ class CommandPalette(Panel):
         total = sum(row.height for row in self._rows)
         list_h = min(total, ROW_HEIGHT * VISIBLE_ROWS)
 
-        imgui.push_style_var(imgui.STYLE_ITEM_SPACING, (0.0, 0.0))
-        visible = imgui.begin_child("##palette_results", 0.0, list_h, border=False)
+        imgui.push_style_var(imgui.StyleVar_.item_spacing, (0.0, 0.0))
+        visible = imgui.begin_child("##palette_results", (0.0, list_h))
         try:
             if visible:
                 self._apply_scroll(hit_rows)
-                width = imgui.get_content_region_available()[0]
+                width = imgui.get_content_region_avail()[0]
                 for index, row in enumerate(self._rows):
                     if row.hit is None:
                         self._draw_header(row, width)
@@ -1131,10 +1127,9 @@ class CommandPalette(Panel):
         """A category header inside the list."""
         dl = imgui.get_window_draw_list()
         ox, oy = imgui.get_cursor_screen_pos()
-        imgui.dummy(width, row.height)
+        imgui.dummy((width, row.height))
         dl.add_text(
-            ox + _PAD_X,
-            oy + (row.height - imgui.get_text_line_height()) * 0.5,
+            (ox + _PAD_X, oy + (row.height - imgui.get_text_line_height()) * 0.5),
             theme.color_u32("text_dim"),
             row.header.upper(),
         )
@@ -1156,7 +1151,7 @@ class CommandPalette(Panel):
 
         # get_cursor_screen_pos before the button: after it the cursor has advanced and
         # everything would draw one row low (CONTRACT section 3).
-        clicked = imgui.invisible_button(f"##palette_row_{index}", width, row.height)
+        clicked = imgui.invisible_button(f"##palette_row_{index}", (width, row.height))
         hovered = imgui.is_item_hovered()
         is_selected = bool(hit_rows) and hit_rows[self.selected] == index
 
@@ -1164,10 +1159,10 @@ class CommandPalette(Panel):
         x1, y1 = ox + width, oy + row.height
 
         if is_selected:
-            dl.add_rect_filled(x0, y0, x1, y1, theme.color_u32("accent", 0.22), 4.0)
-            dl.add_rect_filled(x0, y0, x0 + 2.5, y1, theme.color_u32("accent"), 0.0)
+            dl.add_rect_filled((x0, y0), (x1, y1), theme.color_u32("accent", 0.22), 4.0)
+            dl.add_rect_filled((x0, y0), (x0 + 2.5, y1), theme.color_u32("accent"), 0.0)
         elif hovered and hit.enabled:
-            dl.add_rect_filled(x0, y0, x1, y1, theme.color_u32("text", 0.06), 4.0)
+            dl.add_rect_filled((x0, y0), (x1, y1), theme.color_u32("text", 0.06), 4.0)
 
         dim = 0.45 if not hit.enabled else 1.0
         line_h = imgui.get_text_line_height()
@@ -1188,7 +1183,7 @@ class CommandPalette(Panel):
         right = x1 - _PAD_X
         if hit.chord_text:
             w = imgui.calc_text_size(hit.chord_text)[0]
-            dl.add_text(right - w, title_y, theme.color_u32("text_dim", dim), hit.chord_text)
+            dl.add_text((right - w, title_y), theme.color_u32("text_dim", dim), hit.chord_text)
             right -= w + 10.0
         if hit.category:
             right = self._draw_chip(dl, hit.category, right, title_y, line_h, dim)
@@ -1198,10 +1193,10 @@ class CommandPalette(Panel):
 
         # Clip rather than ellipsise: a long title is truncated at a pixel boundary, but
         # its highlighted prefix -- the part that explains the match -- always survives.
-        dl.push_clip_rect(text_x, y0, text_right, y1, True)
+        dl.push_clip_rect((text_x, y0), (text_right, y1), True)
         self._draw_highlighted(dl, hit.title, hit.matches, text_x, title_y, dim)
         if hit.subtitle:
-            dl.add_text(text_x, sub_y, theme.color_u32("muted", dim), hit.subtitle)
+            dl.add_text((text_x, sub_y), theme.color_u32("muted", dim), hit.subtitle)
         dl.pop_clip_rect()
 
         if clicked:
@@ -1214,9 +1209,9 @@ class CommandPalette(Panel):
         w = imgui.calc_text_size(text)[0]
         x0 = right - w - _CHIP_PAD * 2.0
         dl.add_rect_filled(
-            x0, y - 1.0, right, y + line_h + 1.0, theme.color_u32("raised_bg", dim), 3.0
+            (x0, y - 1.0), (right, y + line_h + 1.0), theme.color_u32("raised_bg", dim), 3.0
         )
-        dl.add_text(x0 + _CHIP_PAD, y, theme.color_u32("text_dim", dim), text)
+        dl.add_text((x0 + _CHIP_PAD, y), theme.color_u32("text_dim", dim), text)
         return x0 - 8.0
 
     def _draw_highlighted(
@@ -1236,7 +1231,7 @@ class CommandPalette(Panel):
         """
         base = theme.color_u32("text", dim)
         if not matches:
-            dl.add_text(x, y, base, text)
+            dl.add_text((x, y), base, text)
             return
 
         accent = theme.color_u32("accent_hover", dim)
@@ -1247,7 +1242,7 @@ class CommandPalette(Panel):
             at_end = i == len(text)
             if at_end or ((i in marked) != (start in marked)):
                 segment = text[start:i]
-                dl.add_text(cursor, y, accent if start in marked else base, segment)
+                dl.add_text((cursor, y), accent if start in marked else base, segment)
                 cursor += imgui.calc_text_size(segment)[0]
                 start = i
 
@@ -1257,7 +1252,7 @@ class CommandPalette(Panel):
         imgui.text_disabled(f"{count} result{'' if count == 1 else 's'}")
         legend = "up/down navigate    enter run    esc close"
         width = imgui.calc_text_size(legend)[0]
-        avail = imgui.get_content_region_available()[0]
+        avail = imgui.get_content_region_avail()[0]
         if avail > width + 8.0:
             imgui.same_line()
             imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + avail - width)

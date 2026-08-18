@@ -70,12 +70,14 @@ def harness():
     The teardown is not optional: a leaked current context is seen by every later file's
     own ``create_context`` fixture, and the failures land somewhere else entirely.
     """
-    imgui = pytest.importorskip("imgui")
+    imgui = pytest.importorskip("imgui_bundle").imgui
     ctx = imgui.create_context()
     io = imgui.get_io()
     io.display_size = 1400, 900
-    io.fonts.get_tex_data_as_rgba32()
-    io.fonts.texture_id = 1
+    # Font atlas is dynamic under imgui-bundle; get_tex_data_as_rgba32()/texture_id no
+    # longer exist. Telling imgui a backend owns texture building is the headless
+    # equivalent, since this harness never renders real pixels.
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     io.delta_time = 1 / 60.0
     yield imgui
     imgui.destroy_context(ctx)
@@ -1090,8 +1092,8 @@ class TestPointerInteraction:
         io.mouse_pos = (mx, my)
         io.mouse_down[0] = bool(down)
         imgui.new_frame()
-        imgui.set_next_window_position(0.0, 0.0)
-        imgui.set_next_window_size(1200.0, 700.0)
+        imgui.set_next_window_pos((0.0, 0.0))
+        imgui.set_next_window_size((1200.0, 700.0))
         imgui.begin("Timeline")
         panel.draw()
         imgui.end()

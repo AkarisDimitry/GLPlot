@@ -69,7 +69,7 @@ from ..history import Command, is_snapshot_safe
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):
@@ -733,15 +733,9 @@ class DataEditorPanel(Panel):
     # -- keyboard --------------------------------------------------------------
 
     @staticmethod
-    def _pressed(key: int) -> bool:
-        """True on the rising edge of an ImGuiKey_.
-
-        Dear ImGui 1.82 keys ``is_key_pressed`` off a *user* key index, so the
-        ``ImGuiKey_`` constant has to go through ``get_key_index`` (which reads
-        ``io.key_map``, populated by ``GlfwRenderer``). Passing ``imgui.KEY_C`` directly
-        would silently test the wrong physical key.
-        """
-        return imgui.is_key_pressed(imgui.get_key_index(key))
+    def _pressed(key: "imgui.Key") -> bool:
+        """True on the rising edge of an ``imgui.Key`` member."""
+        return imgui.is_key_pressed(key)
 
     def _handle_keys(self, ds: DataSet, focused: bool) -> None:
         """Grid keyboard handling. Runs before the table so edits land the same frame."""
@@ -754,9 +748,9 @@ class DataEditorPanel(Panel):
         if self._edit_cell is not None:
             # Esc first and unconditionally: relying on the input's own deactivation to
             # signal a cancel cannot distinguish Esc from a click-away (which commits).
-            if self._pressed(imgui.KEY_ESCAPE):
+            if self._pressed(imgui.Key.escape):
                 self._cancel_edit()
-            elif self._pressed(imgui.KEY_TAB):
+            elif self._pressed(imgui.Key.tab):
                 self._commit_edit(ds)
                 self._move_cursor(ds, 0, -1 if io.key_shift else 1)
                 self._begin_edit(ds, *self._cursor)
@@ -766,36 +760,36 @@ class DataEditorPanel(Panel):
         if io.want_text_input:
             return
 
-        if ctrl and self._pressed(imgui.KEY_C):
+        if ctrl and self._pressed(imgui.Key.c):
             self._copy_range(ds)
-        elif ctrl and self._pressed(imgui.KEY_V):
+        elif ctrl and self._pressed(imgui.Key.v):
             self._paste_range(ds)
-        elif ctrl and self._pressed(imgui.KEY_X):
+        elif ctrl and self._pressed(imgui.Key.x):
             self._cut_range(ds)
-        elif ctrl and self._pressed(imgui.KEY_A):
+        elif ctrl and self._pressed(imgui.Key.a):
             self._anchor = (0, 0)
             self._cursor = (max(0, ds.n_rows() - 1), max(0, ds.n_cols() - 1))
-        elif self._pressed(imgui.KEY_DELETE) or self._pressed(imgui.KEY_BACKSPACE):
+        elif self._pressed(imgui.Key.delete) or self._pressed(imgui.Key.backspace):
             self._clear_range(ds)
-        elif self._pressed(imgui.KEY_ENTER) or self._pressed(imgui.KEY_PAD_ENTER):
+        elif self._pressed(imgui.Key.enter) or self._pressed(imgui.Key.keypad_enter):
             self._begin_edit(ds, *self._cursor)
-        elif self._pressed(imgui.KEY_TAB):
+        elif self._pressed(imgui.Key.tab):
             self._move_cursor(ds, 0, -1 if io.key_shift else 1)
-        elif self._pressed(imgui.KEY_LEFT_ARROW):
+        elif self._pressed(imgui.Key.left_arrow):
             self._move_cursor(ds, 0, -1, extend=io.key_shift)
-        elif self._pressed(imgui.KEY_RIGHT_ARROW):
+        elif self._pressed(imgui.Key.right_arrow):
             self._move_cursor(ds, 0, 1, extend=io.key_shift)
-        elif self._pressed(imgui.KEY_UP_ARROW):
+        elif self._pressed(imgui.Key.up_arrow):
             self._move_cursor(ds, -1, 0, extend=io.key_shift)
-        elif self._pressed(imgui.KEY_DOWN_ARROW):
+        elif self._pressed(imgui.Key.down_arrow):
             self._move_cursor(ds, 1, 0, extend=io.key_shift)
-        elif self._pressed(imgui.KEY_PAGE_UP):
+        elif self._pressed(imgui.Key.page_up):
             self._move_cursor(ds, -20, 0, extend=io.key_shift)
-        elif self._pressed(imgui.KEY_PAGE_DOWN):
+        elif self._pressed(imgui.Key.page_down):
             self._move_cursor(ds, 20, 0, extend=io.key_shift)
-        elif self._pressed(imgui.KEY_HOME):
+        elif self._pressed(imgui.Key.home):
             self._move_cursor(ds, -ds.n_rows(), 0, extend=io.key_shift)
-        elif self._pressed(imgui.KEY_END):
+        elif self._pressed(imgui.Key.end):
             self._move_cursor(ds, ds.n_rows(), 0, extend=io.key_shift)
 
     # -- drawing ---------------------------------------------------------------
@@ -875,12 +869,12 @@ class DataEditorPanel(Panel):
         imgui.text_disabled("No dataset yet.")
         imgui.spacing()
         theme.push_accent()
-        pasted = imgui.button("Paste data from clipboard", 240.0, 0.0)
+        pasted = imgui.button("Paste data from clipboard", (240.0, 0.0))
         theme.pop_accent()
         if pasted:
             self._paste_as_new_dataset()
         imgui.same_line()
-        if imgui.button("New empty dataset", 160.0, 0.0):
+        if imgui.button("New empty dataset", (160.0, 0.0)):
             self._new_dataset()
         imgui.spacing()
         imgui.text_disabled("Copy a block of numbers in Excel, then click Paste.")
@@ -953,7 +947,7 @@ class DataEditorPanel(Panel):
             self._plot_dataset(ds)
 
         imgui.same_line()
-        imgui.dummy(8.0, 1.0)
+        imgui.dummy((8.0, 1.0))
         imgui.same_line()
         _, self._copy_headers = imgui.checkbox("Copy headers", self._copy_headers)
 
@@ -967,17 +961,17 @@ class DataEditorPanel(Panel):
         if self._filtered:
             imgui.same_line()
             r, g, b, a = theme.get_color("warn")
-            imgui.text_colored(f"|   filtered: {self._view_rows_count(ds)} rows shown", r, g, b, a)
+            imgui.text_colored((r, g, b, a), f"|   filtered: {self._view_rows_count(ds)} rows shown")
         if ds.layer_id is not None:
             imgui.same_line()
             imgui.text_disabled("|")
             imgui.same_line()
             if self._bound_layer(ds) is None:
                 r, g, b, a = theme.get_color("warn")
-                imgui.text_colored(f"layer {ds.layer_id} was deleted", r, g, b, a)
+                imgui.text_colored((r, g, b, a), f"layer {ds.layer_id} was deleted")
             else:
                 r, g, b, a = theme.get_color("ok")
-                imgui.text_colored(f"live -> layer {ds.layer_id}", r, g, b, a)
+                imgui.text_colored((r, g, b, a), f"live -> layer {ds.layer_id}")
         if self._status:
             imgui.same_line()
             imgui.text_disabled(f"   {self._status}")
@@ -1008,7 +1002,7 @@ class DataEditorPanel(Panel):
         if current:
             imgui.set_next_item_width(150.0)
             renamed, self._rename_text = imgui.input_text(
-                "##rename", self._rename_text or current, flags=imgui.INPUT_TEXT_ENTER_RETURNS_TRUE
+                "##rename", self._rename_text or current, flags=imgui.InputTextFlags_.enter_returns_true
             )
             imgui.same_line()
             commit = icons.icon_button("##col_ren", "check", tooltip=f"Rename {current!r}")
@@ -1058,13 +1052,13 @@ class DataEditorPanel(Panel):
         imgui.same_line()
         imgui.set_next_item_width(-150.0)
         entered, self._filter_text = imgui.input_text(
-            "##filter", self._filter_text, flags=imgui.INPUT_TEXT_ENTER_RETURNS_TRUE
+            "##filter", self._filter_text, flags=imgui.InputTextFlags_.enter_returns_true
         )
         imgui.same_line()
-        if imgui.button("Filter", 60.0, 0.0) or entered:
+        if imgui.button("Filter", (60.0, 0.0)) or entered:
             self._apply_filter(ds)
         imgui.same_line()
-        if imgui.button("Show all", 70.0, 0.0):
+        if imgui.button("Show all", (70.0, 0.0)):
             self._clear_filter()
             self._status = "Filter cleared"
         widgets.help_marker(
@@ -1082,18 +1076,15 @@ class DataEditorPanel(Panel):
         if self._filtered:
             r, g, b, a = theme.get_color("warn")
             imgui.text_colored(
+                (r, g, b, a),
                 f"FILTERED VIEW — showing {self._view_rows_count(ds)} of {ds.n_rows()} rows "
                 f"where {self._filter_applied}   (the table still has all "
                 f"{ds.n_rows()})",
-                r,
-                g,
-                b,
-                a,
             )
-            if imgui.button("Apply to data", 110.0, 0.0):
+            if imgui.button("Apply to data", (110.0, 0.0)):
                 self._apply_filter_to_data(ds)
             imgui.same_line()
-            if imgui.button("To new dataset", 120.0, 0.0):
+            if imgui.button("To new dataset", (120.0, 0.0)):
                 self._filter_to_new_dataset(ds)
             imgui.same_line()
             if ds.is_bound():
@@ -1115,10 +1106,10 @@ class DataEditorPanel(Panel):
         imgui.same_line()
         imgui.set_next_item_width(-90.0)
         applied, self._transform_expr = imgui.input_text(
-            "##texpr", self._transform_expr, flags=imgui.INPUT_TEXT_ENTER_RETURNS_TRUE
+            "##texpr", self._transform_expr, flags=imgui.InputTextFlags_.enter_returns_true
         )
         imgui.same_line()
-        if (imgui.button("Apply", 80.0, 0.0) or applied) and self._transform_expr.strip():
+        if (imgui.button("Apply", (80.0, 0.0)) or applied) and self._transform_expr.strip():
             target = self._transform_target.strip() if self._transform_to_new else None
             self._transform(ds, self._transform_col, self._transform_expr.strip(), target or None)
 
@@ -1193,8 +1184,8 @@ class DataEditorPanel(Panel):
 
         theme.push_accent()
         if strands_layer:
-            imgui.push_style_var(imgui.STYLE_ALPHA, imgui.get_style().alpha * 0.5)
-        if imgui.button(action, 130.0, 0.0) and not strands_layer:
+            imgui.push_style_var(imgui.StyleVar_.alpha, imgui.get_style().alpha * 0.5)
+        if imgui.button(action, (130.0, 0.0)) and not strands_layer:
             self._plot_dataset(ds)
         if strands_layer:
             imgui.pop_style_var(1)
@@ -1217,19 +1208,19 @@ class DataEditorPanel(Panel):
 
         if bound is not None:
             imgui.same_line()
-            if imgui.button("Plot as new layer", 130.0, 0.0):
+            if imgui.button("Plot as new layer", (130.0, 0.0)):
                 self._plot_dataset(ds, as_new=True)
 
         if ds.layer_id is not None:
             imgui.same_line()
-            if imgui.button("Unlink", 90.0, 0.0):
+            if imgui.button("Unlink", (90.0, 0.0)):
                 ds.unbind()
                 self._status = "Unlinked from layer"
 
         if stale:
             r, g, b, a = theme.get_color("warn")
             imgui.text_colored(
-                "Linked layer no longer exists — Plot will create a fresh one.", r, g, b, a
+                (r, g, b, a), "Linked layer no longer exists — Plot will create a fresh one."
             )
         elif bound is not None:
             kind_name = layerops.layer_kind(bound) or bound.layer_type
@@ -1269,11 +1260,8 @@ class DataEditorPanel(Panel):
         if self._plot_ndim == 3 and len(names) < 3:
             r, g, b, a = theme.get_color("warn")
             imgui.text_colored(
+                (r, g, b, a),
                 "This table has two columns. Add a third (Columns section) to plot in 3D.",
-                r,
-                g,
-                b,
-                a,
             )
 
     def _draw_plot_section_3d(self, ds: DataSet, names: List[str]) -> None:
@@ -1317,7 +1305,7 @@ class DataEditorPanel(Panel):
         self._draw_encoding_combos_3d(names)
 
         theme.push_accent()
-        if imgui.button("Plot in 3D", 130.0, 0.0):
+        if imgui.button("Plot in 3D", (130.0, 0.0)):
             self._plot_dataset_3d(ds)
         theme.pop_accent()
         imgui.same_line()
@@ -1598,25 +1586,25 @@ class DataEditorPanel(Panel):
             return
 
         flags = (
-            imgui.TABLE_ROW_BACKGROUND
-            | imgui.TABLE_BORDERS
-            | imgui.TABLE_RESIZABLE
-            | imgui.TABLE_SCROLL_X
-            | imgui.TABLE_SCROLL_Y
-            | imgui.TABLE_SIZING_FIXED_FIT
+            imgui.TableFlags_.row_bg
+            | imgui.TableFlags_.borders
+            | imgui.TableFlags_.resizable
+            | imgui.TableFlags_.scroll_x
+            | imgui.TableFlags_.scroll_y
+            | imgui.TableFlags_.sizing_fixed_fit
         )
         # TABLE_REORDERABLE is deliberately absent: it reorders the *view* only, which
         # would silently desync from the data order that copy/paste and x/y selection use.
 
-        height = max(120.0, imgui.get_content_region_available().y)
-        table = imgui.begin_table("##grid", n_cols + 1, flags, 0.0, height)
-        if not table.opened:
+        height = max(120.0, imgui.get_content_region_avail().y)
+        table = imgui.begin_table("##grid", n_cols + 1, flags, (0.0, height))
+        if not table:
             return
 
         index_width = imgui.calc_text_size(str(max(ds.n_rows(), 1))).x + 16.0
-        imgui.table_setup_column("#", imgui.TABLE_COLUMN_WIDTH_FIXED, index_width)
+        imgui.table_setup_column("#", imgui.TableColumnFlags_.width_fixed, index_width)
         for column in ds.columns:
-            imgui.table_setup_column(column.name, imgui.TABLE_COLUMN_WIDTH_FIXED, _CELL_WIDTH)
+            imgui.table_setup_column(column.name, imgui.TableColumnFlags_.width_fixed, _CELL_WIDTH)
         imgui.table_setup_scroll_freeze(1, 1)
         self._draw_header_row(ds)
 
@@ -1663,7 +1651,7 @@ class DataEditorPanel(Panel):
         the data order that copy, paste and the x/y pickers speak silently different
         from the one on screen. Reordering the columns themselves cannot desync.
         """
-        imgui.table_next_row(imgui.TABLE_ROW_HEADERS)
+        imgui.table_next_row(imgui.TableRowFlags_.headers)
         imgui.table_set_column_index(0)
         imgui.table_header("#")
         for index, column in enumerate(ds.columns):
@@ -1677,17 +1665,17 @@ class DataEditorPanel(Panel):
     def _column_drag_drop(self, ds: DataSet, index: int) -> None:
         """Make the last item a column drag source and drop target."""
         source = imgui.begin_drag_drop_source()
-        if source.dragging:
-            # Payload must be bytes (CONTRACT §2.6); the index is all the target needs.
-            imgui.set_drag_drop_payload(_DND_COLUMN, str(index).encode("ascii"))
+        if source:
+            # Payload is a Python int id (CONTRACT §2.6); the index is all the target needs.
+            imgui.set_drag_drop_payload_py_id(_DND_COLUMN, index)
             imgui.text(f"Move column {ds.columns[index].name!r}")
             imgui.end_drag_drop_source()
 
         target = imgui.begin_drag_drop_target()
-        if target.hovered:
-            # accept_drag_drop_payload asserts unless it is nested inside an active
+        if target:
+            # accept_drag_drop_payload_py_id asserts unless it is nested inside an active
             # target block, so it can never be hoisted out of this branch.
-            payload = imgui.accept_drag_drop_payload(_DND_COLUMN)
+            payload = imgui.accept_drag_drop_payload_py_id(_DND_COLUMN)
             if payload is not None:
                 self._move_column(ds, self._payload_index(payload), index)
             imgui.end_drag_drop_target()
@@ -1695,7 +1683,7 @@ class DataEditorPanel(Panel):
     def _column_context_menu(self, ds: DataSet, index: int, name: str) -> None:
         """Right-click a header: sort, move, rename, remove — all undoable."""
         popup = imgui.begin_popup_context_item(f"##colmenu{index}")
-        if not popup.opened:
+        if not popup:
             return
         imgui.text_disabled(name)
         imgui.separator()
@@ -1704,10 +1692,10 @@ class DataEditorPanel(Panel):
         if imgui.selectable("Sort descending")[0]:
             self._sort_by(ds, index, descending=True)
         imgui.separator()
-        if imgui.selectable("Move left", False, 0 if index > 0 else imgui.SELECTABLE_DISABLED)[0]:
+        if imgui.selectable("Move left", False, 0 if index > 0 else imgui.SelectableFlags_.disabled)[0]:
             self._move_column(ds, index, index - 1)
         last = index < ds.n_cols() - 1
-        if imgui.selectable("Move right", False, 0 if last else imgui.SELECTABLE_DISABLED)[0]:
+        if imgui.selectable("Move right", False, 0 if last else imgui.SelectableFlags_.disabled)[0]:
             self._move_column(ds, index, index + 1)
         imgui.separator()
         if imgui.selectable("Transform...")[0]:
@@ -1721,8 +1709,8 @@ class DataEditorPanel(Panel):
     def _payload_index(payload: Any) -> int:
         """Decode a drag payload back to an index. -1 when it is not one of ours."""
         try:
-            return int(bytes(payload).decode("ascii"))
-        except (TypeError, ValueError, UnicodeDecodeError):  # pragma: no cover - defensive
+            return int(payload.data_id)
+        except (TypeError, ValueError, AttributeError):  # pragma: no cover - defensive
             return -1
 
     @staticmethod
@@ -1749,7 +1737,7 @@ class DataEditorPanel(Panel):
             return
         imgui.table_next_row()
         imgui.table_set_column_index(0)
-        imgui.dummy(1.0, height)
+        imgui.dummy((1.0, height))
 
     def _draw_row(self, ds: DataSet, row: int, n_cols: int) -> None:
         """One view row: index gutter + cells.
@@ -1786,16 +1774,16 @@ class DataEditorPanel(Panel):
             return
 
         source = imgui.begin_drag_drop_source()
-        if source.dragging:
-            imgui.set_drag_drop_payload(_DND_ROW, str(data_row).encode("ascii"))
+        if source:
+            imgui.set_drag_drop_payload_py_id(_DND_ROW, data_row)
             rows = self._selected_data_rows(ds)
             count = len(rows) if data_row in rows else 1
             imgui.text(f"Move {count} row(s)")
             imgui.end_drag_drop_source()
 
         target = imgui.begin_drag_drop_target()
-        if target.hovered:
-            payload = imgui.accept_drag_drop_payload(_DND_ROW)
+        if target:
+            payload = imgui.accept_drag_drop_payload_py_id(_DND_ROW)
             if payload is not None:
                 self._move_rows(ds, self._payload_index(payload), data_row)
             imgui.end_drag_drop_target()
@@ -1812,7 +1800,7 @@ class DataEditorPanel(Panel):
             entered, self._edit_text = imgui.input_text(
                 f"##e{row}_{col}",
                 self._edit_text,
-                flags=imgui.INPUT_TEXT_ENTER_RETURNS_TRUE | imgui.INPUT_TEXT_AUTO_SELECT_ALL,
+                flags=imgui.InputTextFlags_.enter_returns_true | imgui.InputTextFlags_.auto_select_all,
             )
             if entered:
                 self._commit_edit(ds)
@@ -1825,7 +1813,7 @@ class DataEditorPanel(Panel):
         clicked = imgui.selectable(
             f"{_fmt_display(ds.get_cell(data_row, col))}##c{row}_{col}",
             selected,
-            imgui.SELECTABLE_ALLOW_DOUBLE_CLICK,
+            imgui.SelectableFlags_.allow_double_click,
         )[0]
 
         if imgui.is_item_hovered():
@@ -1848,7 +1836,7 @@ class DataEditorPanel(Panel):
             x0, y0 = imgui.get_item_rect_min()
             x1, y1 = imgui.get_item_rect_max()
             imgui.get_window_draw_list().add_rect(
-                x0, y0, x1, y1, theme.color_u32("accent"), 0.0, 0, 1.5
+                (x0, y0), (x1, y1), theme.color_u32("accent"), rounding=0.0, thickness=1.5
             )
 
     # -- dataset / structural actions -----------------------------------------

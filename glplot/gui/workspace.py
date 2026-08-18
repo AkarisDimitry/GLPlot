@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from ..engine import GPULinePlot
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - GL-less import guard
@@ -257,6 +257,12 @@ class Workspace:
         #: Key of the panel window that held focus as of the last drawn frame. Drives
         #: "Close focused panel" and "Cycle panels"; None when the focus is elsewhere.
         self._focused_panel: Optional[str] = None
+        #: Key of a panel to focus on its next `imgui.begin()`, consumed by `_draw_panels`.
+        #: `imgui.set_window_focus(name)` segfaults in imgui-bundle when `name` is not the
+        #: window currently being drawn this frame (verified: it is not a Python-catchable
+        #: exception), so focusing by name is never safe here. `set_next_window_focus()`
+        #: called immediately before that window's own `begin()` is the crash-safe idiom.
+        self._pending_focus: Optional[str] = None
 
         self._widen_axis_gutter_for_rail()
 
@@ -2290,25 +2296,25 @@ class Workspace:
 
         viewport_h = float(imgui.get_io().display_size[1])
         rail_h = max(0.0, viewport_h - top)
-        imgui.set_next_window_position(0.0, top, imgui.ALWAYS)
-        imgui.set_next_window_size(RAIL_WIDTH, rail_h, imgui.ALWAYS)
+        imgui.set_next_window_pos((0.0, top), imgui.Cond_.always)
+        imgui.set_next_window_size((RAIL_WIDTH, rail_h), imgui.Cond_.always)
         flags = (
-            imgui.WINDOW_NO_TITLE_BAR
-            | imgui.WINDOW_NO_RESIZE
-            | imgui.WINDOW_NO_MOVE
-            | imgui.WINDOW_NO_SCROLLBAR
-            | imgui.WINDOW_NO_SAVED_SETTINGS
-            | imgui.WINDOW_NO_COLLAPSE
+            imgui.WindowFlags_.no_title_bar
+            | imgui.WindowFlags_.no_resize
+            | imgui.WindowFlags_.no_move
+            | imgui.WindowFlags_.no_scrollbar
+            | imgui.WindowFlags_.no_saved_settings
+            | imgui.WindowFlags_.no_collapse
         )
         # Tight padding so the rail hugs its single icon column instead of inheriting the
         # roomy 10px window padding the floating panels use. RAIL_WIDTH is derived from this
         # same RAIL_PAD, so the icons stay centred at any size.
-        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (RAIL_PAD, RAIL_PAD))
+        imgui.push_style_var(imgui.StyleVar_.window_padding, (RAIL_PAD, RAIL_PAD))
         # The global theme sets window_min_size to (200, 100) for the roomy floating panels.
         # imgui clamps *every* window up to that minimum, so set_next_window_size above is
         # overruled and the rail balloons to 200px wide. Override the minimum for this window
         # only (pushed before begin, read inside begin) so the rail can be its true narrow width.
-        imgui.push_style_var(imgui.STYLE_WINDOW_MIN_SIZE, (RAIL_WIDTH, 0.0))
+        imgui.push_style_var(imgui.StyleVar_.window_min_size, (RAIL_WIDTH, 0.0))
         imgui.begin("##glplot_rail", flags=flags)
 
         # The palette leads the rail: it is the front door to every other action, and it is
@@ -2391,6 +2397,9 @@ class Workspace:
             if not self.open.get(key, False):
                 continue
             self._place_window(key)
+            if key == self._pending_focus:
+                imgui.set_next_window_focus()
+                self._pending_focus = None
             # imgui.begin must always be paired with end, expanded or not — unlike
             # begin_child, whose end is also unconditional but for a different reason.
             expanded, opened = imgui.begin(panel.title, True)
@@ -2410,7 +2419,7 @@ class Workspace:
                     # imgui tolerates an unbalanced stack within a window. Losing one panel
                     # beats losing the render loop.
                     logger.exception("Panel %r raised while drawing.", key)
-                    imgui.text_colored("This panel failed to draw; see the log.", 0.9, 0.35, 0.35)
+                    imgui.text_colored((0.9, 0.35, 0.35, 1.0), "This panel failed to draw; see the log.")
             imgui.end()
         self._focused_panel = focused
 
@@ -2433,9 +2442,9 @@ class Workspace:
         usable_h = max(120.0, vh - top - 4.0)
 
         fx, fy, fw, fh = layout
-        condition = imgui.ALWAYS if self._force_layout > 0 else imgui.FIRST_USE_EVER
-        imgui.set_next_window_position(left + fx * usable_w, top + fy * usable_h, condition)
-        imgui.set_next_window_size(fw * usable_w - 6.0, fh * usable_h - 6.0, condition)
+        condition = imgui.Cond_.always if self._force_layout > 0 else imgui.Cond_.first_use_ever
+        imgui.set_next_window_pos((left + fx * usable_w, top + fy * usable_h), condition)
+        imgui.set_next_window_size((fw * usable_w - 6.0, fh * usable_h - 6.0), condition)
 
     def _draw_empty_hint(self) -> None:
         """The standalone app's first-run affordance: say what to do with an empty scene.
@@ -2451,14 +2460,14 @@ class Workspace:
         io = imgui.get_io()
         vw = float(io.display_size[0])
         vh = float(io.display_size[1])
-        imgui.set_next_window_position(vw * 0.5, vh * 0.62, imgui.ALWAYS, 0.5, 0.5)
+        imgui.set_next_window_pos((vw * 0.5, vh * 0.62), imgui.Cond_.always, (0.5, 0.5))
         flags = (
-            imgui.WINDOW_NO_TITLE_BAR
-            | imgui.WINDOW_NO_RESIZE
-            | imgui.WINDOW_NO_MOVE
-            | imgui.WINDOW_NO_SAVED_SETTINGS
-            | imgui.WINDOW_ALWAYS_AUTO_RESIZE
-            | imgui.WINDOW_NO_COLLAPSE
+            imgui.WindowFlags_.no_title_bar
+            | imgui.WindowFlags_.no_resize
+            | imgui.WindowFlags_.no_move
+            | imgui.WindowFlags_.no_saved_settings
+            | imgui.WindowFlags_.always_auto_resize
+            | imgui.WindowFlags_.no_collapse
         )
         imgui.begin("##glplot_hint", flags=flags)
         imgui.text("Nothing plotted yet.")
@@ -2491,14 +2500,10 @@ class Workspace:
         imgui.end()
 
     def _focus(self, key: str) -> None:
-        """Raise panel ``key`` to the front on the next frame, if it exists."""
-        panel = self.panels.get(key)
-        if panel is None or not IMGUI_AVAILABLE:
+        """Raise panel ``key`` to the front the next time it draws, if it exists."""
+        if key not in self.panels or not IMGUI_AVAILABLE:
             return
-        try:
-            imgui.set_window_focus_labeled(panel.title)
-        except Exception:  # pragma: no cover - no current imgui context (headless test)
-            logger.debug("Could not focus panel %r outside a frame.", key)
+        self._pending_focus = key
 
     # -- undo/redo -------------------------------------------------------------
 

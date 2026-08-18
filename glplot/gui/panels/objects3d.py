@@ -52,7 +52,7 @@ from ..icons import icon_button
 from .base import Panel
 
 try:
-    import imgui
+    from imgui_bundle import imgui
 
     IMGUI_AVAILABLE = True
 except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
@@ -396,12 +396,11 @@ class Objects3DPanel(Panel):
             imgui.text_disabled(self._status)
 
     def _draw_category_tabs(self) -> None:
-        tab_bar = imgui.begin_tab_bar("##obj3d_cats")
-        if not tab_bar.opened:
+        if not imgui.begin_tab_bar("##obj3d_cats"):
             return
         for key, label in CATEGORIES:
-            tab = imgui.begin_tab_item(label)
-            if tab.selected:
+            selected, _ = imgui.begin_tab_item(label)
+            if selected:
                 if self.category != key:
                     self.category = key
                     members = generators3d.by_category(key)
