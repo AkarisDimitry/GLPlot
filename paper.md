@@ -12,6 +12,15 @@ authors:
     corresponding: true
     affiliation: 1
     orcid: 0009-0002-3961-1426
+  - name: Felix Riccius
+    equal-contrib: true
+    affiliation: 1
+  - name: Julian Holland
+    equal-contrib: true
+    affiliation: 1
+  - name: Gianmarco Ducci
+    equal-contrib: true
+    affiliation: 1
 affiliations:
   - name: "Fritz Haber Institute of the Max Planck Society, Berlin, Germany"
     index: 1
@@ -113,6 +122,10 @@ verified minimum, based on `#version 330 core` in glplot/utils/shaders.py and th
 CONTEXT_VERSION_MAJOR/MINOR=3.3 + OPENGL_CORE_PROFILE hints in glplot/engine.py. It has not been
 tested against every OS/driver combination; soften or qualify this claim if that matters for the
 target venue. -->
+
+<!-- TODO (needs author input): add `orcid: 0000-0000-0000-0000` to the YAML author
+entries for Felix Riccius, Julian Holland, and Gianmarco Ducci once their ORCID iDs
+are available. -->
 
 # AI usage disclosure
 
