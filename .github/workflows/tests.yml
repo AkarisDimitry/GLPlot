@@ -32,8 +32,19 @@ jobs:
       if: runner.os == 'Linux'
       timeout-minutes: 5
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libglvnd0 libgl1 libglu1-mesa libosmesa6 xvfb
+        # GitHub's Ubuntu runners default to a regional azure.archive.ubuntu.com
+        # mirror that is occasionally slow or unreachable, and plain apt-get can
+        # sit retrying it for many minutes before falling back. Bound each
+        # attempt's own timeout/retry count, and retry the whole thing a few
+        # times, so a transient mirror blip fails fast and self-heals instead
+        # of eating most of this step's 5-minute budget.
+        APT_OPTS="-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+        for attempt in 1 2 3; do
+          sudo apt-get update $APT_OPTS && break
+          echo "apt-get update failed (attempt $attempt/3), retrying..." >&2
+          sleep 5
+        done
+        sudo apt-get install -y $APT_OPTS libglvnd0 libgl1 libglu1-mesa libosmesa6 xvfb
 
     - name: Install dependencies
       timeout-minutes: 5
