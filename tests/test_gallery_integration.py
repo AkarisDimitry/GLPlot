@@ -1,6 +1,8 @@
 import runpy
 from pathlib import Path
 
+import pytest
+
 import glplot.pyplot as _gplt
 from glplot.engine import GPULinePlot
 
@@ -34,6 +36,7 @@ EXPECTED_FILES = [
 ]
 
 
+@pytest.mark.timeout(180)
 def test_gallery_scripts_build_without_rendering(monkeypatch):
     """All 21 gallery scripts must run to completion without crashing and each
     must call savefig() exactly once with the expected filename.
@@ -41,6 +44,11 @@ def test_gallery_scripts_build_without_rendering(monkeypatch):
     savefig() now falls back to render_preview() when no GL window exists
     (the no-window path added to fix the macOS headless crash), so we patch
     at the pyplot module level rather than patching GPULinePlot.savefig.
+
+    Running 26 scripts through full line coverage genuinely takes ~90s
+    (verified), well past the suite's default 60s hang ceiling -- this is real
+    work, not a hang, so it gets its own generous timeout rather than raising
+    the ceiling for every other test.
     """
     saved = []
 

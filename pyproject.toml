@@ -80,12 +80,18 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
 # The full suite runs in ~1 minute locally; any single test past 60s is hung,
-# not slow. "thread" (not the default "signal") because a hang is most likely
-# inside a blocking GLFW/OpenGL native call, which signal-based interruption
-# cannot reliably preempt. Without this, one hung test burns the entire CI job
-# down to GitHub's 6-hour default timeout with no indication of which test it was.
+# not slow. Deliberately NOT forcing timeout_method="thread" here (verified):
+# pytest-timeout's thread watchdog and coverage.py's internal data lock can
+# genuinely deadlock each other (the watchdog thread's stack introspection and
+# the traced main thread both want coverage's lock) -- reproduced locally, the
+# process never recovers. Coverage is on by default (see addopts above), so
+# this hits on every run. Leaving timeout_method unset gets pytest-timeout's
+# own per-platform default instead: "signal" on POSIX (interrupts the main
+# thread directly, no second thread contending for the coverage lock) and
+# "thread" only on Windows, where SIGALRM does not exist. Without a timeout at
+# all, one hung test burns the entire CI job down to GitHub's 6-hour default
+# with no indication of which test it was -- which is what actually happened.
 timeout = 60
-timeout_method = "thread"
 
 [tool.black]
 line-length = 100
