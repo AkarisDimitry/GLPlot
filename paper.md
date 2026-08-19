@@ -16,9 +16,11 @@ authors:
   - name: Felix Riccius
     equal-contrib: true
     affiliation: 1
+    orcid: 0000-0002-1331-4469
   - name: Julian Holland
     equal-contrib: true
     affiliation: 1
+    orcid: 0000-0003-0134-1790
   - name: Gianmarco Ducci
     equal-contrib: true
     affiliation: 1
