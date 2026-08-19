@@ -44,12 +44,14 @@ dev = [
     "twine>=4.0",
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "pytest-mock>=3.10"
+    "pytest-mock>=3.10",
+    "pytest-timeout>=2.1"
 ]
 test = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "pytest-mock>=3.10"
+    "pytest-mock>=3.10",
+    "pytest-timeout>=2.1"
 ]
 
 [project.urls]
@@ -77,6 +79,13 @@ testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+# The full suite runs in ~1 minute locally; any single test past 60s is hung,
+# not slow. "thread" (not the default "signal") because a hang is most likely
+# inside a blocking GLFW/OpenGL native call, which signal-based interruption
+# cannot reliably preempt. Without this, one hung test burns the entire CI job
+# down to GitHub's 6-hour default timeout with no indication of which test it was.
+timeout = 60
+timeout_method = "thread"
 
 [tool.black]
 line-length = 100

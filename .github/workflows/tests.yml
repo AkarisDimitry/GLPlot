@@ -9,6 +9,11 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    # A hung step (e.g. apt waiting on a dpkg lock, or a blocking GLFW/OpenGL call
+    # pytest-timeout can't preempt) used to silently eat GitHub's 6-hour default job
+    # timeout with no indication of where it got stuck. 20 minutes is generous next
+    # to the ~1-minute local run; it just guarantees a fast, legible failure instead.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -25,22 +30,26 @@ jobs:
 
     - name: Install headless OpenGL libraries (Linux)
       if: runner.os == 'Linux'
+      timeout-minutes: 5
       run: |
         sudo apt-get update
         sudo apt-get install -y libglvnd0 libgl1 libglu1-mesa libosmesa6 xvfb
 
     - name: Install dependencies
+      timeout-minutes: 5
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[test]"
 
     - name: Run tests with coverage (Linux, under a virtual display)
       if: runner.os == 'Linux'
+      timeout-minutes: 10
       run: |
         xvfb-run -a pytest --cov=glplot --cov-report=term-missing --cov-report=xml
 
     - name: Run tests with coverage
       if: runner.os != 'Linux'
+      timeout-minutes: 10
       run: |
         pytest --cov=glplot --cov-report=term-missing --cov-report=xml
 
