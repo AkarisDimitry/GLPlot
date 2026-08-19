@@ -75,7 +75,7 @@ PyQtGraph is designed for scientific and engineering applications requiring resp
 
 ## User-facing interface
 
-The primary entry point is `glplot.pyplot`. Calls such as `plot`, `scatter`, `hist2d`, `pcolormesh`, `contour`, `quiver`, `plot_surface`, `mesh3d`, and `bar3d` create layers in a scene, accept NumPy arrays [@harris2020array], and follow common Matplotlib calling conventions, including format strings for line and marker styling; select numerical routines use SciPy [@virtanen2020scipy]. A more specialized `plot_lines` interface instead takes a line family as coefficient pairs:
+`GLPlot` is available on PyPI and installs with `pip install glplot`. The primary entry point is `glplot.pyplot`. Calls such as `plot`, `scatter`, `hist2d`, `pcolormesh`, `contour`, `quiver`, `plot_surface`, `mesh3d`, and `bar3d` create layers in a scene, accept NumPy arrays [@harris2020array], and follow common Matplotlib calling conventions, including format strings for line and marker styling; select numerical routines use SciPy [@virtanen2020scipy]. A more specialized `plot_lines` interface instead takes a line family as coefficient pairs:
 
 ```python
 import numpy as np
