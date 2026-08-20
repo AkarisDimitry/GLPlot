@@ -70,6 +70,21 @@ _FALLBACK_COLORS: Dict[str, Tuple[float, float, float, float]] = {
     "grid": (0.30, 0.32, 0.36, 1.00),
 }
 
+#: Default qualitative palette for mini_scatter's point_colors -- distinguishable by hue
+#: alone (not a gradient), the way a categorical label (a cluster id) should read. Callers
+#: that want the live plot's own series colors instead pass the resolved
+#: ``PlotStyle.palette`` (see Math Lab's ``_preview_style``); this is only the fallback.
+_DEFAULT_QUALITATIVE_PALETTE: Tuple[Tuple[float, float, float, float], ...] = (
+    (0.26, 0.59, 0.98, 1.00),  # blue
+    (0.95, 0.55, 0.25, 1.00),  # orange
+    (0.35, 0.78, 0.45, 1.00),  # green
+    (0.92, 0.35, 0.35, 1.00),  # red
+    (0.65, 0.45, 0.90, 1.00),  # purple
+    (0.80, 0.65, 0.30, 1.00),  # gold
+    (0.35, 0.75, 0.80, 1.00),  # teal
+    (0.90, 0.45, 0.70, 1.00),  # pink
+)
+
 _theme_module: Any = None
 _theme_probed = False
 
@@ -656,6 +671,34 @@ def stat_row(label: str, value: str) -> None:
     imgui.text(str(value))
 
 
+def stats_table(id_str: str, headers: Tuple[str, str], rows: Sequence[Tuple[str, str]]) -> None:
+    """A real two-column, bordered table of (label, value) rows.
+
+    ``stat_row`` (above) fakes a column with manual cursor placement, which is fine for a
+    handful of rows but reads as a list, not a table, once several tabs (Fit, Statistics,
+    Correlate, Cluster) all need the same "label -> value" readout. This is that, done with
+    a real ``imgui.begin_table`` (CONTRACT 2.3: ``end_table`` only when ``begin_table``
+    returned True -- it is False when the table is clipped or out of space).
+    """
+    if not IMGUI_AVAILABLE:
+        return
+    flags = imgui.TableFlags_.row_bg | imgui.TableFlags_.borders_inner_h
+    if not imgui.begin_table(id_str, 2, flags=flags):
+        return
+    try:
+        imgui.table_setup_column(headers[0], imgui.TableColumnFlags_.width_stretch)
+        imgui.table_setup_column(headers[1], imgui.TableColumnFlags_.width_stretch)
+        imgui.table_headers_row()
+        for label, value in rows:
+            imgui.table_next_row()
+            imgui.table_next_column()
+            imgui.text_disabled(str(label))
+            imgui.table_next_column()
+            imgui.text(str(value))
+    finally:
+        imgui.end_table()
+
+
 def error_box(msg: str) -> None:
     """A red-tinted, wrapped error panel with a warning glyph."""
     if not IMGUI_AVAILABLE:
@@ -726,6 +769,58 @@ def confirm_popup(id_str: str, message: str) -> Optional[bool]:
     return result
 
 
+def _draw_axes_frame(
+    draw_list: Any,
+    x0: float,
+    px0: float,
+    py0: float,
+    px1: float,
+    py1: float,
+    x_lo: float,
+    x_hi: float,
+    y_lo: float,
+    y_hi: float,
+    scale_x: float,
+    scale_y: float,
+    grid_col: int,
+    zero_col: int,
+    frame_col: int,
+    muted_col: int,
+) -> None:
+    """Grid lines, ~4 nice-numbered ticks per axis, a y=0 line, and the frame rect.
+
+    The shared "what a mini chart's axes look like" block -- factored out of
+    :func:`mini_plot` so :func:`mini_scatter` and :func:`mini_heatmap` draw an identical
+    frame instead of a hand-copied approximation of one. ``x0`` is the widget's own
+    screen-space left edge (not ``px0``, which is already inset by the tick-label margin),
+    needed only to clamp a y-tick label from running off the left of the widget.
+    """
+    for tick in _nice_ticks(y_lo, y_hi, 4):
+        sy = py1 - (tick - y_lo) * scale_y
+        if sy < py0 - 0.5 or sy > py1 + 0.5:
+            continue
+        draw_list.add_line((px0, sy), (px1, sy), grid_col, 1.0)
+        text = _fmt_tick(tick)
+        size = imgui.calc_text_size(text)
+        draw_list.add_text((max(x0 + 1.0, px0 - 5.0 - size.x), sy - size.y * 0.5), muted_col, text)
+
+    for tick in _nice_ticks(x_lo, x_hi, 4):
+        sx = px0 + (tick - x_lo) * scale_x
+        if sx < px0 - 0.5 or sx > px1 + 0.5:
+            continue
+        draw_list.add_line((sx, py0), (sx, py1), grid_col, 1.0)
+        text = _fmt_tick(tick)
+        size = imgui.calc_text_size(text)
+        tx = min(max(sx - size.x * 0.5, px0 - 4.0), px1 - size.x)
+        draw_list.add_text((tx, py1 + 2.0), muted_col, text)
+
+    if y_lo < 0.0 < y_hi:
+        sy = py1 + y_lo * scale_y
+        draw_list.add_line((px0, sy), (px1, sy), zero_col, 1.5)
+
+    draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
+
+
 def mini_plot(
     id_str: str,
     y: np.ndarray,
@@ -738,6 +833,10 @@ def mini_plot(
     overlay_color: Optional[Any] = None,
     markers: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     marker_color: Optional[Any] = None,
+    background_color: Optional[Any] = None,
+    grid_color: Optional[Any] = None,
+    band: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    band_color: Optional[Any] = None,
 ) -> None:
     """An interactive inline plot rendered with ``draw_list`` primitives.
 
@@ -757,6 +856,16 @@ def mini_plot(
         series, for calling out detected peaks or other points of interest. Markers are
         NOT decimated (there are few of them) and do not affect autoscaling; one outside
         the data's own range is simply clipped.
+      * ``background_color``/``grid_color`` default to the ImGui chrome theme's tokens
+        (unchanged behaviour for every existing caller) but can be overridden -- e.g. by
+        Math Lab's preview, which passes the *real* plot's background/grid so the preview
+        reads as "this plot, zoomed into one operation" rather than a generic chart.
+      * Optional ``band`` -- a ``(lower, upper)`` pair, same x as ``y`` -- fills a
+        translucent confidence/prediction band behind the series. Stride-subsampled
+        (not min/max decimated: a band is smooth, not noisy, so an envelope-preserving
+        decimation buys nothing) and broken at every non-finite sample the same way the
+        series lines are, so a band that is only defined over part of the domain does not
+        bridge across the gap.
 
     Mismatched lengths are truncated to the shortest series rather than raising --
     this runs inside a draw callback where an exception would kill the frame.
@@ -777,6 +886,15 @@ def mini_plot(
             n = min(ov_data.size, y_data.size)
             ov_data = ov_data[:n]
 
+    band_lo_data: Optional[np.ndarray] = None
+    band_hi_data: Optional[np.ndarray] = None
+    if band is not None:
+        band_lo_data = _as_1d(band[0])
+        band_hi_data = _as_1d(band[1])
+        n = min(band_lo_data.size, band_hi_data.size, x_data.size)
+        band_lo_data = band_lo_data[:n]
+        band_hi_data = band_hi_data[:n]
+
     marker_x: Optional[np.ndarray] = None
     marker_y: Optional[np.ndarray] = None
     if markers is not None:
@@ -789,11 +907,14 @@ def mini_plot(
     series_color = _as_rgba(color) if color is not None else _token("accent")
     second_color = _as_rgba(overlay_color) if overlay_color is not None else _token("warn")
     dot_color = _as_rgba(marker_color) if marker_color is not None else _token("accent")
-    grid_col = _u32(_token("grid"), 0.55)
-    zero_col = _u32(_token("grid"), 1.0)
-    frame_col = _u32(_token("grid"), 0.9)
+    band_rgba = _as_rgba(band_color) if band_color is not None else series_color
+    grid_rgba = _as_rgba(grid_color) if grid_color is not None else _token("grid")
+    bg_rgba = _as_rgba(background_color) if background_color is not None else _token("panel_bg")
+    grid_col = _u32(grid_rgba, 0.55)
+    zero_col = _u32(grid_rgba, 1.0)
+    frame_col = _u32(grid_rgba, 0.9)
     muted_col = _u32(_token("muted"))
-    bg_col = _u32(_token("panel_bg"))
+    bg_col = _u32(bg_rgba)
 
     # Reserve the widget rect. invisible_button (not dummy) so hover honours window
     # stacking and clipping.
@@ -832,7 +953,7 @@ def mini_plot(
         return
 
     x_range = _finite_range(x_data)
-    y_range = _finite_range(y_data, ov_data)
+    y_range = _finite_range(y_data, ov_data, band_lo_data, band_hi_data)
     if x_range is None or y_range is None:
         draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
         text = "no finite data"
@@ -856,37 +977,38 @@ def mini_plot(
     def to_screen_y(values: np.ndarray) -> np.ndarray:
         return py1 - (values - y_lo) * scale_y
 
-    # --- grid, ticks, zero line -------------------------------------------------
-    for tick in _nice_ticks(y_lo, y_hi, 4):
-        sy = py1 - (tick - y_lo) * scale_y
-        if sy < py0 - 0.5 or sy > py1 + 0.5:
-            continue
-        draw_list.add_line((px0, sy), (px1, sy), grid_col, 1.0)
-        text = _fmt_tick(tick)
-        size = imgui.calc_text_size(text)
-        draw_list.add_text((max(x0 + 1.0, px0 - 5.0 - size.x), sy - size.y * 0.5), muted_col, text)
-
-    for tick in _nice_ticks(x_lo, x_hi, 4):
-        sx = px0 + (tick - x_lo) * scale_x
-        if sx < px0 - 0.5 or sx > px1 + 0.5:
-            continue
-        draw_list.add_line((sx, py0), (sx, py1), grid_col, 1.0)
-        text = _fmt_tick(tick)
-        size = imgui.calc_text_size(text)
-        tx = min(max(sx - size.x * 0.5, px0 - 4.0), px1 - size.x)
-        draw_list.add_text((tx, py1 + 2.0), muted_col, text)
-
-    if y_lo < 0.0 < y_hi:
-        sy = py1 + y_lo * scale_y
-        draw_list.add_line((px0, sy), (px1, sy), zero_col, 1.5)
-
-    draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
+    _draw_axes_frame(
+        draw_list,
+        x0,
+        px0,
+        py0,
+        px1,
+        py1,
+        x_lo,
+        x_hi,
+        y_lo,
+        y_hi,
+        scale_x,
+        scale_y,
+        grid_col,
+        zero_col,
+        frame_col,
+        muted_col,
+    )
 
     # --- series -----------------------------------------------------------------
     # One bucket per pixel column, capped so each series stays under MAX_PLOT_POINTS.
     columns = min(int(inner_w), MAX_PLOT_POINTS // 2)
     draw_list.push_clip_rect((px0, py0), (px1, py1), True)
     try:
+        if band_lo_data is not None and band_hi_data is not None and band_lo_data.size >= 2:
+            bx, blo, bhi = x_data[: band_lo_data.size], band_lo_data, band_hi_data
+            if bx.size > MAX_PLOT_POINTS:
+                stride = max(1, bx.size // MAX_PLOT_POINTS)
+                bx, blo, bhi = bx[::stride], blo[::stride], bhi[::stride]
+            _draw_band(
+                draw_list, to_screen_x(bx), to_screen_y(blo), to_screen_y(bhi), _u32(band_rgba, 0.25)
+            )
         if ov_data is not None:
             ox, oy = _minmax_decimate(x_data[: ov_data.size], ov_data, columns)
             _draw_series(draw_list, to_screen_x(ox), to_screen_y(oy), _u32(second_color), 1.5)
@@ -926,6 +1048,355 @@ def mini_plot(
         draw_list.add_text((px0 + 4.0, py0 + 2.0), muted_col, str(label))
 
 
+def mini_scatter(
+    id_str: str,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    height: float = 150.0,
+    point_colors: Optional[np.ndarray] = None,
+    palette: Optional[Sequence[Any]] = None,
+    color: Optional[Any] = None,
+    markers: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    marker_color: Optional[Any] = None,
+    background_color: Optional[Any] = None,
+    grid_color: Optional[Any] = None,
+    label: str = "",
+) -> None:
+    """An interactive scatter of unconnected points, optionally colored by category.
+
+    The unordered-point-cloud counterpart to :func:`mini_plot`: unlike a signal, a
+    cluster's x is not a function of a monotonic index, so there is no polyline and no
+    min/max envelope decimation (which assumes an ordering that does not exist here) --
+    points above ``MAX_PLOT_POINTS`` are uniform-stride subsampled instead. Apply always
+    commits the full, non-decimated result; this only affects what the preview draws.
+
+    Args:
+        point_colors: Optional per-point category labels (e.g. from
+            :func:`~glplot.gui.mathops2d.kmeans_cluster`). A non-negative label ``i``
+            indexes ``palette[i % len(palette)]``; a negative label (``-1``,
+            "unclustered") draws in the muted theme color instead. ``None`` draws every
+            point in ``color`` (or the accent token).
+        palette: The colors ``point_colors`` indexes into.
+            Defaults to :data:`_DEFAULT_QUALITATIVE_PALETTE`.
+        markers: An ``(xs, ys)`` pair drawn as larger, ringed dots on top -- centroids.
+        background_color/grid_color: Same override convention as :func:`mini_plot`.
+
+    Mismatched lengths are truncated to the shortest rather than raising -- this runs
+    inside a draw callback where an exception would kill the frame.
+    """
+    if not IMGUI_AVAILABLE:
+        return
+
+    x_data = _as_1d(x)
+    y_data = _as_1d(y)
+    if x_data.size != y_data.size:
+        n = min(x_data.size, y_data.size)
+        x_data, y_data = x_data[:n], y_data[:n]
+
+    colors_data: Optional[np.ndarray] = None
+    if point_colors is not None:
+        colors_data = _as_1d(point_colors)
+        if colors_data.size != x_data.size:
+            n = min(colors_data.size, x_data.size)
+            colors_data = colors_data[:n]
+            x_data, y_data = x_data[:n], y_data[:n]
+
+    marker_x: Optional[np.ndarray] = None
+    marker_y: Optional[np.ndarray] = None
+    if markers is not None:
+        marker_x = _as_1d(markers[0])
+        marker_y = _as_1d(markers[1])
+        if marker_x.size != marker_y.size:
+            m = min(marker_x.size, marker_y.size)
+            marker_x, marker_y = marker_x[:m], marker_y[:m]
+
+    active_palette = tuple(palette) if palette else _DEFAULT_QUALITATIVE_PALETTE
+    series_color = _as_rgba(color) if color is not None else _token("accent")
+    dot_color = _as_rgba(marker_color) if marker_color is not None else _token("warn")
+    grid_rgba = _as_rgba(grid_color) if grid_color is not None else _token("grid")
+    bg_rgba = _as_rgba(background_color) if background_color is not None else _token("panel_bg")
+    grid_col = _u32(grid_rgba, 0.55)
+    zero_col = _u32(grid_rgba, 1.0)
+    frame_col = _u32(grid_rgba, 0.9)
+    muted_col = _u32(_token("muted"))
+    bg_col = _u32(bg_rgba)
+
+    avail = imgui.get_content_region_avail()
+    width = max(64.0, float(avail.x))
+    box_height = max(32.0, float(height))
+    origin = imgui.get_cursor_screen_pos()
+    x0, y0 = float(origin.x), float(origin.y)
+
+    imgui.push_id(id_str)
+    imgui.invisible_button("##miniscatter", (width, box_height))
+    hovered = imgui.is_item_hovered()
+    imgui.pop_id()
+
+    x1, y1 = x0 + width, y0 + box_height
+    draw_list = imgui.get_window_draw_list()
+    draw_list.add_rect_filled((x0, y0), (x1, y1), bg_col, 3.0)
+
+    px0 = x0 + _MARGIN_LEFT
+    py0 = y0 + _MARGIN_TOP
+    px1 = x1 - _MARGIN_RIGHT
+    py1 = y1 - _MARGIN_BOTTOM
+    inner_w = px1 - px0
+    inner_h = py1 - py0
+    if inner_w < 8.0 or inner_h < 8.0:
+        draw_list.add_rect((x0, y0), (x1, y1), frame_col, rounding=3.0, thickness=1.0)
+        return
+
+    if x_data.size == 0:
+        draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
+        text = "no data"
+        size = imgui.calc_text_size(text)
+        draw_list.add_text(
+            (px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5), muted_col, text
+        )
+        return
+
+    x_range = _finite_range(x_data)
+    y_range = _finite_range(y_data)
+    if x_range is None or y_range is None:
+        draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
+        text = "no finite data"
+        size = imgui.calc_text_size(text)
+        draw_list.add_text(
+            (px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5), muted_col, text
+        )
+        return
+
+    x_lo, x_hi = _pad_range(x_range[0], x_range[1], 0.05)
+    y_lo, y_hi = _pad_range(y_range[0], y_range[1], 0.05)
+    scale_x = inner_w / (x_hi - x_lo)
+    scale_y = inner_h / (y_hi - y_lo)
+
+    def to_screen_x(values: np.ndarray) -> np.ndarray:
+        return px0 + (values - x_lo) * scale_x
+
+    def to_screen_y(values: np.ndarray) -> np.ndarray:
+        return py1 - (values - y_lo) * scale_y
+
+    _draw_axes_frame(
+        draw_list, x0, px0, py0, px1, py1, x_lo, x_hi, y_lo, y_hi,
+        scale_x, scale_y, grid_col, zero_col, frame_col, muted_col,
+    )
+
+    # --- points -------------------------------------------------------------
+    plot_x, plot_y, plot_colors = x_data, y_data, colors_data
+    if plot_x.size > MAX_PLOT_POINTS:
+        stride = max(1, plot_x.size // MAX_PLOT_POINTS)
+        plot_x, plot_y = plot_x[::stride], plot_y[::stride]
+        if plot_colors is not None:
+            plot_colors = plot_colors[::stride]
+
+    draw_list.push_clip_rect((px0, py0), (px1, py1), True)
+    try:
+        finite = np.isfinite(plot_x) & np.isfinite(plot_y)
+        sx = to_screen_x(plot_x[finite])
+        sy = to_screen_y(plot_y[finite])
+        if plot_colors is not None:
+            labels = plot_colors[finite]
+            unclustered_u32 = _u32(_token("muted"), 0.6)
+            for px, py, lbl in zip(sx.tolist(), sy.tolist(), labels.tolist()):
+                idx = int(round(lbl))
+                col = (
+                    unclustered_u32
+                    if idx < 0
+                    else _u32(active_palette[idx % len(active_palette)])
+                )
+                draw_list.add_circle_filled((px, py), 2.5, col)
+        else:
+            col = _u32(series_color)
+            for px, py in zip(sx.tolist(), sy.tolist()):
+                draw_list.add_circle_filled((px, py), 2.5, col)
+
+        if marker_x is not None and marker_x.size:
+            mfinite = np.isfinite(marker_x) & np.isfinite(marker_y)
+            msx = to_screen_x(marker_x[mfinite])
+            msy = to_screen_y(marker_y[mfinite])
+            dot_u32 = _u32(dot_color)
+            ring_u32 = _u32(_token("panel_bg"))
+            for cx, cy in zip(msx.tolist(), msy.tolist()):
+                draw_list.add_circle_filled((cx, cy), 5.0, dot_u32)
+                draw_list.add_circle((cx, cy), 5.0, ring_u32, 0, 1.5)
+
+        if hovered:
+            mouse = imgui.get_mouse_pos()
+            if px0 <= mouse.x <= px1 and py0 <= mouse.y <= py1 and sx.size:
+                dist2 = (sx - float(mouse.x)) ** 2 + (sy - float(mouse.y)) ** 2
+                nearest = int(np.argmin(dist2))
+                if float(dist2[nearest]) <= 144.0:  # within 12px
+                    raw_index = np.flatnonzero(finite)[nearest]
+                    imgui.begin_tooltip()
+                    if label:
+                        imgui.text_disabled(str(label))
+                    imgui.text("x = %s" % _fmt_value(float(plot_x[raw_index])))
+                    imgui.text("y = %s" % _fmt_value(float(plot_y[raw_index])))
+                    if plot_colors is not None:
+                        lbl = int(round(float(plot_colors[raw_index])))
+                        imgui.text_disabled(
+                            "cluster = unclustered" if lbl < 0 else f"cluster = {lbl}"
+                        )
+                    imgui.end_tooltip()
+    finally:
+        draw_list.pop_clip_rect()
+
+    if label:
+        draw_list.add_text((px0 + 4.0, py0 + 2.0), muted_col, str(label))
+
+
+def mini_heatmap(
+    id_str: str,
+    counts: np.ndarray,
+    x_edges: np.ndarray,
+    y_edges: np.ndarray,
+    *,
+    height: float = 150.0,
+    cmap: str = "magma",
+    background_color: Optional[Any] = None,
+    grid_color: Optional[Any] = None,
+    overlay_points: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    label: str = "",
+) -> None:
+    """A 2-D density grid (a histogram or KDE surface) rendered as filled cells.
+
+    Args:
+        counts: ``(nx, ny)`` grid of density/count values, e.g. from
+            :func:`~glplot.gui.mathops2d.density2d`.
+        x_edges: Bin edges along x, length ``nx + 1`` -- the ``np.histogram2d`` convention.
+        y_edges: Bin edges along y, length ``ny + 1``.
+        cmap: A matplotlib colormap name, looked up through
+            :func:`~glplot.gui.layerops.colormap_colors` -- the same normalise-then-look-up
+            ``pyplot.scatter(c=...)`` performs, so a heat map built here and one built from
+            code read as the same picture. ``layerops`` is imported locally (not at module
+            scope) so this module keeps importing on a machine with no OpenGL.
+        overlay_points: An optional ``(xs, ys)`` pair drawn as small dots on top -- the raw
+            samples the grid was built from, so a user sees the density AND what produced
+            it. Uniform-stride subsampled above ``MAX_PLOT_POINTS``, like every other
+            point-cloud overlay in this module.
+
+    A cell whose value cannot be colour-mapped (an unknown ``cmap`` name, or matplotlib
+    unavailable) falls back to a flat frame-coloured fill rather than raising -- this runs
+    inside a draw callback where an exception would kill the frame.
+    """
+    if not IMGUI_AVAILABLE:
+        return
+
+    grid = np.asarray(counts, dtype=np.float64)
+    x_edges_arr = _as_1d(x_edges)
+    y_edges_arr = _as_1d(y_edges)
+    nx = x_edges_arr.size - 1
+    ny = y_edges_arr.size - 1
+
+    grid_rgba = _as_rgba(grid_color) if grid_color is not None else _token("grid")
+    bg_rgba = _as_rgba(background_color) if background_color is not None else _token("panel_bg")
+    grid_col = _u32(grid_rgba, 0.55)
+    frame_col = _u32(grid_rgba, 0.9)
+    muted_col = _u32(_token("muted"))
+    bg_col = _u32(bg_rgba)
+
+    avail = imgui.get_content_region_avail()
+    width = max(64.0, float(avail.x))
+    box_height = max(32.0, float(height))
+    origin = imgui.get_cursor_screen_pos()
+    x0, y0 = float(origin.x), float(origin.y)
+
+    imgui.push_id(id_str)
+    imgui.invisible_button("##miniheatmap", (width, box_height))
+    imgui.pop_id()
+
+    x1, y1 = x0 + width, y0 + box_height
+    draw_list = imgui.get_window_draw_list()
+    draw_list.add_rect_filled((x0, y0), (x1, y1), bg_col, 3.0)
+
+    px0 = x0 + _MARGIN_LEFT
+    py0 = y0 + _MARGIN_TOP
+    px1 = x1 - _MARGIN_RIGHT
+    py1 = y1 - _MARGIN_BOTTOM
+    inner_w = px1 - px0
+    inner_h = py1 - py0
+    if inner_w < 8.0 or inner_h < 8.0:
+        draw_list.add_rect((x0, y0), (x1, y1), frame_col, rounding=3.0, thickness=1.0)
+        return
+
+    x_lo, x_hi = float(x_edges_arr[0]), float(x_edges_arr[-1])
+    y_lo, y_hi = float(y_edges_arr[0]), float(y_edges_arr[-1])
+    valid_grid = (
+        nx >= 1
+        and ny >= 1
+        and grid.shape == (nx, ny)
+        and math.isfinite(x_lo)
+        and math.isfinite(x_hi)
+        and x_hi > x_lo
+        and math.isfinite(y_lo)
+        and math.isfinite(y_hi)
+        and y_hi > y_lo
+    )
+    if not valid_grid:
+        draw_list.add_rect((px0, py0), (px1, py1), frame_col, rounding=0.0, thickness=1.0)
+        text = "no data"
+        size = imgui.calc_text_size(text)
+        draw_list.add_text(
+            (px0 + (inner_w - size.x) * 0.5, py0 + (inner_h - size.y) * 0.5), muted_col, text
+        )
+        return
+
+    scale_x = inner_w / (x_hi - x_lo)
+    scale_y = inner_h / (y_hi - y_lo)
+
+    def to_screen_x(values: np.ndarray) -> np.ndarray:
+        return px0 + (values - x_lo) * scale_x
+
+    def to_screen_y(values: np.ndarray) -> np.ndarray:
+        return py1 - (values - y_lo) * scale_y
+
+    try:
+        from . import layerops
+
+        cell_colors = layerops.colormap_colors(grid.ravel(), cmap).reshape(nx, ny, 4)
+    except Exception:
+        cell_colors = None
+
+    draw_list.push_clip_rect((px0, py0), (px1, py1), True)
+    try:
+        sx_edges = to_screen_x(x_edges_arr).tolist()
+        sy_edges = to_screen_y(y_edges_arr).tolist()
+        for i in range(nx):
+            left, right = sorted((sx_edges[i], sx_edges[i + 1]))
+            for j in range(ny):
+                top, bottom = sorted((sy_edges[j], sy_edges[j + 1]))
+                col = frame_col if cell_colors is None else _u32(tuple(cell_colors[i, j]))
+                draw_list.add_rect_filled((left, top), (right, bottom), col)
+
+        _draw_axes_frame(
+            draw_list, x0, px0, py0, px1, py1, x_lo, x_hi, y_lo, y_hi,
+            scale_x, scale_y, grid_col, grid_col, frame_col, muted_col,
+        )
+
+        if overlay_points is not None:
+            ox = _as_1d(overlay_points[0])
+            oy = _as_1d(overlay_points[1])
+            n = min(ox.size, oy.size)
+            ox, oy = ox[:n], oy[:n]
+            if ox.size > MAX_PLOT_POINTS:
+                stride = max(1, ox.size // MAX_PLOT_POINTS)
+                ox, oy = ox[::stride], oy[::stride]
+            finite = np.isfinite(ox) & np.isfinite(oy)
+            if np.any(finite):
+                psx = to_screen_x(ox[finite]).tolist()
+                psy = to_screen_y(oy[finite]).tolist()
+                dot_col = _u32(_token("accent"), 0.5)
+                for px_, py_ in zip(psx, psy):
+                    draw_list.add_circle_filled((px_, py_), 1.5, dot_col)
+    finally:
+        draw_list.pop_clip_rect()
+
+    if label:
+        draw_list.add_text((px0 + 4.0, py0 + 2.0), muted_col, str(label))
+
+
 def _draw_series(
     draw_list: Any, sx: np.ndarray, sy: np.ndarray, col: int, thickness: float
 ) -> None:
@@ -943,6 +1414,27 @@ def _draw_series(
         else:
             i = int(run[0])
             draw_list.add_circle_filled((xs[i], ys[i]), thickness * 0.9, col)
+
+
+def _draw_band(
+    draw_list: Any, sx: np.ndarray, s_lo: np.ndarray, s_hi: np.ndarray, col: int
+) -> None:
+    """Fill a screen-space (lower, upper) band, breaking at non-finite samples like
+    :func:`_draw_series` -- one quad per consecutive pair within a finite run, so a band
+    that is only defined over part of the domain never bridges across the gap."""
+    finite = np.isfinite(sx) & np.isfinite(s_lo) & np.isfinite(s_hi)
+    runs = _split_runs(finite)
+    if not runs:
+        return
+    xs, los, his = sx.tolist(), s_lo.tolist(), s_hi.tolist()
+    for run in runs:
+        if run.size < 2:
+            continue
+        idx = run.tolist()
+        for a, b in zip(idx[:-1], idx[1:]):
+            draw_list.add_quad_filled(
+                (xs[a], los[a]), (xs[b], los[b]), (xs[b], his[b]), (xs[a], his[a]), col
+            )
 
 
 def _hover_tooltip(

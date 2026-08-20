@@ -233,12 +233,11 @@ _PREVIEW_CACHE: Dict[str, List[List[Tuple[float, float]]]] = {}
 def _auto_grid_color(background: Sequence[float]) -> Tuple[float, float, float]:
     """What ``renderers/axis.py`` picks for the grid when auto-contrast is on.
 
-    Mirrors ``axis.py:91``: dark ink on a light page, light ink on a dark one. Duplicated
-    for the same reason as :data:`AUTO_GRID_COLOR` — importing ``renderers/axis.py`` pulls
-    ``from OpenGL.GL import *`` and breaks headless import (CONTRACT §5.1).
+    Thin alias kept for the call sites already in this file; the real implementation is
+    :func:`glplot.gui.styles.auto_grid_color`, public so other GUI code (e.g. Math Lab's
+    style-matched preview) can share it instead of a third copy.
     """
-    lum = 0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
-    return (0.2, 0.2, 0.2) if lum > 0.5 else (0.8, 0.8, 0.8)
+    return styles.auto_grid_color(background)
 
 
 def _preview_curves(style: Any) -> List[List[Tuple[float, float]]]:

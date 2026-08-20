@@ -16,6 +16,7 @@ from ..utils.shaders import (
     IMAGE_VS,
     SCATTER_FS,
     SCATTER_VS,
+    marker_shape_index,
 )
 from .base import GLScatterBuffers
 
@@ -112,6 +113,8 @@ class ScatterRenderer:
         self.u_point_outline_color = glGetUniformLocation(self.prog, "u_point_outline_color")
         self.u_point_outline_width_px = glGetUniformLocation(self.prog, "u_point_outline_width_px")
         # The general outline (style.outline_*), outside the marker. See the class docstring.
+        self.u_marker_shape = glGetUniformLocation(self.prog, "u_marker_shape")
+
         self.u_outline_enabled = glGetUniformLocation(self.prog, "u_outline_enabled")
         self.u_outline_color = glGetUniformLocation(self.prog, "u_outline_color")
         self.u_outline_width = glGetUniformLocation(self.prog, "u_outline_width")
@@ -330,6 +333,11 @@ class ScatterRenderer:
         glUniform1f(self.u_alpha, float(effective_alpha))
         glUniform1f(self.u_point_size_px, effective_size)
 
+        # Set unconditionally, like the outline uniforms below: a shader program is shared
+        # across every layer drawn in a frame, so a layer that names no marker must reset
+        # this to the circle rather than inherit the previous layer's shape.
+        glUniform1i(self.u_marker_shape, marker_shape_index(layer.metadata.get("marker")))
+
         # The per-marker ring, inside the sprite (style.point_outline_*).
         glUniform1i(self.u_point_outline_enabled, 1 if layer.style.point_outline_enabled else 0)
         if layer.style.point_outline_enabled:
@@ -492,17 +500,28 @@ class ScatterRenderer:
 
     def _make_image_texture(self, layer: ScatterLayer) -> int:
         """Upload the imshow matrix as a GL_RGBA texture and return the texture ID."""
-        import matplotlib.cm as mcm
+        # Deferred: pyplot imports this module (via the renderer manager), so importing
+        # pyplot at module scope here would be circular. Same idiom as
+        # renderers/axis.py's `from .legend import _add_scaled_text`.
+        from ..pyplot import _colormap_values
 
         meta = layer.metadata
         matrix = np.asarray(meta["matrix"], dtype=float)
-        lo = meta.get("vmin")
-        hi = meta.get("vmax")
-        lo = float(np.nanmin(matrix)) if lo is None else float(lo)
-        hi = float(np.nanmax(matrix)) if hi is None else float(hi)
-        norm = np.clip((matrix - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
-        cmap_fn = mcm.get_cmap(meta.get("cmap", "viridis"))
-        rgba = cmap_fn(norm).astype(np.float32)  # (rows, cols, 4)
+        norm = meta.get("norm")
+        vmin = meta.get("vmin")
+        vmax = meta.get("vmax")
+        # A real Normalize (or scale name) replaces vmin/vmax outright -- same contract
+        # `_normalize_cvalues` enforces for scatter/patch coloring. Falling back to a
+        # hardcoded linear ramp here (as this used to) silently ignored `norm=` for
+        # every imshow()/contourf() pixel actually painted live.
+        rgba_flat = _colormap_values(
+            matrix.ravel(),
+            cmap=meta.get("cmap", "viridis"),
+            vmin=None if norm is not None else vmin,
+            vmax=None if norm is not None else vmax,
+            norm=norm,
+        )
+        rgba = np.asarray(rgba_flat, dtype=np.float32).reshape(matrix.shape + (4,))
         nan_mask = np.isnan(matrix)
         rgba[nan_mask] = 0.0
         # OpenGL origin is bottom-left; "upper" means row-0 = image top → flip

@@ -194,6 +194,21 @@ class TestApplyStyle:
         plot = GPULinePlot()
         assert styles.apply_style(plot, styles.get_style("hand")) == 0
 
+    def test_records_the_style_key_on_the_plot(self):
+        """Every caller of apply_style must agree on "what's currently applied".
+
+        This used to be bookkept only inside ``pyplot.plot_style()``, so a preset applied
+        through the Style panel's own path (``style_command`` -> ``apply_style``, never
+        touching the public API) left ``plot._style_key`` stale. Math Lab's style-matched
+        preview reads this attribute directly, so it must be set by apply_style itself.
+        """
+        plot = _plot_with_layers()
+        assert getattr(plot, "_style_key", "") == ""
+        styles.apply_style(plot, styles.get_style("marker"))
+        assert plot._style_key == "marker"
+        styles.apply_style(plot, styles.get_style("neon"))
+        assert plot._style_key == "neon"
+
 
 class TestStyleUndo:
     """Test that applying a preset is reversible — SPEC_FIX P1-F's required regression."""
@@ -293,6 +308,41 @@ class TestStyleUndo:
         undo = UndoStack()
         undo.push(styles.style_command(plot, styles.get_style("chalk")))
         assert undo.peek_undo() == "Style: Chalk"
+
+    def test_style_key_round_trips_through_undo_redo(self):
+        """``plot._style_key`` is part of the undoable state, not a side channel."""
+        plot = _plot_with_layers()
+        undo = UndoStack()
+        undo.push(styles.style_command(plot, styles.get_style("dark")))
+        assert plot._style_key == "dark"
+
+        undo.push(styles.style_command(plot, styles.get_style("chalk")))
+        assert plot._style_key == "chalk"
+
+        undo.undo()
+        assert plot._style_key == "dark"
+        undo.undo()
+        assert getattr(plot, "_style_key", "") == ""
+
+        undo.redo()
+        assert plot._style_key == "dark"
+
+
+class TestAutoGridColor:
+    """Test the public grid-auto-contrast helper Math Lab's preview reuses."""
+
+    def test_dark_ink_on_a_light_page(self):
+        assert styles.auto_grid_color((0.95, 0.95, 0.95)) == (0.2, 0.2, 0.2)
+
+    def test_light_ink_on_a_dark_page(self):
+        assert styles.auto_grid_color((0.05, 0.05, 0.05)) == (0.8, 0.8, 0.8)
+
+    def test_matches_the_panel_alias(self):
+        """glplot.gui.panels.style keeps a thin alias; it must not drift from this."""
+        from glplot.gui.panels import style as style_panel
+
+        for background in ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (0.5, 0.5, 0.5)):
+            assert style_panel._auto_grid_color(background) == styles.auto_grid_color(background)
 
 
 class TestHandDrawn:

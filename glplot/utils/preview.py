@@ -17,6 +17,27 @@ AXIS_LABEL_FONTSIZE = 30
 TICK_LABEL_FONTSIZE = 24
 LEGEND_FONTSIZE = 24
 
+#: Area, in pt^2, of a scatter marker whose size nobody chose -- matplotlib's own default
+#: with the same doubling the font sizes above get, and for the same reason: `savefig()`
+#: renders at `figsize * scale` (scale=2) but sizes markers and text in *points*, so an
+#: unscaled default covers a quarter of the relative area it would in a plain matplotlib
+#: figure. Measured before this existed: 0.32x matplotlib's relative diameter, ~10% of its
+#: area, which is what "the default points are tiny" was.
+DEFAULT_SCATTER_SIZE_PT2 = (2.0 * 6.0) ** 2  # 6.0 == matplotlib's rcParams lines.markersize
+
+#: A colorbar's own chrome. Smaller than the panel-scale sizes above (the bar is a
+#: narrow strip beside a full axis, not an axis itself) but nowhere near matplotlib's
+#: unstyled ~10pt default, which is what these used to fall through to -- a bar's
+#: numbers were rendering at a third the size of the tick numbers right next to them.
+COLORBAR_LABEL_FONTSIZE = 22
+COLORBAR_TICK_FONTSIZE = 18
+
+#: An `inset=True` colorbar sits inside its host panel, over whatever was already
+#: plotted there, in a strip a fraction of that panel's own size -- a notch smaller
+#: again so the tick row and the axis label do not crowd each other inside it.
+COLORBAR_INSET_LABEL_FONTSIZE = 19
+COLORBAR_INSET_TICK_FONTSIZE = 16
+
 
 def _legend_label(layer: object) -> Optional[str]:
     """The label to hand a matplotlib artist for this layer, or ``None`` for no legend entry.
@@ -284,12 +305,19 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             )
             continue
         if layer.metadata.get("artist") == "contourf":
+            cf_norm = layer.metadata.get("norm")
             ax.contourf(
                 layer.metadata["X"],
                 layer.metadata["Y"],
                 layer.metadata["Z"],
                 levels=layer.metadata.get("levels", 10),
                 cmap=layer.metadata.get("cmap", "viridis"),
+                norm=cf_norm,
+                # A real Normalize instance and vmin/vmax are mutually exclusive
+                # (matplotlib raises rather than picking a winner) -- only fall back to
+                # vmin/vmax when there is no norm to conflict with.
+                vmin=layer.metadata.get("vmin") if cf_norm is None else None,
+                vmax=layer.metadata.get("vmax") if cf_norm is None else None,
                 alpha=layer.metadata.get("alpha"),
             )
             continue
@@ -302,19 +330,39 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                 contour_kwargs["colors"] = layer.metadata.get("colors")
             else:
                 contour_kwargs["cmap"] = layer.metadata.get("cmap", "viridis")
-            ax.contour(
+                c_norm = layer.metadata.get("norm")
+                contour_kwargs["norm"] = c_norm
+                if c_norm is None:
+                    contour_kwargs["vmin"] = layer.metadata.get("vmin")
+                    contour_kwargs["vmax"] = layer.metadata.get("vmax")
+            contour_set = ax.contour(
                 layer.metadata["X"], layer.metadata["Y"], layer.metadata["Z"], **contour_kwargs
             )
+            # gplt.clabel(cs, ...) stashes its request on the layer itself (see that
+            # function's docstring): GLPlot has no live contour geometry to break a line
+            # against, so labelling only ever happens here, against the real ContourSet
+            # this export just built.
+            clabel_kwargs = layer.metadata.get("clabel")
+            if clabel_kwargs is not None:
+                ax.clabel(contour_set, **clabel_kwargs)
             continue
         if layer.metadata.get("artist") == "imshow":
             xmin, xmax, ymin, ymax = layer.metadata["extent"]
+            im_matrix = layer.metadata["matrix"]
+            # A true-color RGB(A) image carries its own per-pixel colour and has no
+            # scalar norm/cmap to reconstruct -- matplotlib's own imshow() raises if
+            # `norm=` is passed alongside (M, N, 3/4) data, same as pyplot.imshow()
+            # silently ignores cmap/vmin/vmax/norm for it (see that docstring).
+            im_is_rgb = np.asarray(im_matrix).ndim == 3
+            im_norm = None if im_is_rgb else layer.metadata.get("norm")
             ax.imshow(
-                layer.metadata["matrix"],
+                im_matrix,
                 extent=(xmin, xmax, ymin, ymax),
                 origin=layer.metadata.get("origin", "upper"),
                 cmap=layer.metadata.get("cmap", "viridis"),
-                vmin=layer.metadata.get("vmin"),
-                vmax=layer.metadata.get("vmax"),
+                norm=im_norm,
+                vmin=layer.metadata.get("vmin") if im_norm is None else None,
+                vmax=layer.metadata.get("vmax") if im_norm is None else None,
                 # Whatever `imshow(aspect=...)` actually resolved to (`pyplot.imshow`
                 # defaults this to 'equal', matplotlib's own default) -- hardcoding
                 # 'auto' here made every headless-exported image stretch to the
@@ -369,11 +417,22 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             pass  # arrowheads handled by ax.quiver() above — skip raw triangles
         elif layer.layer_type == "scatter" and layer.pts is not None:
             pts = layer.pts
+            # A size nobody chose falls back to `DEFAULT_SCATTER_SIZE_PT2` rather than to
+            # GLPlot's own default, which is a *pixel diameter*: handing that 10 straight
+            # to `s` -- a pt^2 AREA -- drew a 3.2 pt marker where matplotlib draws 6 pt.
+            # A size the caller *did* choose is still passed through untouched, so no
+            # existing figure that tuned `s=` moves.
+            explicit = layer.metadata.get("size_is_explicit", True)
             ax.scatter(
                 pts[:, 0],
                 pts[:, 1],
                 c=layer.colors,
-                s=layer.style.point_size,
+                s=layer.style.point_size if explicit else DEFAULT_SCATTER_SIZE_PT2,
+                # `marker=` was accepted by scatter() and stored on the layer, but never
+                # actually reached this reconstruction -- every point exported as a
+                # circle regardless of what was asked for. `None` here is the same "use
+                # matplotlib's own default" as omitting the keyword entirely.
+                marker=layer.metadata.get("marker") or None,
                 label=_legend_label(layer),
                 **_outline_edge_kwargs(layer.style),
             )
@@ -472,7 +531,61 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             _apply_outline(text, layer.style)
 
 
-def _finish_axes(ax: object, has_3d: bool, engine: object) -> None:
+def _resolve_axes_title(panel: object, engine: object, allow_caption: bool = True) -> str:
+    """The axes title for ``panel``: its own, else the window caption if a real one.
+
+    ``engine.title`` doubles as the GLFW window caption and defaults to "GLPlot", so
+    falling straight through to it stamped that literal string as the axes title of
+    every untitled figure -- which is exactly what the live renderer already refuses to
+    do (``renderers/axis.py::_resolve_title``, same ``STOCK_WINDOW_TITLES`` test). The
+    export disagreeing with the live window about this was the whole bug.
+
+    ``allow_caption`` is the *other* half of it. ``set_title`` writes both the caption
+    and the active panel's own title, so on a split figure the caption holds whichever
+    panel was titled last -- letting every panel fall back to it stamps that one title
+    across all of them. Only the primary panel may fall back (that is the single-panel
+    case, where the caption genuinely is the figure's one title); the rest show their
+    own title or none.
+    """
+    from ..options import STOCK_WINDOW_TITLES
+
+    candidate = str(getattr(panel, "title", "") or "")
+    if not candidate:
+        if not allow_caption:
+            return ""
+        candidate = str(getattr(engine, "title", "") or "")
+    # Filter whichever source won, not just the caption: `set_title` copies its argument
+    # onto the active panel as well, so testing only `engine.title` let a stock caption
+    # reach the plot through the panel instead. Same rule as the live renderer's
+    # `renderers/axis.py::_resolve_title`.
+    return "" if candidate in STOCK_WINDOW_TITLES else candidate
+
+
+def _apply_panel_labels(ax: object, panel: object, engine: object) -> None:
+    """Apply ``panel``'s own axis names and title -- the per-panel half of the chrome.
+
+    Split out of :func:`_finish_axes` (which stays primary-only, because the legend and
+    the axis *scales* it also applies are genuinely figure-global) so that every panel
+    of a split figure gets named, not just whichever one happened to be active when
+    ``savefig()`` ran. See :attr:`glplot.core.panel.Panel.xlabel`.
+    """
+    opts = getattr(engine, "options", None)
+    if getattr(panel, "xlabel", ""):
+        ax.set_xlabel(
+            panel.xlabel,
+            fontsize=getattr(opts, "axis_xlabel_fontsize", None) or AXIS_LABEL_FONTSIZE,
+        )
+    if getattr(panel, "ylabel", ""):
+        ax.set_ylabel(
+            panel.ylabel,
+            fontsize=getattr(opts, "axis_ylabel_fontsize", None) or AXIS_LABEL_FONTSIZE,
+        )
+    title = _resolve_axes_title(panel, engine, allow_caption=False)
+    if title:
+        ax.set_title(title, fontsize=getattr(opts, "axis_title_fontsize", None) or TITLE_FONTSIZE)
+
+
+def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None) -> None:
     """Apply the figure-global chrome (title, labels, legend, scale, ticks) to ``ax``.
 
     These read off ``engine`` directly (``engine.title``, ``engine.xlabel``, ...) rather
@@ -481,21 +594,32 @@ def _finish_axes(ax: object, has_3d: bool, engine: object) -> None:
     Called once, for whichever panel is ``engine.active_panel`` -- the historical
     single-scene behaviour, preserved rather than guessed at for every extra panel.
     """
+    # `title()`/`xlabel()`/`ylabel()` all accept an explicit `fontsize=` and store it on
+    # `engine.options.axis_*_fontsize` (see `_set_title`/`xlabel()`/`ylabel()` in
+    # pyplot.py) -- honoured here when given, rather than always overwritten by the
+    # panel-scale constant below. A caller's explicit size being silently dropped in the
+    # one place it actually renders (the headless export) is exactly the "keyword
+    # accepted, quietly ignored" failure this codebase's own compat tests exist to catch.
+    opts = getattr(engine, "options", None)
+    title_fontsize = getattr(opts, "axis_title_fontsize", None) or TITLE_FONTSIZE
+    xlabel_fontsize = getattr(opts, "axis_xlabel_fontsize", None) or AXIS_LABEL_FONTSIZE
+    ylabel_fontsize = getattr(opts, "axis_ylabel_fontsize", None) or AXIS_LABEL_FONTSIZE
+
     if getattr(engine, "grid_visible", False):
         ax.grid(True, alpha=0.25)
     if hasattr(engine, "xlabel"):
-        ax.set_xlabel(engine.xlabel, fontsize=AXIS_LABEL_FONTSIZE)
+        ax.set_xlabel(engine.xlabel, fontsize=xlabel_fontsize)
     if hasattr(engine, "ylabel"):
-        ax.set_ylabel(engine.ylabel, fontsize=AXIS_LABEL_FONTSIZE)
+        ax.set_ylabel(engine.ylabel, fontsize=ylabel_fontsize)
     if has_3d:
         # The axis titles set through the 3D panel take precedence over the engine's 2D
         # ones: a 3D scene's labels live on ``axes3d``, and falling straight through to
         # ``engine.zlabel`` used to export a literal "z" over a named axis.
         axes3d_opts = getattr(engine, "axes3d", None)
         if getattr(axes3d_opts, "xlabel", ""):
-            ax.set_xlabel(axes3d_opts.xlabel, fontsize=AXIS_LABEL_FONTSIZE)
+            ax.set_xlabel(axes3d_opts.xlabel, fontsize=xlabel_fontsize)
         if getattr(axes3d_opts, "ylabel", ""):
-            ax.set_ylabel(axes3d_opts.ylabel, fontsize=AXIS_LABEL_FONTSIZE)
+            ax.set_ylabel(axes3d_opts.ylabel, fontsize=ylabel_fontsize)
         ax.set_zlabel(
             getattr(axes3d_opts, "zlabel", "") or getattr(engine, "zlabel", "z") or "z",
             fontsize=AXIS_LABEL_FONTSIZE,
@@ -508,8 +632,9 @@ def _finish_axes(ax: object, has_3d: bool, engine: object) -> None:
         ax.tick_params(labelsize=TICK_LABEL_FONTSIZE)
     else:
         ax.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE)
-    if getattr(engine, "title", ""):
-        ax.set_title(engine.title, fontsize=TITLE_FONTSIZE)
+    resolved_title = _resolve_axes_title(panel, engine)
+    if resolved_title:
+        ax.set_title(resolved_title, fontsize=title_fontsize)
     handles, labels = ax.get_legend_handles_labels()
     if labels:
         unique = []
@@ -737,6 +862,7 @@ def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_
     import matplotlib
 
     matplotlib.use("Agg", force=True)
+    import matplotlib.cm as mcm
     import matplotlib.pyplot as mpl
 
     # `engine.width`/`engine.height` are pixels; recovering the figure's physical size in
@@ -752,6 +878,51 @@ def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_
     primary = getattr(engine, "active_panel", None)
     single_3d_ax = None
     title_ax = None
+
+    def _colorbar_mappable(cb):
+        # `norm`/`cmap` are the same objects `colorbar()` resolved live (see
+        # `ColorbarSpec`), so the headless bar cannot independently drift from what the
+        # live GL window shows.
+        return mcm.ScalarMappable(norm=cb.norm, cmap=cb.cmap)
+
+    # An inset bar has no room outside the panel for its ticks (that is the whole reason
+    # to inset it) -- point them inward instead. Same mapping the live renderer uses
+    # (`renderers/colorbar.py`), kept as a local copy rather than an import so this module
+    # stays decoupled from the live-renderer internals it otherwise never touches.
+    _opposite_side = {"left": "right", "right": "left", "top": "bottom", "bottom": "top"}
+
+    def _colorbar_location(cb):
+        return _opposite_side[cb.location] if cb.inset else cb.location
+
+    def _finalize_colorbar(cb_obj, cb):
+        """Size (and, for an inset bar, outline) a finished colorbar's own chrome.
+
+        Applied after the real ``Colorbar`` exists rather than through ``fig.colorbar``'s
+        own ``label=``, which offers no size control and left every bar's numbers at
+        matplotlib's unstyled default next to panel ticks four times their size.
+
+        An inset bar sits *over* the plotted content, so its numbers get a thin
+        contrasting stroke instead of the opaque backing panel they used to be given --
+        the box hid a rectangle of the very image the bar is describing, which is a
+        strange thing for a colorbar to do. ``withStroke`` is the same path effect
+        ``_apply_outline`` already uses to keep a data label legible over data.
+        """
+        tick_size = COLORBAR_INSET_TICK_FONTSIZE if cb.inset else COLORBAR_TICK_FONTSIZE
+        label_size = COLORBAR_INSET_LABEL_FONTSIZE if cb.inset else COLORBAR_LABEL_FONTSIZE
+        cb_obj.ax.tick_params(labelsize=tick_size)
+        if cb.label:
+            cb_obj.set_label(cb.label, fontsize=label_size)
+        if not cb.inset:
+            return
+
+        import matplotlib.patheffects as path_effects
+
+        stroke = [path_effects.withStroke(linewidth=2.4, foreground="white")]
+        for text in list(cb_obj.ax.get_xticklabels()) + list(cb_obj.ax.get_yticklabels()):
+            text.set_path_effects(stroke)
+        for axis_label in (cb_obj.ax.xaxis.label, cb_obj.ax.yaxis.label):
+            if axis_label.get_text():
+                axis_label.set_path_effects(stroke)
 
     if len(panels) > 1:
         fig = mpl.figure(figsize=(width * scale, height * scale), dpi=120)
@@ -787,11 +958,42 @@ def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_
             ax = fig.add_axes(rect, projection="3d") if panel_3d else fig.add_axes(rect)
             _draw_layers(ax, panel.scene.layers, panel_3d, engine)
             if panel is primary:
-                _finish_axes(ax, panel_3d, engine)
+                _finish_axes(ax, panel_3d, engine, panel=panel)
                 title_ax = ax
             else:
                 ax.autoscale(enable=True)
+                _apply_panel_labels(ax, panel, engine)
+                # `_finish_axes` (title/xlabel/ylabel/legend) stays primary-only -- those
+                # read one shared value off `engine`, not a per-panel one, and applying
+                # them here would just repeat whichever panel happens to be primary onto
+                # every other panel. Tick label size is different: it is a genuine
+                # per-axes matplotlib property with no such shared-value constraint, so
+                # leaving it off every non-primary panel had no reason behind it and was
+                # just leaving 3 panels of a 4-panel figure at matplotlib's tiny unstyled
+                # default while the 4th got the figure's real (much larger) size.
+                ax.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE)
             _apply_style_chrome(fig, ax, panel_3d, engine)
+            for cb in getattr(panel, "colorbars", None) or []:
+                # `cax=`, not `ax=`: `panel.rect_frac` was already shrunk by `colorbar()`
+                # itself at call time (unless `inset=True`, which never shrinks it), so
+                # letting matplotlib auto-shrink `ax` again here would double the gap.
+                cax = fig.add_axes(_margined_rect(tuple(cb.rect_frac)))
+                cb_obj = fig.colorbar(
+                    _colorbar_mappable(cb),
+                    cax=cax,
+                    orientation=cb.orientation,
+                    # `location=`, not just `orientation=`: with an explicit `cax=`,
+                    # matplotlib has no way to infer which side of the bar the caller
+                    # actually put ticks-outward on, and silently defaults to the right
+                    # (for vertical) / bottom (for horizontal) regardless of where the
+                    # bar itself landed -- wrong for `location="left"`/`"top"`, and for
+                    # any `inset=True` bar, whose ticks point inward instead.
+                    location=_colorbar_location(cb),
+                    ticks=cb.ticks,
+                    format=cb.format,
+                    label=None,
+                )
+                _finalize_colorbar(cb_obj, cb)
     else:
         # No panel model (defensive, for a test double), or exactly one panel: matplotlib's
         # own auto margins for ticks, labels and title, exactly as before panels existed.
@@ -803,11 +1005,48 @@ def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_
         else:
             fig, ax = mpl.subplots(figsize=(width * scale, height * scale), dpi=120)
         _draw_layers(ax, layers, has_3d, engine)
-        _finish_axes(ax, has_3d, engine)
+        _finish_axes(ax, has_3d, engine, panel=primary)
         _apply_style_chrome(fig, ax, has_3d, engine)
         title_ax = ax
         if has_3d:
             single_3d_ax = ax
+        # No `panel.rect_frac` placement to reuse here (`mpl.subplots()` owns its own
+        # default margins), so this is matplotlib's own auto-shrink form instead of the
+        # `cax=` one the multi-panel branch above uses.
+        for cb in getattr(primary, "colorbars", None) or []:
+            if cb.inset:
+                # `ax.inset_axes` bounds are fractions of `ax`'s own box, not the
+                # figure's -- recomputed here rather than reusing `cb.rect_frac` (which
+                # is a figure-fraction rect meant for the live renderer's own geometry
+                # and the multi-panel branch's `cax=` placement above, a different
+                # coordinate system from this single-ax branch's).
+                from ..pyplot import inset_colorbar_bounds
+
+                cax = ax.inset_axes(inset_colorbar_bounds(cb), transform=ax.transAxes)
+                cb_obj = fig.colorbar(
+                    _colorbar_mappable(cb),
+                    cax=cax,
+                    orientation=cb.orientation,
+                    location=_colorbar_location(cb),
+                    ticks=cb.ticks,
+                    format=cb.format,
+                    label=None,
+                )
+                _finalize_colorbar(cb_obj, cb)
+                continue
+            cb_obj = fig.colorbar(
+                _colorbar_mappable(cb),
+                ax=ax,
+                location=cb.location,
+                fraction=cb.fraction,
+                pad=cb.pad,
+                shrink=cb.shrink,
+                aspect=cb.aspect,
+                ticks=cb.ticks,
+                format=cb.format,
+                label=None,
+            )
+            _finalize_colorbar(cb_obj, cb)
 
     if len(panels) <= 1:
         # Fixed, content-independent margins -- not fig.tight_layout(). tight_layout()

@@ -457,21 +457,35 @@ class AxisRenderer:
         return str(getattr(plot, attr_name, "") or "")
 
     def _resolve_title(self, axis: AxisManager) -> str:
-        """Resolve the on-plot title, refusing to promote a stock window caption.
+        """Resolve the on-plot title, per panel, refusing to promote a stock caption.
 
-        `axis_title` is unambiguous. Falling back to the window caption is what makes
-        `gplt.title()` -- which writes only that caption (`engine.set_title`) -- draw
-        something, and matches the savefig path, where `preview.py:315` has always used the
-        same attribute as the axes title. But `GPULinePlot` defaults its caption to
-        "GLPlot", so an unconditional fallback would stamp that on every untitled plot.
-        Only a caption the caller actually chose is promoted.
+        `axis_title` (the GUI channel) is unambiguous and wins. Otherwise the *active*
+        panel's own title is used -- this runs inside the per-panel overlay pass, which
+        swaps `active_panel_index` around it, so each panel resolves its own.
+
+        The window caption is the last resort, and only on a single-panel figure. It is
+        what makes `gplt.title()` draw something there, but `set_title` writes it *and*
+        the active panel's title, so on a split figure the caption holds whichever panel
+        was titled last -- falling back to it per panel stamped that one title across all
+        of them. And since `GPULinePlot` defaults its caption to "GLPlot", an
+        unconditional fallback would stamp that literal string on every untitled plot;
+        only a caption the caller actually chose is ever promoted.
         """
         value = str(getattr(self.options, "axis_title", "") or "")
         if value:
             return value
         plot = getattr(axis, "plot", None)
-        caption = str(getattr(plot, "title", "") or "")
-        return "" if caption in STOCK_WINDOW_TITLES else caption
+        panel = getattr(plot, "active_panel", None)
+        candidate = str(getattr(panel, "title", "") or "")
+        if not candidate:
+            if len(getattr(plot, "panels", None) or []) > 1:
+                return ""
+            candidate = str(getattr(plot, "title", "") or "")
+        # The stock-caption test applies to whichever source won, not just the caption:
+        # `set_title` copies its argument onto the active panel *as well as* the window
+        # caption, so checking only the latter let `set_title("GLPlot")` reach the plot
+        # through the panel and caption it with the product name anyway.
+        return "" if candidate in STOCK_WINDOW_TITLES else candidate
 
     def _draw_labels(self, axis: AxisManager, ctx: RenderContext) -> None:
         """Draw numeric labels along the axes."""

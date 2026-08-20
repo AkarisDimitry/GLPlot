@@ -67,6 +67,7 @@ __all__ = [
     "STYLE_KEYS",
     "TickSettings",
     "apply_style",
+    "auto_grid_color",
     "oversized_layers",
     "capture_state",
     "get_style",
@@ -94,6 +95,19 @@ HAND_DRAWN_MAX_POINTS = 50_000
 #: reversible and — more importantly — never applied twice on top of itself. Kept under
 #: ``layer.metadata``, which the GUI must preserve anyway (CONTRACT §4.4).
 _SOURCE_XY_KEY = "_glplot_style_source_xy"
+
+
+def auto_grid_color(background: Sequence[float]) -> RGB:
+    """What ``renderers/axis.py`` picks for the grid when a preset leaves it on auto-contrast.
+
+    Mirrors ``axis.py:_grid_color``: dark ink on a light page, light ink on a dark one. A
+    small pure function so any GUI code that needs "what will the grid actually look like"
+    (a preset card thumbnail, an ImGui-drawn preview matching the live plot's style) can
+    call it without importing ``renderers/axis.py``, which pulls ``from OpenGL.GL import *``
+    and would break headless import (CONTRACT §5.1).
+    """
+    lum = 0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
+    return (0.2, 0.2, 0.2) if lum > 0.5 else (0.8, 0.8, 0.8)
 
 #: Tone-map operator indices understood by ``POST_COMPOSITE_FS`` (mirrors
 #: ``managers/effects.py``; duplicated rather than imported because ``effects`` does
@@ -1632,6 +1646,13 @@ def apply_style(plot: Any, style: PlotStyle, *, layers: bool = True) -> int:
     # paint the box in the outgoing preset's colours.
     _rebuild_axes3d(plot)
 
+    # The one place this is recorded regardless of caller: ``gplt.plot_style()`` used to set
+    # this itself, but a preset applied by clicking a card in the Style panel routes through
+    # here too and never touched it, so ``gplt.plot_style()`` (and anything else reading
+    # ``plot._style_key``, e.g. Math Lab's style-matched preview) silently under-reported
+    # after a GUI-driven change. Setting it here closes the gap for every caller at once.
+    plot._style_key = style.key
+
     layerops.mark_scene_dirty(plot)
     return skipped
 
@@ -1693,6 +1714,7 @@ def capture_state(plot: Any, *, layers: bool = True) -> Dict[str, Any]:
     visual = options.visual
 
     state: Dict[str, Any] = {
+        "style_key": str(getattr(plot, "_style_key", "") or ""),
         "options": {name: getattr(options, name) for name in _OPTION_FIELDS},
         "background_color": tuple(visual.background_color),
         "glow": {name: getattr(visual.glow, name) for name in _GLOW_FIELDS},
@@ -1772,6 +1794,8 @@ def restore_state(plot: Any, state: Dict[str, Any]) -> None:
     Layers that disappeared between the capture and the undo are skipped, not resurrected:
     the scene panel's removal is its own undo entry and owns that.
     """
+    plot._style_key = state.get("style_key", "")
+
     options = plot.options
     visual = options.visual
 

@@ -33,6 +33,7 @@ EXPECTED_FILES = [
     "25_log_scale_contourf.png",
     "26_logit_scale.png",
     "27_inset_axes_image.png",
+    "29_colorbar_gallery.png",
 ]
 
 

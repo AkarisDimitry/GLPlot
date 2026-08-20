@@ -98,3 +98,33 @@ class TestPlotStyleApply:
         # marker's first palette entry is its black, not the red we started with.
         painted = tuple(round(float(c), 3) for c in line.style.color[:3])
         assert painted == (0.13, 0.14, 0.16)
+
+
+class TestPlotStyleGuiSync:
+    """``plot_style()`` must report a preset applied via the GUI path, not just its own.
+
+    The Style panel never called ``gplt.plot_style()`` -- it calls ``styles.apply_style``
+    (through ``styles.style_command``, for undo) directly. Before this, ``_style_key`` was
+    bookkept only inside ``plot_style()`` itself, so a preset picked by clicking a card
+    left ``gplt.plot_style()`` reporting the *previous* code-driven key, or "" if none had
+    ever been set from code. ``apply_style`` now records it itself, so every caller agrees.
+    """
+
+    def test_a_style_applied_outside_the_api_is_still_reported(self):
+        _line()
+        plot = gplt._get_or_create_plot()
+        # Simulates the Style panel's own call path: styles.apply_style directly, never
+        # touching gplt.plot_style().
+        styles.apply_style(plot, styles.get_style("neon"))
+        assert gplt.plot_style() == "neon"
+
+    def test_undo_of_a_gui_applied_style_reports_the_previous_key(self):
+        from glplot.gui.history import UndoStack
+
+        _line()
+        plot = gplt._get_or_create_plot()
+        undo = UndoStack()
+        undo.push(styles.style_command(plot, styles.get_style("chalk")))
+        assert gplt.plot_style() == "chalk"
+        undo.undo()
+        assert gplt.plot_style() == ""  # nothing had been applied before this

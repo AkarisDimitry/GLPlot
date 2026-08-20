@@ -35,19 +35,25 @@ __all__ = [
     "derivative",
     "parametric_derivative",
     "smooth",
+    "rolling_stat",
+    "ROLLING_STATS",
     "add_noise",
     "resample",
     "normalize",
     "fit_polynomial",
     "fft_spectrum",
+    "envelope",
     "find_peaks",
     "butter_filter",
+    "iir_filter",
+    "IIR_FAMILIES",
     "detrend",
     "baseline_asls",
     "baseline_available",
     "BaselineUnavailableError",
     "BASELINE_UNAVAILABLE_MESSAGE",
     "autocorrelation",
+    "cross_correlation",
     "histogram",
     "fit_distribution",
     "distributions_available",
@@ -75,6 +81,21 @@ __all__ = [
     "fit_statistics",
     "initial_guess",
     "resolve_model",
+    "fit_polynomial_covariance",
+    "fit_model_robust",
+    "ROBUST_LOSS_KINDS",
+    "confidence_band",
+    "describe_extended",
+    "correlate",
+    "two_sample_test",
+    "two_sample_available",
+    "TWO_SAMPLE_METHODS",
+    "TWO_SAMPLE_UNAVAILABLE_MESSAGE",
+    "TwoSampleUnavailableError",
+    "confidence_interval_mean",
+    "confidence_interval_correlation",
+    "confidence_interval_difference",
+    "DIFFERENCE_CI_METHODS",
 ]
 
 # Relative tolerance used when deciding whether a sample grid is "uniform enough".
@@ -577,10 +598,17 @@ def smooth(y: Any, *, method: str = "moving_average", window: int = 11, **kw: An
             * ``"median"`` - ``scipy.ndimage.median_filter``; falls back to a numpy
               sliding-window median (no warning: the fallback is exact, not an
               approximation).
+            * ``"ema"`` - exponential moving average, pure numpy, always available.
+              Causal (uses only current and past samples, unlike the other three,
+              which are centered) -- what a live/streaming computation could actually
+              produce. Accepts ``alpha`` (defaults to ``2 / (window + 1)``, the
+              standard "N-period EMA" convention, e.g. matching
+              ``pandas.Series.ewm(span=N).mean()``).
         window: Window length. Clamped to ``[1, len(y)]`` and forced odd (an even
             window would bias the output by half a sample). ``window == 1`` returns
-            a copy unchanged.
-        **kw: ``sigma`` (gaussian) and ``polyorder`` (savgol) as above.
+            a copy unchanged. For ``"ema"``, only used to derive the default ``alpha``
+            when one is not given.
+        **kw: ``sigma`` (gaussian), ``polyorder`` (savgol), ``alpha`` (ema) as above.
 
     Returns:
         float64 array of length ``len(y)``.
@@ -588,10 +616,13 @@ def smooth(y: Any, *, method: str = "moving_average", window: int = 11, **kw: An
     Note:
         The edge-correcting methods (``moving_average``, ``gaussian``) do **not**
         let the signal decay toward zero at the boundaries, and they interpolate
-        across isolated nans rather than spreading them across a full window.
+        across isolated nans rather than spreading them across a full window. ``ema``
+        also interpolates across non-finite samples first (a causal recursive filter
+        has no way to recover from one otherwise: it would poison every later value).
 
     Raises:
-        ValueError: On empty/non-1-D input, an unknown method, or an unknown keyword.
+        ValueError: On empty/non-1-D input, an unknown method, an unknown keyword, or
+            (``ema`` only) an ``alpha`` outside ``(0, 1]``.
     """
     ya = _as_1d(y, "y")
 
@@ -600,6 +631,7 @@ def smooth(y: Any, *, method: str = "moving_average", window: int = 11, **kw: An
         "gaussian": {"sigma"},
         "savgol": {"polyorder"},
         "median": set(),
+        "ema": {"alpha"},
     }
     if method not in allowed_kw:
         raise ValueError(
@@ -646,13 +678,113 @@ def smooth(y: Any, *, method: str = "moving_average", window: int = 11, **kw: An
             )
             return _edge_corrected_convolve(ya, np.ones(w, dtype=np.float64))
 
-    # median
-    try:
-        from scipy.ndimage import median_filter
+    if method == "median":
+        try:
+            from scipy.ndimage import median_filter
 
-        return np.asarray(median_filter(ya, size=w, mode="nearest"), dtype=np.float64)
-    except Exception:
-        return _median_fallback(ya, w)
+            return np.asarray(median_filter(ya, size=w, mode="nearest"), dtype=np.float64)
+        except Exception:
+            return _median_fallback(ya, w)
+
+    # ema
+    alpha = kw.get("alpha", None)
+    alpha = 2.0 / (w + 1.0) if alpha is None else float(alpha)
+    if not (0.0 < alpha <= 1.0):
+        raise ValueError(f"alpha must be in (0, 1] (got {alpha!r})")
+    filled = _fill_nonfinite(ya, "y")
+    out = np.empty_like(filled)
+    out[0] = filled[0]
+    for i in range(1, filled.size):
+        out[i] = alpha * filled[i] + (1.0 - alpha) * out[i - 1]
+    return out
+
+
+#: rolling_stat's supported reducers, each nan-safe (a non-finite sample inside a window
+#: is excluded from that window's statistic, not propagated).
+ROLLING_STATS: Tuple[str, ...] = ("mean", "std", "median", "min", "max")
+
+
+def rolling_stat(
+    y: Any,
+    window: int,
+    *,
+    stat: str = "mean",
+    center: bool = True,
+    min_periods: Optional[int] = None,
+) -> np.ndarray:
+    """A moving-window statistic over ``y``: mean, std, median, min, or max.
+
+    Unlike :func:`smooth` (which always averages), this reports whichever statistic is
+    asked for -- a rolling std is a volatility/noise-level trace, a rolling min/max is a
+    moving envelope, useful on its own rather than only as a smoothing step.
+
+    Args:
+        y: Signal, 1-D.
+        window: Window width in samples. Clamped to ``[1, len(y)]``.
+        stat: One of :data:`ROLLING_STATS`.
+        center: True centers the window on each sample; False is trailing/causal (the
+            window ending at each sample, matching a live computation that cannot see
+            the future -- the standard "moving average" a streaming system would report).
+        min_periods: Minimum number of finite samples a window must contain to report a
+            value there; short of that the result is nan. ``None`` (default) requires a
+            full window, so the ``center=False`` case starts with ``window - 1`` leading
+            nans rather than a statistic computed from fewer samples than asked for.
+
+    Returns:
+        Array the same length as ``y``.
+
+    Raises:
+        ValueError: On empty/non-1-D input, ``window < 1``, an unknown ``stat``, or a
+            non-positive ``min_periods``.
+    """
+    ya = _as_1d(y, "y")
+    n = ya.size
+
+    try:
+        w = int(window)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"window must be an integer (got {window!r})") from exc
+    w = max(1, min(w, n))
+
+    reducers: Dict[str, Callable[..., Any]] = {
+        "mean": np.nanmean,
+        "std": np.nanstd,
+        "median": np.nanmedian,
+        "min": np.nanmin,
+        "max": np.nanmax,
+    }
+    if stat not in reducers:
+        raise ValueError(f"unknown stat {stat!r}; choose one of {', '.join(ROLLING_STATS)}")
+    reduce = reducers[stat]
+
+    if min_periods is None:
+        required = w
+    else:
+        try:
+            required = int(min_periods)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"min_periods must be an integer (got {min_periods!r})") from exc
+        if required < 1:
+            raise ValueError(f"min_periods must be >= 1 (got {required})")
+        required = min(required, w)
+
+    if center:
+        left = w // 2
+        right = w - 1 - left
+    else:
+        left, right = w - 1, 0
+
+    padded = np.concatenate([np.full(left, np.nan), ya, np.full(right, np.nan)])
+    windows = np.lib.stride_tricks.sliding_window_view(padded, w)  # (n, w)
+
+    counts = np.sum(np.isfinite(windows), axis=1)
+    enough = counts >= required
+    out = np.full(n, np.nan, dtype=np.float64)
+    if np.any(enough):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # nan* reducers warn on an all-nan slice
+            out[enough] = reduce(windows[enough], axis=1)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -917,6 +1049,28 @@ def fit_polynomial(x: Any, y: Any, degree: int) -> Tuple[np.ndarray, np.ndarray]
     Raises:
         ValueError: On empty/mismatched input or when no finite sample pairs remain.
     """
+    coeffs, _cov, y_fit = fit_polynomial_covariance(x, y, degree)
+    return coeffs, y_fit
+
+
+def fit_polynomial_covariance(
+    x: Any, y: Any, degree: int
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """:func:`fit_polynomial`, plus the coefficient covariance matrix.
+
+    Identical fit and identical ``coeffs``/``y_fit`` -- this exists only because
+    :func:`confidence_band` needs a covariance to propagate, and ``fit_polynomial``'s many
+    other callers never do, so it is not computed there.
+
+    Returns:
+        ``(coeffs, cov, y_fit)``. ``cov`` is ``(degree + 1, degree + 1)`` and is all-inf
+        when the fit is exactly- or under-determined (``np.polyfit(cov=True)`` cannot
+        estimate a covariance from zero residual degrees of freedom), matching how an
+        undetermined nonlinear fit already reports its covariance elsewhere.
+
+    Raises:
+        ValueError: On empty/mismatched input or when no finite sample pairs remain.
+    """
     xa, ya = _as_xy(x, y)
     good = np.isfinite(xa) & np.isfinite(ya)
     n_good = int(np.count_nonzero(good))
@@ -929,9 +1083,32 @@ def fit_polynomial(x: Any, y: Any, degree: int) -> Tuple[np.ndarray, np.ndarray]
         raise ValueError(f"degree must be an integer (got {degree!r})") from exc
     deg = max(0, min(deg, min(20, n_good - 1)))
 
-    coeffs = np.polyfit(xa[good], ya[good], deg)
+    xg, yg = xa[good], ya[good]
+    n_coef = deg + 1
+    coeffs = np.polyfit(xg, yg, deg)
+    if n_good > n_coef:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # RankWarning on a poorly conditioned fit
+                _coeffs_cov, cov = np.polyfit(xg, yg, deg, cov=True)
+        except (ValueError, np.linalg.LinAlgError):
+            # A high degree on a wide x range makes the Vandermonde matrix numerically
+            # rank-deficient even with n_good > n_coef samples; np.polyfit(cov=True) can
+            # then fail outright rather than just warn. The coefficients above are still
+            # the ordinary least-squares solution -- only the covariance is unavailable.
+            cov = np.full((n_coef, n_coef), np.inf, dtype=np.float64)
+    else:
+        # np.polyfit(cov=True) requires strictly more points than coefficients; an
+        # exactly- or under-determined fit reports coefficients with infinite
+        # uncertainty instead of raising.
+        cov = np.full((n_coef, n_coef), np.inf, dtype=np.float64)
+
     y_fit = np.polyval(coeffs, xa)
-    return np.asarray(coeffs, dtype=np.float64), np.asarray(y_fit, dtype=np.float64)
+    return (
+        np.asarray(coeffs, dtype=np.float64),
+        np.asarray(cov, dtype=np.float64),
+        np.asarray(y_fit, dtype=np.float64),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1575,6 +1752,111 @@ def _normalize_bounds(
     return lo, hi
 
 
+def _prepare_fit(
+    x: Any, y: Any, model: Any, sigma: Any
+) -> Tuple[FitModel, List[str], int, str, np.ndarray, np.ndarray, Optional[np.ndarray], np.ndarray]:
+    """Shared setup for :func:`fit_model` and :func:`fit_model_robust`.
+
+    Resolves the model, cleans/sorts/finite-filters the input (and sigma, riding the same
+    permutation), and runs the model's own domain check. Split out so the two fit engines
+    -- which differ only in which scipy optimiser call they make -- cannot drift on how
+    they read their input.
+
+    Returns:
+        ``(spec, names, n_params, label, xg, yg, sg, xa)`` -- the resolved model, its
+        parameter names and count, its label, the cleaned data actually fit against, the
+        matching sigma (or None), and the *full*, unfiltered x the caller's ``y_fit`` must
+        align with.
+    """
+    spec = resolve_model(model)
+    names = list(spec.param_names)
+    n_params = len(names)
+    label = spec.label or "custom"
+
+    xg, yg, sg, xa = _clean_fit_inputs(x, y, sigma, n_params, label)
+
+    if spec.check is not None:
+        message = spec.check(xg)
+        if message:
+            raise ValueError(message)
+
+    return spec, names, n_params, label, xg, yg, sg, xa
+
+
+def _resolve_start(
+    p0: Optional[Sequence[float]],
+    xg: np.ndarray,
+    yg: np.ndarray,
+    spec: FitModel,
+    n_params: int,
+    names: List[str],
+    label: str,
+) -> np.ndarray:
+    """The initial parameter vector: the heuristic guess, or a validated user ``p0``."""
+    if p0 is None:
+        return initial_guess(xg, yg, spec)
+    start = _as_1d(p0, "p0")
+    if start.size != n_params:
+        raise ValueError(
+            f"p0 must have {n_params} values for model {label!r} "
+            f"({', '.join(names)}), got {start.size}"
+        )
+    return np.where(np.isfinite(start), start, 1.0)
+
+
+def _run_curve_fit(
+    curve_fit_fn: Any,
+    fn: Callable[..., Any],
+    xg: np.ndarray,
+    yg: np.ndarray,
+    start: np.ndarray,
+    xa: np.ndarray,
+    label: str,
+    kwargs: Dict[str, Any],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Call ``curve_fit_fn``, shape its covariance, and evaluate the fit at every ``xa``.
+
+    Shared by :func:`fit_model` and :func:`fit_model_robust`: both are ``curve_fit`` with
+    different keyword arguments, and both need identical error handling, covariance
+    shaping and full-domain evaluation so a caller cannot tell which one ran except by the
+    numbers it gets back.
+    """
+    with warnings.catch_warnings():
+        # OptimizeWarning ("covariance could not be estimated") is reported through cov
+        # (which comes back inf) and shown as an inf error; a warning on stderr on top of
+        # that is noise in a GUI.
+        warnings.simplefilter("ignore")
+        try:
+            with np.errstate(all="ignore"):
+                popt, pcov = curve_fit_fn(fn, xg, yg, p0=start, **kwargs)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"the {label} fit did not converge: {exc}. Try a different model, loss "
+                "or initial guess."
+            ) from exc
+        except (ValueError, TypeError, np.linalg.LinAlgError) as exc:
+            raise ValueError(f"the {label} fit failed: {exc}") from exc
+
+    params = np.asarray(popt, dtype=np.float64).ravel()
+    n_params = params.size
+    cov = np.asarray(pcov, dtype=np.float64)
+    if cov.shape != (n_params, n_params):
+        cov = np.full((n_params, n_params), np.inf, dtype=np.float64)
+
+    with np.errstate(all="ignore"):
+        try:
+            fitted = fn(xa, *params)
+        except ValueError as exc:
+            raise ValueError(f"the {label} model could not be evaluated: {exc}") from exc
+    y_fit = np.asarray(fitted, dtype=np.float64)
+    if y_fit.shape != xa.shape:
+        # A constant model ("a") evaluates to a scalar; broadcast so the caller always
+        # gets one value per input sample.
+        y_fit = np.broadcast_to(y_fit, xa.shape).astype(np.float64, copy=True)
+
+    return params, cov, y_fit
+
+
 def fit_model(
     x: Any,
     y: Any,
@@ -1622,28 +1904,8 @@ def fit_model(
     except Exception as exc:  # pragma: no cover - only on a broken/absent scipy
         raise FitUnavailableError(FIT_UNAVAILABLE_MESSAGE) from exc
 
-    spec = resolve_model(model)
-    names = list(spec.param_names)
-    n_params = len(names)
-    label = spec.label or "custom"
-
-    xg, yg, sg, xa = _clean_fit_inputs(x, y, sigma, n_params, label)
-
-    if spec.check is not None:
-        message = spec.check(xg)
-        if message:
-            raise ValueError(message)
-
-    if p0 is None:
-        start = initial_guess(xg, yg, spec)
-    else:
-        start = _as_1d(p0, "p0")
-        if start.size != n_params:
-            raise ValueError(
-                f"p0 must have {n_params} values for model {label!r} "
-                f"({', '.join(names)}), got {start.size}"
-            )
-        start = np.where(np.isfinite(start), start, 1.0)
+    spec, names, n_params, label, xg, yg, sg, xa = _prepare_fit(x, y, model, sigma)
+    start = _resolve_start(p0, xg, yg, spec, n_params, names, label)
 
     lo, hi = _normalize_bounds(bounds, n_params)
     kwargs: Dict[str, Any] = {}
@@ -1659,38 +1921,85 @@ def fit_model(
         kwargs["sigma"] = sg
         kwargs["absolute_sigma"] = True
 
-    with warnings.catch_warnings():
-        # OptimizeWarning ("covariance could not be estimated") is reported through cov
-        # (which comes back inf) and shown as an inf error; a warning on stderr on top of
-        # that is noise in a GUI.
-        warnings.simplefilter("ignore")
-        try:
-            with np.errstate(all="ignore"):
-                popt, pcov = curve_fit(spec.fn, xg, yg, p0=start, **kwargs)
-        except RuntimeError as exc:
-            raise ValueError(
-                f"the {label} fit did not converge: {exc}. Try a different model, or set "
-                "the initial guess manually."
-            ) from exc
-        except (ValueError, TypeError, np.linalg.LinAlgError) as exc:
-            raise ValueError(f"the {label} fit failed: {exc}") from exc
+    params, cov, y_fit = _run_curve_fit(curve_fit, spec.fn, xg, yg, start, xa, label, kwargs)
+    return params, cov, y_fit, names
 
-    params = np.asarray(popt, dtype=np.float64).ravel()
-    cov = np.asarray(pcov, dtype=np.float64)
-    if cov.shape != (n_params, n_params):
-        cov = np.full((n_params, n_params), np.inf, dtype=np.float64)
 
-    with np.errstate(all="ignore"):
-        try:
-            fitted = spec.fn(xa, *params)
-        except ValueError as exc:
-            raise ValueError(f"the {label} model could not be evaluated: {exc}") from exc
-    y_fit = np.asarray(fitted, dtype=np.float64)
-    if y_fit.shape != xa.shape:
-        # A constant model ("a") evaluates to a scalar; broadcast so the caller always
-        # gets one value per input sample.
-        y_fit = np.broadcast_to(y_fit, xa.shape).astype(np.float64, copy=True)
+#: scipy.optimize.least_squares/curve_fit robust loss kinds, "linear" (plain least squares,
+#: for comparison) first.
+ROBUST_LOSS_KINDS: Tuple[str, ...] = ("linear", "soft_l1", "huber", "cauchy", "arctan")
 
+
+def fit_model_robust(
+    x: Any,
+    y: Any,
+    model: Any,
+    *,
+    p0: Optional[Sequence[float]] = None,
+    bounds: Any = None,
+    sigma: Any = None,
+    loss: str = "soft_l1",
+    f_scale: float = 1.0,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+    """Outlier-robust nonlinear least-squares fit of ``model`` to ``(x, y)``.
+
+    Same contract and return shape as :func:`fit_model` -- interchangeable with it for
+    every downstream consumer (:func:`fit_errors`, :func:`fit_statistics`,
+    :func:`confidence_band`) -- but each residual is scored by ``loss`` instead of a plain
+    square, so a handful of bad points cannot drag every parameter toward them the way an
+    ordinary least-squares fit would.
+
+    Args:
+        loss: A robust loss kind (``"soft_l1"``, ``"huber"``, ``"cauchy"``, ``"arctan"``)
+            or ``"linear"`` for ordinary least squares (see :data:`ROBUST_LOSS_KINDS`).
+            Forwarded verbatim to ``scipy.optimize.least_squares``.
+        f_scale: The residual magnitude, in the model's own units, past which a point is
+            treated as an outlier and down-weighted rather than fit exactly. Points inside
+            this margin are fit close to ordinary least squares.
+
+    Implementation note: a robust ``loss`` is a ``least_squares`` feature, and
+    ``scipy.optimize.curve_fit`` forwards unrecognised keyword arguments straight to its
+    underlying optimiser once ``method="trf"`` selects that code path (the default method,
+    Levenberg-Marquardt, does not support a robust loss at all) -- so this is
+    :func:`fit_model` with ``method="trf", loss=loss, f_scale=f_scale`` added, not a
+    hand-rolled optimiser. ``pcov`` comes back from the same Jacobian-at-the-solution
+    convention curve_fit always uses, so :func:`fit_errors` remains meaningful, just for
+    the robust objective rather than the plain sum of squares.
+
+    Raises:
+        FitUnavailableError: If scipy.optimize.curve_fit cannot be imported.
+        ValueError: On unusable input, an unknown model, a domain the model rejects, an
+            unknown ``loss``, or a fit that does not converge.
+    """
+    try:
+        from scipy.optimize import curve_fit
+    except Exception as exc:  # pragma: no cover - only on a broken/absent scipy
+        raise FitUnavailableError(FIT_UNAVAILABLE_MESSAGE) from exc
+
+    loss_kind = str(loss)
+    if loss_kind not in ROBUST_LOSS_KINDS:
+        raise ValueError(f"unknown loss {loss!r}; choose one of {', '.join(ROBUST_LOSS_KINDS)}")
+
+    spec, names, n_params, label, xg, yg, sg, xa = _prepare_fit(x, y, model, sigma)
+    start = _resolve_start(p0, xg, yg, spec, n_params, names, label)
+
+    lo, hi = _normalize_bounds(bounds, n_params)
+    kwargs: Dict[str, Any] = {
+        "method": "trf",
+        "loss": loss_kind,
+        "f_scale": float(f_scale),
+        "max_nfev": max(2000, 200 * (n_params + 1)),
+    }
+    if lo is not None and hi is not None:
+        start = np.clip(start, lo, hi)
+        kwargs["bounds"] = (lo, hi)
+    if sg is not None:
+        kwargs["sigma"] = sg
+        kwargs["absolute_sigma"] = True
+
+    params, cov, y_fit = _run_curve_fit(
+        curve_fit, spec.fn, xg, yg, start, xa, f"robust {label}", kwargs
+    )
     return params, cov, y_fit, names
 
 
@@ -1847,6 +2156,63 @@ def fft_spectrum(x: Any, y: Any) -> Tuple[np.ndarray, np.ndarray]:
             # The Nyquist bin has no negative-frequency twin, so undo the doubling.
             magnitude[-1] /= 2.0
     return np.asarray(freqs, dtype=np.float64), np.asarray(magnitude, dtype=np.float64)
+
+
+def envelope(x: Any, y: Any) -> Tuple[np.ndarray, np.ndarray]:
+    """The amplitude envelope of an oscillating signal, via the analytic signal.
+
+    Args:
+        x: Sample abscissae, 1-D, at least 2 samples with a non-zero span.
+        y: Sample values, 1-D, same length as x.
+
+    Returns:
+        ``(x_out, env)``. ``env`` is ``|analytic(y)|``, the magnitude of the Hilbert
+        transform's analytic signal -- the smooth curve that traces the top of an
+        amplitude-modulated or decaying oscillation, exactly what you would draw by eye
+        connecting each cycle's peaks. ``x_out`` is ``x`` unless it was resampled (see
+        below), in which case it is the uniform grid ``env`` was actually computed on.
+
+    Note:
+        Same uniform-sampling requirement and resampling behaviour as
+        :func:`fft_spectrum` (this *is* an FFT-domain operation): non-uniform x is
+        linearly resampled onto a uniform grid of the same length first. Unsorted x is
+        sorted. Non-finite y samples are linearly interpolated away first. Pure numpy --
+        the Hilbert transform here is the same length-N Fourier-domain construction
+        ``scipy.signal.hilbert`` uses (multiply the positive frequencies by 2, zero the
+        negative ones, keep DC and Nyquist unscaled), reimplemented directly since it is
+        a fixed ~10-line algorithm with no approximation to it, not something worth a
+        scipy dependency for.
+
+    Raises:
+        ValueError: On empty/mismatched input, fewer than 2 samples, or a zero-width x
+            range.
+    """
+    xa, ya = _as_xy(x, y)
+    if xa.size < 2:
+        raise ValueError("envelope needs at least 2 samples")
+
+    xs, ys = _sorted_xy(xa, ya)
+    if float(xs[-1] - xs[0]) == 0.0:
+        raise ValueError("x has zero width; cannot compute an envelope")
+
+    ys = _fill_nonfinite(ys, "y")
+    if not _is_uniform(xs):
+        xs, ys = resample(xs, ys, xs.size, kind="linear")
+
+    n = ys.size
+    spectrum = np.fft.fft(ys)
+    weights = np.zeros(n, dtype=np.float64)
+    half = n // 2
+    if n % 2 == 0:
+        weights[0] = 1.0
+        weights[half] = 1.0
+        weights[1:half] = 2.0
+    else:
+        weights[0] = 1.0
+        weights[1 : half + 1] = 2.0
+    analytic = np.fft.ifft(spectrum * weights)
+    env = np.abs(analytic)
+    return np.asarray(xs, dtype=np.float64), np.asarray(env, dtype=np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -2240,19 +2606,29 @@ FILTER_TYPES: Tuple[str, ...] = ("lowpass", "highpass", "bandpass", "bandstop")
 DETREND_KINDS: Tuple[str, ...] = ("constant", "linear")
 
 
-def butter_filter(
+#: IIR filter families iir_filter() offers, mirroring scipy.signal.iirfilter's ftype.
+#: Excludes "ellip": it needs BOTH ripple and attenuation specified together, which
+#: would double the UI's parameter surface for a family the other four already cover
+#: well (cheby1/cheby2 each isolate one of those two trade-offs on its own).
+IIR_FAMILIES: Tuple[str, ...] = ("butter", "cheby1", "cheby2", "bessel")
+
+
+def iir_filter(
     x: Any,
     y: Any,
     cutoff: Any,
     *,
     btype: str = "lowpass",
+    family: str = "butter",
     order: int = 4,
+    ripple: float = 1.0,
+    attenuation: float = 40.0,
 ) -> np.ndarray:
-    """Zero-phase Butterworth filter of y, returning a new array of the same length.
+    """Zero-phase IIR filter of y, returning a new array of the same length.
 
-    The workhorse of frequency-selective smoothing: unlike a moving average it has a flat
-    passband and a controllable roll-off, and being applied forwards-and-backwards
-    (``filtfilt``) it introduces **no phase shift**, so a filtered peak stays where it was.
+    The workhorse of frequency-selective smoothing: applied forwards-and-backwards
+    (``filtfilt``) it introduces **no phase shift**, so a filtered peak stays where it
+    was, regardless of which family below is chosen.
 
     Args:
         x: Sample abscissae, 1-D. Only the spacing matters; it sets the sample rate.
@@ -2260,8 +2636,22 @@ def butter_filter(
         cutoff: Cutoff frequency in cycles per unit of x. A scalar for ``lowpass``/
             ``highpass``; a ``(low, high)`` pair for ``bandpass``/``bandstop``.
         btype: One of :data:`FILTER_TYPES`.
-        order: Filter order (>= 1). Higher is a sharper transition and more ringing; the
-            effective order is doubled by the forward-backward pass.
+        family: One of :data:`IIR_FAMILIES`:
+
+            * ``"butter"`` (default) -- maximally flat passband, no ripple anywhere.
+              The safe, textbook default.
+            * ``"cheby1"`` -- sharper roll-off than butter at the same order, at the
+              cost of ripple IN THE PASSBAND, sized by ``ripple`` (dB).
+            * ``"cheby2"`` -- sharper roll-off with a flat passband like butter, but
+              ripple IN THE STOPBAND instead, sized by ``attenuation`` (dB).
+            * ``"bessel"`` -- gentler roll-off, but near-linear phase and minimal
+              ringing/overshoot -- best when preserving a pulse or waveform's SHAPE
+              matters more than a sharp cutoff.
+        order: Filter order (>= 1). Higher is a sharper transition (and, for
+            cheby1/cheby2/bessel, more pronounced ripple/overshoot); the effective
+            order is doubled by the forward-backward pass.
+        ripple: Passband ripple in dB, ``cheby1`` only. Ignored otherwise.
+        attenuation: Stopband attenuation in dB, ``cheby2`` only. Ignored otherwise.
 
     Returns:
         float64 array of length ``len(y)``, in ascending-x order.
@@ -2277,24 +2667,27 @@ def butter_filter(
         cannot raise.
 
     Raises:
-        ValueError: On empty/mismatched input, an unknown btype, a bad cutoff (wrong count
-            for the type, non-positive, or low >= high for a band), order < 1, or a
-            zero-width/degenerate x. FilterUnavailableError if scipy is missing.
+        ValueError: On empty/mismatched input, an unknown btype/family, a bad cutoff
+            (wrong count for the type, non-positive, or low >= high for a band), order
+            < 1, or a zero-width/degenerate x. FilterUnavailableError if scipy is
+            missing.
     """
     xa, ya = _as_xy(x, y)
     if btype not in FILTER_TYPES:
         raise ValueError(f"unknown filter type {btype!r}; expected one of {list(FILTER_TYPES)}")
+    if family not in IIR_FAMILIES:
+        raise ValueError(f"unknown filter family {family!r}; expected one of {list(IIR_FAMILIES)}")
     if int(order) < 1:
         raise ValueError(f"order must be >= 1 (got {order})")
 
     try:
-        from scipy.signal import butter, sosfiltfilt
+        from scipy.signal import iirfilter, sosfiltfilt
     except Exception as exc:
         raise FilterUnavailableError(FILTER_UNAVAILABLE_MESSAGE) from exc
 
     xs, ys = _sorted_xy(xa, ya)
     if xs.size < 4:
-        raise ValueError("Butterworth filtering needs at least 4 samples")
+        raise ValueError("IIR filtering needs at least 4 samples")
     if float(xs[-1] - xs[0]) == 0.0:
         raise ValueError("x has zero width; cannot define a sample rate")
 
@@ -2327,13 +2720,38 @@ def butter_filter(
     else:
         wn = float(wn[0])
 
-    sos = butter(int(order), wn, btype=btype, output="sos")
+    sos = iirfilter(
+        int(order),
+        wn,
+        rp=float(ripple) if family == "cheby1" else None,
+        rs=float(attenuation) if family == "cheby2" else None,
+        btype=btype,
+        ftype=family,
+        output="sos",
+    )
     filtered = sosfiltfilt(sos, yu)
 
     if resampled:
         # Map the uniform-grid result back onto the caller's own abscissae.
         filtered = np.interp(xs, xu, filtered)
     return np.asarray(filtered, dtype=np.float64)
+
+
+def butter_filter(
+    x: Any,
+    y: Any,
+    cutoff: Any,
+    *,
+    btype: str = "lowpass",
+    order: int = 4,
+) -> np.ndarray:
+    """Zero-phase Butterworth filter of y. A thin :func:`iir_filter` wrapper fixed to
+    ``family="butter"`` -- kept as its own function since it predates
+    :data:`IIR_FAMILIES` and is the tab's (and callers') long-standing default path.
+
+    See :func:`iir_filter` for the full parameter and error documentation.
+    """
+    return iir_filter(x, y, cutoff, btype=btype, family="butter", order=order)
 
 
 FILTER_UNAVAILABLE_MESSAGE = (
@@ -2568,6 +2986,87 @@ def autocorrelation(
     return lags, np.asarray(acf, dtype=np.float64)
 
 
+def cross_correlation(
+    a: Any, b: Any, *, max_lag: Optional[int] = None, detrend: bool = True
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Normalised cross-correlation of two same-length signals versus lag.
+
+    Cross-correlation measures how similar ``a`` is to a shifted copy of ``b`` -- the tool
+    for finding a delay between two related signals. :func:`autocorrelation` is the
+    special case ``b is a``, restricted to non-negative lags because a signal correlated
+    with itself is symmetric; two different signals are not, so this returns both
+    directions.
+
+    Args:
+        a: First signal, 1-D.
+        b: Second signal, 1-D, same length as ``a``.
+        max_lag: Largest ``|lag|`` to return, in samples. ``None`` returns every lag from
+            ``-(n - 1)`` to ``n - 1``. Clamped to that range.
+        detrend: Subtract each signal's own mean before correlating (the standard
+            definition -- otherwise two signals that merely share a large offset look
+            correlated at every lag simply because neither crosses zero).
+
+    Returns:
+        ``(lags, xcf)``. ``lags`` runs ascending from negative to positive. A positive
+        lag ``k`` means ``b`` **lags** ``a`` by ``k`` samples (``b`` is a delayed copy of
+        ``a`` there); a negative lag means ``b`` leads ``a``. ``xcf`` is normalised by
+        ``sqrt(sum(a**2) * sum(b**2))`` (after detrending) so it lies in ``[-1, 1]`` --
+        unlike autocorrelation, cross-correlation cannot be normalised to exactly 1 at any
+        fixed lag, since ``a`` and ``b`` are different signals.
+
+    Note:
+        Computed by FFT (``O(n log n)``). Pure numpy; no scipy needed.
+
+    Raises:
+        ValueError: On empty/mismatched-length/non-1-D input, or a negative ``max_lag``.
+    """
+    xa = _as_1d(a, "a")
+    xb = _as_1d(b, "b")
+    if xa.size != xb.size:
+        raise ValueError(f"a and b must have the same length (got {xa.size} and {xb.size})")
+    n = xa.size
+    if max_lag is not None:
+        try:
+            max_lag = int(max_lag)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"max_lag must be an integer (got {max_lag!r})") from exc
+        if max_lag < 0:
+            raise ValueError(f"max_lag must be >= 0 (got {max_lag})")
+
+    za = _fill_nonfinite(xa, "a")
+    zb = _fill_nonfinite(xb, "b")
+    if detrend:
+        za = za - float(np.mean(za))
+        zb = zb - float(np.mean(zb))
+
+    if n < 2:
+        return np.zeros(1, dtype=np.float64), np.zeros(1, dtype=np.float64)
+
+    # Zero-pad to at least 2n-1 (and up to a power of two) so the circular correlation
+    # the FFT computes equals the linear one, exactly like autocorrelation above.
+    size = 1 << int(np.ceil(np.log2(2 * n - 1)))
+    spec_a = np.fft.rfft(za, size)
+    spec_b = np.fft.rfft(zb, size)
+    # conj(A) * B, inverse-transformed, gives R[k] = sum_t a[t] * b[t+k] circularly for
+    # k = 0 .. size-1; the negative-lag half wraps around to the tail of the padded
+    # buffer, so it is rolled to the front to unwrap into linear, ascending order.
+    full = np.fft.irfft(np.conjugate(spec_a) * spec_b, size)
+    xcf_full = np.concatenate([full[-(n - 1) :], full[:n]])
+    lags_full = np.arange(-(n - 1), n, dtype=np.float64)
+
+    norm = float(np.sqrt(np.sum(za**2) * np.sum(zb**2)))
+    if norm > 0.0:
+        xcf_full = xcf_full / norm
+
+    if max_lag is not None:
+        keep = min(max_lag, n - 1)
+        mask = np.abs(lags_full) <= keep
+        lags_full = lags_full[mask]
+        xcf_full = xcf_full[mask]
+
+    return lags_full, np.asarray(xcf_full, dtype=np.float64)
+
+
 # ---------------------------------------------------------------------------
 # histograms and distribution fitting
 # ---------------------------------------------------------------------------
@@ -2620,6 +3119,10 @@ _DISTRIBUTIONS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "exponential": ("expon", ("loc", "scale")),
     "gamma": ("gamma", ("shape", "loc", "scale")),
     "rayleigh": ("rayleigh", ("loc", "scale")),
+    "weibull": ("weibull_min", ("shape", "loc", "scale")),
+    "chi2": ("chi2", ("df", "loc", "scale")),
+    "beta": ("beta", ("a", "b", "loc", "scale")),
+    "uniform": ("uniform", ("loc", "scale")),
 }
 
 #: Distribution keys in presentation order (iterate this, not the dict).
@@ -2755,4 +3258,571 @@ def describe(y: Any) -> Dict[str, float]:
         "var": float(np.var(good)),
         "sum": float(np.sum(good)),
         "rms": float(np.sqrt(np.mean(good**2))),
+    }
+
+
+def describe_extended(
+    y: Any, *, percentiles: Sequence[float] = (5.0, 25.0, 75.0, 95.0)
+) -> Dict[str, float]:
+    """:func:`describe` plus percentiles, spread and shape statistics, nan-safe throughout.
+
+    Args:
+        y: Signal, 1-D.
+        percentiles: Percentile ranks (0-100) to report, each as a ``percentile_<p>`` key
+            (e.g. ``percentile_25``). ``iqr`` (P75 - P25) is always computed regardless of
+            what is requested here.
+
+    Returns:
+        Every key :func:`describe` returns, plus:
+          * ``percentile_<p>`` for each requested percentile,
+          * ``iqr`` -- the interquartile range, P75 minus P25,
+          * ``mad`` -- median absolute deviation from the median, the robust analogue of
+            ``std``,
+          * ``skewness``/``kurtosis`` -- the population (biased) third and fourth
+            standardised moments, matching ``scipy.stats.skew``/``kurtosis``'s defaults
+            (``bias=True``, and Fisher's excess convention for kurtosis) numerically --
+            computed here in plain numpy since these are closed-form moment formulas, not
+            a fitted distribution, so no scipy dependency buys anything,
+          * ``nan_count`` -- samples that were not finite,
+          * ``outlier_count`` -- samples outside the standard Tukey fence
+            ``[P25 - 1.5*iqr, P75 + 1.5*iqr]``.
+
+    Note:
+        Never diverges from :func:`describe`: this calls it first and only adds keys, so
+        every existing consumer of ``describe()``'s dict keeps working against this one.
+
+    Raises:
+        ValueError: On empty or non-1-D input.
+    """
+    out = dict(describe(y))
+    ya = _as_1d(y, "y")
+    good = ya[np.isfinite(ya)]
+    n = int(good.size)
+    out["nan_count"] = float(ya.size - n)
+
+    if n == 0:
+        nan = float("nan")
+        for p in percentiles:
+            out[f"percentile_{float(p):g}"] = nan
+        out["iqr"] = nan
+        out["mad"] = nan
+        out["skewness"] = nan
+        out["kurtosis"] = nan
+        out["outlier_count"] = nan
+        return out
+
+    for p in percentiles:
+        out[f"percentile_{float(p):g}"] = float(np.percentile(good, float(p)))
+
+    p25, p75 = (float(v) for v in np.percentile(good, [25.0, 75.0]))
+    iqr = p75 - p25
+    out["iqr"] = iqr
+    out["mad"] = float(np.median(np.abs(good - out["median"])))
+
+    std = out["std"]
+    if std > 0.0:
+        centered = good - out["mean"]
+        out["skewness"] = float(np.mean(centered**3) / std**3)
+        out["kurtosis"] = float(np.mean(centered**4) / std**4 - 3.0)
+    else:
+        out["skewness"] = 0.0
+        out["kurtosis"] = 0.0
+
+    if iqr > 0.0:
+        lo, hi = p25 - 1.5 * iqr, p75 + 1.5 * iqr
+        out["outlier_count"] = float(np.count_nonzero((good < lo) | (good > hi)))
+    else:
+        out["outlier_count"] = 0.0
+
+    return out
+
+
+def _rankdata(a: np.ndarray) -> np.ndarray:
+    """1-based ranks with ties averaged -- ``scipy.stats.rankdata``'s default convention.
+
+    A small pure-numpy stand-in used only when scipy is unavailable, so
+    :func:`correlate`'s Spearman fallback (Pearson correlation of ranks -- the exact
+    definition of Spearman's rho, not an approximation) has ranks to correlate.
+    """
+    order = np.argsort(a, kind="stable")
+    sorted_a = a[order]
+    ranks = np.empty(a.size, dtype=np.float64)
+    i = 0
+    while i < a.size:
+        j = i
+        while j + 1 < a.size and sorted_a[j + 1] == sorted_a[i]:
+            j += 1
+        avg_rank = (i + j) / 2.0 + 1.0
+        ranks[order[i : j + 1]] = avg_rank
+        i = j + 1
+    return ranks
+
+
+def correlate(x: Any, y: Any) -> Dict[str, float]:
+    """Linear relationship between two same-length series: correlation, covariance, a fit.
+
+    Args:
+        x: First series, 1-D.
+        y: Second series, 1-D, same length as ``x``. ``pearson_r``/``spearman_rho``/
+            ``covariance`` are symmetric in x and y; ``slope``/``intercept``/``r_squared``
+            treat ``y`` as the dependent variable of a degree-1 fit against ``x``.
+
+    Returns:
+        Dict with ``n`` (finite-pair count), ``pearson_r``, ``pearson_p``,
+        ``spearman_rho``, ``spearman_p``, ``covariance``, ``slope``, ``intercept``,
+        ``r_squared``. Only finite ``(x, y)`` pairs are used throughout.
+
+    Note:
+        ``pearson_r``/``covariance``/``slope``/``intercept``/``r_squared`` are pure numpy
+        and always available. ``spearman_rho`` degrades to a Pearson correlation of the
+        two series' ranks when scipy is unavailable. The two p-values (``pearson_p``,
+        ``spearman_p``) have no honest numpy substitute and come back nan without scipy,
+        rather than a faked value.
+
+    Raises:
+        ValueError: On empty/mismatched input, or fewer than 2 finite pairs.
+    """
+    xa, ya = _as_xy(x, y)
+    good = np.isfinite(xa) & np.isfinite(ya)
+    xg, yg = xa[good], ya[good]
+    n = int(xg.size)
+    if n < 2:
+        raise ValueError(f"correlate() needs at least 2 finite (x, y) pairs, got {n}")
+
+    covariance = float(np.cov(xg, yg, ddof=0)[0, 1])
+    std_x = float(np.std(xg))
+    std_y = float(np.std(yg))
+    pearson_r = covariance / (std_x * std_y) if std_x > 0.0 and std_y > 0.0 else float("nan")
+
+    slope = intercept = r_squared = float("nan")
+    if std_x > 0.0:
+        slope_f, intercept_f = np.polyfit(xg, yg, 1)
+        slope, intercept = float(slope_f), float(intercept_f)
+        fitted = slope * xg + intercept
+        ss_res = float(np.sum((yg - fitted) ** 2))
+        ss_tot = float(np.sum((yg - np.mean(yg)) ** 2))
+        r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0.0 else float("nan")
+
+    pearson_p = spearman_rho = spearman_p = float("nan")
+    try:
+        from scipy import stats as _stats
+
+        _, pearson_p = _stats.pearsonr(xg, yg)
+        pearson_p = float(pearson_p)
+        spearman_rho, spearman_p = _stats.spearmanr(xg, yg)
+        spearman_rho, spearman_p = float(spearman_rho), float(spearman_p)
+    except Exception:
+        rx, ry = _rankdata(xg), _rankdata(yg)
+        rx_std, ry_std = float(np.std(rx)), float(np.std(ry))
+        if rx_std > 0.0 and ry_std > 0.0:
+            spearman_rho = float(np.cov(rx, ry, ddof=0)[0, 1] / (rx_std * ry_std))
+
+    return {
+        "n": float(n),
+        "pearson_r": pearson_r,
+        "pearson_p": pearson_p,
+        "spearman_rho": spearman_rho,
+        "spearman_p": spearman_p,
+        "covariance": covariance,
+        "slope": slope,
+        "intercept": intercept,
+        "r_squared": r_squared,
+    }
+
+
+#: Two-sample hypothesis tests two_sample_test() offers. "welch" is the safe default
+#: (unlike "student" it does not assume the two samples share a variance, and costs
+#: nothing when they do); "mannwhitney"/"ks" make no normality assumption at all.
+TWO_SAMPLE_METHODS: Tuple[str, ...] = ("welch", "student", "mannwhitney", "ks")
+
+TWO_SAMPLE_UNAVAILABLE_MESSAGE = (
+    "Two-sample hypothesis tests need scipy.stats, which could not be imported. Install "
+    "or repair scipy (pip install -U scipy) to compare two samples."
+)
+
+
+class TwoSampleUnavailableError(ValueError):
+    """scipy.stats could not be imported, so no two-sample test is possible.
+
+    A :class:`ValueError` subclass, for the same reason as every other
+    ``*UnavailableError`` in this module: a caller that already handles ValueError as
+    this module's documented failure mode keeps doing so instead of crashing.
+    """
+
+
+def two_sample_available() -> bool:
+    """True if a two-sample test is possible, i.e. ``scipy.stats`` imports.
+
+    Ask this before offering the feature. :func:`two_sample_test` raises
+    :class:`TwoSampleUnavailableError` when this is False.
+    """
+    try:
+        import scipy.stats  # noqa: F401
+    except Exception:  # pragma: no cover - only on a broken/absent scipy
+        return False
+    return True
+
+
+def two_sample_test(a: Any, b: Any, *, method: str = "welch") -> Dict[str, float]:
+    """Compare two independent samples: are they plausibly drawn from the same population?
+
+    Args:
+        a: First sample, 1-D. Non-finite entries are dropped.
+        b: Second sample, 1-D. Need not be the same length as ``a`` -- these are two
+            independent samples (e.g. two dataset columns of different sizes, or a
+            column split by a filter), not a paired ``(x, y)`` relationship the way
+            :func:`correlate` reads its input.
+        method: One of :data:`TWO_SAMPLE_METHODS`:
+
+            * ``"welch"`` -- Welch's t-test (unequal variances allowed). Tests whether
+              the two means differ. The default: Student's equal-variance assumption is
+              rarely exactly true, and Welch's costs essentially nothing when it does
+              hold.
+            * ``"student"`` -- Student's t-test (equal variances assumed), offered for
+              comparison / textbook reproducibility.
+            * ``"mannwhitney"`` -- Mann-Whitney U, a rank-based test for whether one
+              sample tends to have larger values than the other. No normality
+              assumption, so it is robust to outliers and skew that would mislead a
+              t-test.
+            * ``"ks"`` -- two-sample Kolmogorov-Smirnov. Tests whether the two samples'
+              full distributions differ (shape and location both), not just their means.
+
+    Returns:
+        Dict with ``n_a``, ``n_b``, ``mean_a``, ``mean_b``, ``std_a``, ``std_b``
+        (population std, ddof=0, of the finite samples), ``statistic`` and ``p_value``
+        for the requested test. The descriptive summary is always included regardless of
+        which test was requested, since it is cheap and is what makes the test's verdict
+        interpretable (a significant p-value with ``mean_a == mean_b`` is a distribution-
+        shape story, not a location one -- only visible from the summary alongside it).
+
+    Raises:
+        TwoSampleUnavailableError: ``scipy.stats`` cannot be imported.
+        ValueError: On an unknown ``method`` or fewer than 2 finite samples in either
+            group.
+    """
+    if method not in TWO_SAMPLE_METHODS:
+        raise ValueError(
+            f"unknown method {method!r}; choose one of {', '.join(TWO_SAMPLE_METHODS)}"
+        )
+
+    xa = _as_1d(a, "a")
+    xb = _as_1d(b, "b")
+    ga = xa[np.isfinite(xa)]
+    gb = xb[np.isfinite(xb)]
+    if ga.size < 2 or gb.size < 2:
+        raise ValueError(
+            "two_sample_test needs at least 2 finite samples in each group "
+            f"(got {ga.size} and {gb.size})"
+        )
+
+    try:
+        from scipy import stats as _scipy_stats
+    except Exception as exc:  # pragma: no cover - only on a broken/absent scipy
+        raise TwoSampleUnavailableError(TWO_SAMPLE_UNAVAILABLE_MESSAGE) from exc
+
+    if method == "welch":
+        result = _scipy_stats.ttest_ind(ga, gb, equal_var=False)
+    elif method == "student":
+        result = _scipy_stats.ttest_ind(ga, gb, equal_var=True)
+    elif method == "mannwhitney":
+        result = _scipy_stats.mannwhitneyu(ga, gb, alternative="two-sided")
+    else:  # "ks"
+        result = _scipy_stats.ks_2samp(ga, gb)
+    statistic, p_value = float(result[0]), float(result[1])
+
+    return {
+        "n_a": float(ga.size),
+        "n_b": float(gb.size),
+        "mean_a": float(np.mean(ga)),
+        "mean_b": float(np.mean(gb)),
+        "std_a": float(np.std(ga)),
+        "std_b": float(np.std(gb)),
+        "statistic": statistic,
+        "p_value": p_value,
+    }
+
+
+#: Two-tailed standard-normal quantiles for the confidence levels the Fit tab offers,
+#: keyed by ``round(level, 2)``. Used only when scipy.stats is unimportable -- insurance,
+#: not the main path, since fit_model/fit_model_robust already require scipy to have
+#: produced ``popt``/``pcov`` in the first place.
+_NORMAL_QUANTILES: Dict[float, float] = {
+    0.68: 0.9944579,
+    0.80: 1.2815516,
+    0.90: 1.6448536,
+    0.95: 1.9599640,
+    0.99: 2.5758293,
+}
+
+
+def _t_multiplier(level: float, dof: int) -> float:
+    """Two-tailed Student's t critical value at ``level`` confidence and ``dof``.
+
+    Falls back to the standard-normal quantile (exact only as ``dof -> inf``, a mild
+    over-confidence at small ``dof``) when scipy.stats is unimportable.
+    """
+    try:
+        from scipy import stats as _stats
+
+        return float(_stats.t.ppf(0.5 + float(level) / 2.0, dof))
+    except Exception:
+        return _NORMAL_QUANTILES.get(round(float(level), 2), 1.9599640)
+
+
+def _normal_multiplier(level: float) -> float:
+    """Two-tailed standard-normal critical value at ``level`` confidence.
+
+    Falls back to the same fixed table as :func:`_t_multiplier` when scipy.stats is
+    unimportable; exact either way for the levels the UI offers.
+    """
+    try:
+        from scipy import stats as _stats
+
+        return float(_stats.norm.ppf(0.5 + float(level) / 2.0))
+    except Exception:
+        return _NORMAL_QUANTILES.get(round(float(level), 2), 1.9599640)
+
+
+def confidence_band(
+    x: Any,
+    popt: Any,
+    pcov: Any,
+    fn: Callable[..., Any],
+    *,
+    level: float = 0.95,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Confidence band for a fitted model, evaluated at every point of ``x``.
+
+    Propagates the fit's parameter covariance (as returned by :func:`fit_model`/
+    :func:`fit_model_robust`) through ``fn`` via a central-difference Jacobian -- the
+    standard delta method -- and scales it by the two-tailed critical value at ``level``
+    confidence and ``dof = len(x) - len(popt)`` degrees of freedom.
+
+    Args:
+        x: Points to evaluate the band at, 1-D.
+        popt: Fitted parameters, as returned by fit_model/fit_model_robust.
+        pcov: Parameter covariance, ``(n_params, n_params)``, same source.
+        fn: The model function, called as ``fn(x, *popt)`` -- the same callable a
+            :class:`FitModel` carries as ``.fn``.
+        level: Confidence level in (0, 1), e.g. 0.95 for a 95% band.
+
+    Returns:
+        ``(lower, upper)``, each the same shape as ``x``. Where ``pcov`` is not fully
+        finite (an underdetermined fit -- see :func:`fit_errors`) the band is nan at every
+        point, matching how an infinite standard error is already reported elsewhere
+        rather than drawing a band that claims a precision the fit does not have.
+
+    Raises:
+        ValueError: If ``level`` is not strictly between 0 and 1.
+    """
+    if not (0.0 < float(level) < 1.0):
+        raise ValueError(f"level must be in (0, 1), got {level!r}")
+
+    xa = _as_1d(x, "x")
+    p = np.asarray(popt, dtype=np.float64).ravel()
+    cov = np.asarray(pcov, dtype=np.float64)
+    n_params = p.size
+
+    with np.errstate(all="ignore"):
+        base = np.broadcast_to(
+            np.asarray(fn(xa, *p), dtype=np.float64), xa.shape
+        ).astype(np.float64, copy=True)
+
+    if cov.shape != (n_params, n_params) or not np.all(np.isfinite(cov)):
+        nan = np.full(xa.shape, np.nan, dtype=np.float64)
+        return nan, nan
+
+    # Central-difference Jacobian d(fn)/d(param_i) at popt -- the same technique MINPACK
+    # itself uses when curve_fit is not given an analytic Jacobian.
+    jac = np.empty((xa.size, n_params), dtype=np.float64)
+    for i in range(n_params):
+        step = max(abs(float(p[i])), 1.0) * 1e-6
+        p_hi, p_lo = p.copy(), p.copy()
+        p_hi[i] += step
+        p_lo[i] -= step
+        with np.errstate(all="ignore"):
+            f_hi = np.broadcast_to(np.asarray(fn(xa, *p_hi), dtype=np.float64), xa.shape)
+            f_lo = np.broadcast_to(np.asarray(fn(xa, *p_lo), dtype=np.float64), xa.shape)
+        jac[:, i] = (f_hi - f_lo) / (2.0 * step)
+
+    variance = np.clip(np.einsum("ij,jk,ik->i", jac, cov, jac), 0.0, None)
+    se = np.sqrt(variance)
+
+    dof = max(1, xa.size - n_params)
+    multiplier = _t_multiplier(level, dof)
+
+    margin = multiplier * se
+    return base - margin, base + margin
+
+
+def confidence_interval_mean(y: Any, *, level: float = 0.95) -> Dict[str, float]:
+    """Confidence interval for the population mean of ``y``, via Student's t.
+
+    Args:
+        y: Sample, 1-D. Non-finite entries are dropped.
+        level: Confidence level in (0, 1), e.g. 0.95 for a 95% interval.
+
+    Returns:
+        Dict with ``n``, ``mean``, ``std`` (sample std, ddof=1), ``se`` (standard error
+        of the mean), ``dof``, ``lower``, ``upper``, ``level``.
+
+    Raises:
+        ValueError: Fewer than 2 finite samples, or ``level`` not in (0, 1).
+    """
+    if not (0.0 < float(level) < 1.0):
+        raise ValueError(f"level must be in (0, 1), got {level!r}")
+    ya = _as_1d(y, "y")
+    yg = ya[np.isfinite(ya)]
+    n = int(yg.size)
+    if n < 2:
+        raise ValueError(f"confidence_interval_mean needs at least 2 finite samples, got {n}")
+
+    mean = float(np.mean(yg))
+    std = float(np.std(yg, ddof=1))
+    dof = n - 1
+    se = std / np.sqrt(n)
+    margin = _t_multiplier(level, dof) * se
+
+    return {
+        "n": float(n),
+        "mean": mean,
+        "std": std,
+        "se": se,
+        "dof": float(dof),
+        "lower": mean - margin,
+        "upper": mean + margin,
+        "level": float(level),
+    }
+
+
+def confidence_interval_correlation(x: Any, y: Any, *, level: float = 0.95) -> Dict[str, float]:
+    """Confidence interval for the Pearson correlation of ``(x, y)``, via Fisher's z.
+
+    The standard transform for a correlation CI: Pearson r has no closed-form normal
+    sampling distribution, but ``arctanh(r)`` is approximately normal with standard
+    error ``1 / sqrt(n - 3)`` -- build the interval in that space and transform back.
+
+    Args:
+        x: First series, 1-D.
+        y: Second series, 1-D, same length as ``x``.
+        level: Confidence level in (0, 1).
+
+    Returns:
+        Dict with ``n`` (finite-pair count), ``r`` (Pearson correlation), ``lower``,
+        ``upper``, ``level``. ``r`` of exactly +/-1 is clamped away from the transform's
+        singularity before it is applied.
+
+    Raises:
+        ValueError: Fewer than 4 finite pairs (the transform's standard error is
+            undefined at ``n <= 3``), or ``level`` not in (0, 1).
+    """
+    if not (0.0 < float(level) < 1.0):
+        raise ValueError(f"level must be in (0, 1), got {level!r}")
+    xa, ya = _as_xy(x, y)
+    good = np.isfinite(xa) & np.isfinite(ya)
+    xg, yg = xa[good], ya[good]
+    n = int(xg.size)
+    if n < 4:
+        raise ValueError(
+            f"confidence_interval_correlation needs at least 4 finite (x, y) pairs, got {n}"
+        )
+
+    std_x, std_y = float(np.std(xg)), float(np.std(yg))
+    if std_x == 0.0 or std_y == 0.0:
+        r = float("nan")
+    else:
+        r = float(np.cov(xg, yg, ddof=0)[0, 1] / (std_x * std_y))
+
+    if not np.isfinite(r):
+        return {"n": float(n), "r": r, "lower": float("nan"), "upper": float("nan"), "level": float(level)}
+
+    r_clamped = max(-0.9999999, min(0.9999999, r))
+    z = np.arctanh(r_clamped)
+    se_z = 1.0 / np.sqrt(n - 3)
+    margin = _normal_multiplier(level) * se_z
+
+    return {
+        "n": float(n),
+        "r": r,
+        "lower": float(np.tanh(z - margin)),
+        "upper": float(np.tanh(z + margin)),
+        "level": float(level),
+    }
+
+
+#: Methods confidence_interval_difference() offers for the standard error / degrees of
+#: freedom of a two-sample mean difference. A subset of TWO_SAMPLE_METHODS: mannwhitney
+#: and ks test the full distribution, not the mean, and have no simple closed-form CI
+#: on a mean difference the way a t-based interval does.
+DIFFERENCE_CI_METHODS: Tuple[str, ...] = ("welch", "student")
+
+
+def confidence_interval_difference(
+    a: Any, b: Any, *, level: float = 0.95, method: str = "welch"
+) -> Dict[str, float]:
+    """Confidence interval for the difference of two independent samples' means.
+
+    Pure numpy: unlike :func:`two_sample_test`, no scipy dependency, since both the
+    Welch-Satterthwaite and pooled-variance formulas below are closed-form.
+
+    Args:
+        a: First sample, 1-D. Non-finite entries are dropped.
+        b: Second sample, 1-D. Need not be the same length as ``a``.
+        level: Confidence level in (0, 1).
+        method: ``"welch"`` (unequal variances allowed, the safe default) or
+            ``"student"`` (pooled variance, assumes the two populations share one).
+
+    Returns:
+        Dict with ``n_a``, ``n_b``, ``mean_a``, ``mean_b``, ``diff`` (``mean_a -
+        mean_b``), ``se``, ``dof``, ``lower``, ``upper``, ``level``, ``method``.
+
+    Raises:
+        ValueError: Fewer than 2 finite samples in either group, an unknown ``method``,
+            or ``level`` not in (0, 1).
+    """
+    if method not in DIFFERENCE_CI_METHODS:
+        raise ValueError(
+            f"unknown method {method!r}; choose one of {', '.join(DIFFERENCE_CI_METHODS)}"
+        )
+    if not (0.0 < float(level) < 1.0):
+        raise ValueError(f"level must be in (0, 1), got {level!r}")
+
+    xa = _as_1d(a, "a")
+    xb = _as_1d(b, "b")
+    ga = xa[np.isfinite(xa)]
+    gb = xb[np.isfinite(xb)]
+    n_a, n_b = int(ga.size), int(gb.size)
+    if n_a < 2 or n_b < 2:
+        raise ValueError(
+            f"confidence_interval_difference needs at least 2 finite samples in each "
+            f"group (got {n_a} and {n_b})"
+        )
+
+    mean_a, mean_b = float(np.mean(ga)), float(np.mean(gb))
+    var_a, var_b = float(np.var(ga, ddof=1)), float(np.var(gb, ddof=1))
+    diff = mean_a - mean_b
+
+    if method == "welch":
+        term_a, term_b = var_a / n_a, var_b / n_b
+        se = float(np.sqrt(term_a + term_b))
+        denom = (term_a**2) / (n_a - 1) + (term_b**2) / (n_b - 1)
+        dof = (term_a + term_b) ** 2 / denom if denom > 0.0 else float(n_a + n_b - 2)
+    else:  # "student"
+        pooled_var = ((n_a - 1) * var_a + (n_b - 1) * var_b) / (n_a + n_b - 2)
+        se = float(np.sqrt(pooled_var * (1.0 / n_a + 1.0 / n_b)))
+        dof = float(n_a + n_b - 2)
+
+    margin = _t_multiplier(level, dof) * se
+
+    return {
+        "n_a": float(n_a),
+        "n_b": float(n_b),
+        "mean_a": mean_a,
+        "mean_b": mean_b,
+        "diff": diff,
+        "se": se,
+        "dof": float(dof),
+        "lower": diff - margin,
+        "upper": diff + margin,
+        "level": float(level),
     }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import copy
 import datetime as _dt
 import sys as _sys
 import time
@@ -12,6 +13,7 @@ import numpy as np
 
 from .core import layout as _layout
 from .core.layers import BaseLayer, FractalLayer, FunctionLayer, Layer3D
+from .core.panel import ColorbarSpec as _ColorbarSpec
 from .engine import GPULinePlot
 
 ColorLike = Union[
@@ -3126,26 +3128,316 @@ def secondary_yaxis(
     return _active_axes(_get_or_create_plot())
 
 
-def colorbar(mappable: Optional[Any] = None, **kwargs: Any) -> None:
-    """Accepted for matplotlib parity; draws nothing.
+def _resolve_colorbar_mapping(mappable: Optional[Any]) -> Tuple[str, Any]:
+    """Resolve ``(cmap, norm)`` for :func:`colorbar`, from whatever ``mappable`` denotes.
 
-    A colorbar is a second axes beside the first, which GLPlot's single-viewport
-    model has nowhere to put. The Scene panel's colormap picker shows the same
-    mapping interactively.
+    Mirrors matplotlib's own ``colorbar(mappable)`` resolution: a GLPlot layer reads its
+    own metadata (written by ``scatter``/``imshow``/``contour``/``contourf``), a real
+    ``matplotlib.cm.ScalarMappable`` (e.g. one built by hand to colour a family of lines
+    via ``ScalarMappable(...).to_rgba(...)``) is read directly, and ``None`` falls back to
+    the "current image" ``gci()``/``clim()`` already track.
+
+    Always returns a concrete, *bounded* ``Normalize`` -- both the live renderer and the
+    headless ``savefig()`` reconstruction trust ``norm.vmin``/``norm.vmax`` to be real
+    numbers, never ``None``.
+    """
+    from matplotlib import colors as mcolors
+    from matplotlib.cm import ScalarMappable
+
+    if mappable is None:
+        mappable = _CURRENT_MAPPABLE
+    if mappable is None:
+        raise RuntimeError(
+            "colorbar(): no colormapped layer to attach to. Plot one first "
+            "(scatter(c=...), imshow, contour, contourf, hexbin, hist2d), or pass its "
+            "return value in directly."
+        )
+
+    if isinstance(mappable, ScalarMappable):
+        cmap = mappable.cmap.name
+        norm = copy.copy(mappable.norm)
+        if norm.vmin is None or norm.vmax is None:
+            raise RuntimeError(
+                "colorbar(): the given ScalarMappable has no data range -- call "
+                "norm.autoscale(data) or pass vmin=/vmax= to the Normalize before "
+                "colorbar()."
+            )
+        return cmap, norm
+
+    metadata = getattr(mappable, "metadata", None)
+    if not isinstance(metadata, dict):
+        raise TypeError(
+            f"colorbar(): {mappable!r} is neither a GLPlot layer nor a "
+            "matplotlib.cm.ScalarMappable."
+        )
+    cmap = str(metadata.get("cmap") or "viridis")
+    norm = metadata.get("norm")
+    if norm is not None:
+        if isinstance(norm, str):
+            # A scale name (e.g. "log") -- the same resolution `_normalize_cvalues` uses.
+            from matplotlib import scale as mscale
+
+            try:
+                scale_cls = mscale._scale_mapping[norm]
+            except KeyError:
+                known = ", ".join(repr(k) for k in sorted(mscale._scale_mapping))
+                raise ValueError(f"colorbar(): unsupported norm scale {norm!r}. Expected one of {known}.") from None
+            norm = mcolors.make_norm_from_scale(scale_cls)(mcolors.Normalize)()
+        else:
+            norm = copy.copy(norm)
+        if norm.vmin is None or norm.vmax is None:
+            from .gui.layerops import layer_colormap_data_range
+
+            lo, hi = layer_colormap_data_range(mappable) or (0.0, 1.0)
+            norm.autoscale_None(np.array([lo, hi], dtype=np.float64))
+        return cmap, norm
+
+    vmin = metadata.get("vmin")
+    vmax = metadata.get("vmax")
+    if vmin is None or vmax is None:
+        from .gui.layerops import layer_colormap_data_range
+
+        data_range = layer_colormap_data_range(mappable)
+        if data_range is not None:
+            lo, hi = data_range
+            vmin = lo if vmin is None else vmin
+            vmax = hi if vmax is None else vmax
+    if vmin is None or vmax is None:
+        vmin, vmax = 0.0, 1.0
+    return cmap, mcolors.Normalize(vmin=float(vmin), vmax=float(vmax))
+
+
+class Colorbar:
+    """Handle returned by :func:`colorbar` (matplotlib's ``matplotlib.colorbar.Colorbar``).
+
+    Deliberately not an :class:`AxesProxy`: a colorbar is never registered as a panel (see
+    ``glplot.core.panel.ColorbarSpec``), so there is no real axes underneath to proxy --
+    just enough of matplotlib's surface to label the bar or set its ticks.
+    """
+
+    def __init__(self, fig: "GPULinePlot", spec: "_ColorbarSpec") -> None:
+        self._fig = fig
+        self._spec = spec
+
+    @property
+    def ax(self) -> "_ColorbarAxesProxy":
+        """A tiny shim so ``cb.ax.set_ylabel(...)``/``set_xlabel(...)`` idioms work."""
+        return _ColorbarAxesProxy(self._fig, self._spec)
+
+    def set_label(self, text: Optional[str]) -> None:
+        """Set the bar's own axis label (matplotlib's ``Colorbar.set_label``)."""
+        self._spec.label = None if text is None else str(text)
+        _set_dirty(self._fig)
+
+    def set_ticks(
+        self, ticks: Optional[Sequence[float]], labels: Optional[Sequence[str]] = None
+    ) -> None:
+        """Set explicit tick positions (matplotlib's ``Colorbar.set_ticks``).
+
+        ``labels`` is accepted for parity but not honoured: every tick is formatted the
+        same way (``colorbar(..., format=...)``), not overridden individually.
+        """
+        self._spec.ticks = None if ticks is None else [float(t) for t in ticks]
+        if labels is not None:
+            _warn_unsupported_call(
+                "Colorbar.set_ticks",
+                "labels= is not supported: pass format= to colorbar() to control every "
+                "tick's formatting uniformly instead",
+            )
+        _set_dirty(self._fig)
+
+
+class _ColorbarAxesProxy:
+    """Tiny shim behind :attr:`Colorbar.ax` -- just ``set_ylabel``/``set_xlabel``."""
+
+    def __init__(self, fig: "GPULinePlot", spec: "_ColorbarSpec") -> None:
+        self._fig = fig
+        self._spec = spec
+
+    def set_ylabel(self, text: Optional[str], *args: Any, **kwargs: Any) -> None:
+        self._spec.label = None if text is None else str(text)
+        _set_dirty(self._fig)
+
+    def set_xlabel(self, text: Optional[str], *args: Any, **kwargs: Any) -> None:
+        self._spec.label = None if text is None else str(text)
+        _set_dirty(self._fig)
+
+
+#: Gap between an `inset=True` colorbar and the host panel's own border, as a fraction
+#: of the panel's own width/height on each side.
+_COLORBAR_INSET_MARGIN = 0.06
+
+
+def inset_colorbar_bounds(spec: "_ColorbarSpec") -> List[float]:
+    """``[x0, y0, w, h]`` for an ``inset=True`` bar, as fractions of its host's own box.
+
+    Shared by the two places that have to agree on where an inset bar sits: the live
+    renderer (through the figure-fraction rect :func:`colorbar` derives from this) and
+    the headless single-panel export, which needs the same rectangle expressed in its
+    one axes' own coordinates. Computing it twice is how they drift apart.
+
+    ``shrink`` is honoured along the bar's long axis and the result stays centred there,
+    matching what the keyword means in matplotlib -- an inset bar running the panel's
+    full width is usually far more bar than the reading needs, and the alternative
+    (hard-coding a shorter bar) would take the choice away from the caller.
+    """
+    m = _COLORBAR_INSET_MARGIN
+    thickness = float(spec.fraction)
+    span = (1.0 - 2.0 * m) * min(max(float(spec.shrink), 0.0), 1.0)
+    lead = m + ((1.0 - 2.0 * m) - span) * 0.5  # centred along the long axis
+    if spec.location == "right":
+        return [1.0 - m - thickness, lead, thickness, span]
+    if spec.location == "left":
+        return [m, lead, thickness, span]
+    if spec.location == "top":
+        return [lead, 1.0 - m - thickness, span, thickness]
+    return [lead, m, span, thickness]  # "bottom"
+
+
+def colorbar(
+    mappable: Optional[Any] = None,
+    *,
+    cax: Optional[Any] = None,
+    ax: Optional["AxesProxy"] = None,
+    location: Optional[str] = None,
+    orientation: Optional[str] = None,
+    fraction: float = 0.15,
+    pad: float = 0.05,
+    shrink: float = 1.0,
+    aspect: float = 20.0,
+    ticks: Optional[Sequence[float]] = None,
+    format: Optional[Any] = None,
+    label: Optional[str] = None,
+    inset: bool = False,
+    **kwargs: Any,
+) -> "Colorbar":
+    """Add a colorbar for ``mappable`` beside an axes (matplotlib's ``pyplot.colorbar``).
+
+    Shrinks the target axes' own rectangle to carve out a strip on ``location`` and draws
+    a gradient + tick axis into it, live -- not a second GL viewport, so it cannot be
+    panned or zoomed and never becomes the "current axes". Pass ``inset=True`` to draw
+    the bar *inside* the axes instead (near ``location``'s edge, over the plotted
+    content) -- matplotlib has no single keyword for this (its own idiom is a hand-built
+    ``ax.inset_axes()`` passed as ``cax=``); useful when the axes sits at the edge of the
+    figure and an external bar on that side would have nowhere to put its own ticks, or
+    simply to save the room an external bar would take from the plot.
+
+    Args:
+        mappable: What to draw the mapping from -- a GLPlot layer returned by
+            ``scatter(c=...)``, ``imshow``, ``contour``, ``contourf``, ``hexbin`` or
+            ``hist2d``, or a real ``matplotlib.cm.ScalarMappable`` built by hand (e.g. to
+            colour a family of ``plot()`` lines by a parameter). ``None`` uses the most
+            recently colour-mapped layer (matplotlib's ``gci()``).
+        cax: Not supported -- GLPlot places the bar itself. Accepted and warned about.
+        ax (AxesProxy, optional): Which axes to shrink and attach the bar to. Defaults to
+            the current axes.
+        location (str, optional): ``'right'`` (the default, matching matplotlib),
+            ``'left'``, ``'top'`` or ``'bottom'``.
+        orientation (str, optional): ``'vertical'``/``'horizontal'``. Inferred from
+            ``location`` when omitted (right/left -> vertical, top/bottom -> horizontal).
+        fraction (float, optional): Width (or height) of the bar, as a fraction of the
+            axes it is shrinking. Defaults to 0.15, matplotlib's own default.
+        pad (float, optional): Gap between the axes and the bar, as a fraction of the
+            axes. Defaults to 0.05, matplotlib's own default.
+        shrink, aspect: Accepted for matplotlib parity and honoured by the headless
+            ``savefig()`` reconstruction; the live bar's own geometry is a plain
+            constant-width strip and does not re-derive a precise aspect ratio from them.
+        ticks (array-like, optional): Explicit tick positions. Auto-located from
+            ``mappable``'s norm (log/symlog-aware) when omitted.
+        format (str or callable, optional): A ``%``/``{}``-style format string or a
+            one-argument callable, applied to every tick value.
+        label (str, optional): The bar's own axis label.
+        inset (bool, optional): Draw the bar inside the axes instead of shrinking it.
+            Defaults to False.
+        **kwargs: Accepted for matplotlib parity. Ignored (warned about if given).
 
     Returns:
-        None
+        Colorbar: A handle with ``.ax``/``.set_label()``/``.set_ticks()``.
+
+    Examples:
+        >>> im = gplt.imshow(data, cmap="inferno")
+        >>> gplt.colorbar(im, label="Intensity")
+
+        >>> gplt.scatter(x, y, c=v, cmap="viridis")
+        >>> gplt.colorbar(location="left")
     """
-    _get_or_create_plot()
+    fig = _get_or_create_plot()
+    cmap, norm = _resolve_colorbar_mapping(mappable)
+
+    location = location or "right"
+    if location not in ("right", "left", "top", "bottom"):
+        raise ValueError(
+            f"colorbar(): location must be 'right', 'left', 'top' or 'bottom', got {location!r}"
+        )
+    if orientation is None:
+        orientation = "horizontal" if location in ("top", "bottom") else "vertical"
+
     _warn_unsupported(
         "colorbar",
-        {"colorbar": True},
+        {"cax": cax, **kwargs},
         {
-            "colorbar": "draws nothing: a colorbar is a second axes beside the plot, and "
-            "GLPlot renders one viewport with no room beside it. The Scene panel's "
-            "colormap picker shows the same mapping"
+            "cax": "is not supported: pass ax= (or rely on the current axes) instead -- "
+            "GLPlot places the bar itself rather than drawing into a caller-supplied axes"
         },
     )
+
+    host_panel = (ax.panel if ax is not None else _active_axes(fig).panel)
+    x0, y0, w, h = host_panel.rect_frac
+    frac = float(fraction)
+    if inset:
+        # A strip *inside* the host's own rect -- the panel is not shrunk at all, so the
+        # bar sits over whatever is already plotted there. The rectangle itself comes
+        # from `inset_colorbar_bounds` in the host's own 0..1 box, mapped up into figure
+        # fractions here; the headless single-panel export calls the same function
+        # against its one axes rather than re-deriving the geometry.
+        placement = _ColorbarSpec(
+            rect_frac=(0.0, 0.0, 1.0, 1.0),
+            orientation=orientation,
+            location=location,
+            cmap=cmap,
+            norm=norm,
+            fraction=frac,
+            shrink=float(shrink),
+            inset=True,
+        )
+        bx, by, bw, bh = inset_colorbar_bounds(placement)
+        bar_rect = (x0 + w * bx, y0 + h * by, w * bw, h * bh)
+    else:
+        strip = frac + float(pad)
+        # The bar always sits flush against the *original* outer edge, with the `pad` gap
+        # landing between it and the shrunk host panel -- not adjacent to the host panel --
+        # matching matplotlib's own `fraction`/`pad` geometry.
+        if location == "right":
+            bar_rect = (x0 + w * (1.0 - frac), y0, w * frac, h)
+            host_panel.rect_frac = (x0, y0, w * (1.0 - strip), h)
+        elif location == "left":
+            bar_rect = (x0, y0, w * frac, h)
+            host_panel.rect_frac = (x0 + w * strip, y0, w * (1.0 - strip), h)
+        elif location == "top":
+            bar_rect = (x0, y0 + h * (1.0 - frac), w, h * frac)
+            host_panel.rect_frac = (x0, y0, w, h * (1.0 - strip))
+        else:  # "bottom"
+            bar_rect = (x0, y0, w, h * frac)
+            host_panel.rect_frac = (x0, y0 + h * strip, w, h * (1.0 - strip))
+
+    spec = _ColorbarSpec(
+        rect_frac=bar_rect,
+        orientation=orientation,
+        location=location,
+        cmap=cmap,
+        norm=norm,
+        ticks=None if ticks is None else [float(t) for t in ticks],
+        format=format,
+        label=None if label is None else str(label),
+        fraction=float(fraction),
+        pad=float(pad),
+        shrink=float(shrink),
+        aspect=float(aspect),
+        inset=bool(inset),
+    )
+    host_panel.colorbars.append(spec)
+    _set_dirty(fig)
+    return Colorbar(fig, spec)
 
 
 def tight_layout(**kwargs: Any) -> None:
@@ -5121,10 +5413,10 @@ def plot_style(name: Optional[str] = None, *, layers: bool = True) -> str:
         raise ValueError(f"unknown style {name!r}; expected one of {keys}")
 
     _styles.apply_style(plot_obj, style, layers=bool(layers))
-    # Record what was applied so plot_style() with no argument can report it. This is the
-    # API's own bookkeeping; the Style panel tracks its selection separately (on the panel,
-    # not the plot), so a preset set from code is applied but not pre-selected in the GUI.
-    plot_obj._style_key = style.key
+    # apply_style() itself records plot_obj._style_key now, so plot_style() with no argument
+    # reports the current preset regardless of whether it was set from code or by clicking a
+    # card in the Style panel. The Style panel still tracks its own selection separately (on
+    # the panel, not the plot) for which card renders as "selected" in its own gallery.
     _set_dirty(plot_obj)
     return style.key
 
@@ -5243,11 +5535,20 @@ def plot3d(
     return [layer]
 
 
+#: Diameter, in logical pixels, of a scatter marker whose size nobody chose.
+#:
+#: Not an arbitrary number: at the export's 120 dpi this is 10 * 72/120 = 6 pt, exactly
+#: matplotlib's own ``rcParams["lines.markersize"]``. The live window and the export
+#: therefore draw the same default marker even though they take their sizes in different
+#: units -- see ``_scatter_2d``'s ``size_is_explicit``.
+_DEFAULT_POINT_SIZE_PX = 10.0
+
+
 def _scatter_2d(
     x: Sequence[float],
     y: Sequence[float],
     color: Optional[ColorLike] = None,
-    size: float = 10.0,
+    size: Optional[float] = None,
     c: Optional[Union[ColorLike, ArrayLike]] = None,
     s: Optional[float] = None,
     cmap: Optional[str] = None,
@@ -5392,8 +5693,16 @@ def _scatter_2d(
     # stays the uniform fallback. GLPlot's ``s`` is a per-point pixel size (as its scalar
     # ``size`` always has been), applied element-wise -- not matplotlib's pt^2 area.
     raw_size = s if s is not None else size
+    # Whether the caller actually chose a size. The live view and the PNG export disagree
+    # about what the number *means* -- live it is a pixel diameter (see above), while the
+    # export hands it to matplotlib's `s`, which is a pt^2 AREA -- so an unchosen default
+    # cannot be one number that lands right in both. Recording that it was unchosen lets
+    # the export fall through to matplotlib's own default instead of GLPlot's pixel one,
+    # which it was otherwise reading as 10 pt^2: a 3.2 pt marker where matplotlib draws
+    # 6 pt, i.e. under half the diameter and 40% of the area (measured, not estimated).
+    size_is_explicit = s is not None or size is not None
     size_arr: Optional[np.ndarray] = None
-    size_np = np.asarray(raw_size)
+    size_np = np.asarray(_DEFAULT_POINT_SIZE_PX if raw_size is None else raw_size)
     if size_np.ndim >= 1 and size_np.size > 1:
         if size_np.size != len(x_arr):
             raise ValueError(
@@ -5415,8 +5724,13 @@ def _scatter_2d(
             "marker": marker,
             "artist": "scatter",
             "cmap": cmap,
+            "norm": norm,
             "vmin": vmin,
             "vmax": vmax,
+            # False when nobody named a size, which is the export's cue to use
+            # matplotlib's own default rather than reinterpret GLPlot's pixel one as an
+            # area. See `_DEFAULT_POINT_SIZE_PX`.
+            "size_is_explicit": bool(size_is_explicit),
             # The per-point sizes, kept so the GUI can show size as a re-mappable dimension
             # (mirrors ``cvalues`` for colour). None when the layer is uniform-sized.
             "svalues": size_arr,
@@ -7719,7 +8033,7 @@ def imshow(
     if resolved_aspect == "equal":
         _apply_equal_aspect(plot_obj, square=False)
     _set_dirty(plot_obj)
-    return layer
+    return _set_current_mappable(layer)
 
 
 def matshow(A, fignum: Optional[Union[int, str, bool]] = None, **kwargs):
@@ -7750,6 +8064,7 @@ def contour(
     *,
     colors: Optional[ColorLike] = None,
     cmap: str = "viridis",
+    norm: Optional[Any] = None,
     linewidths: float = 1.0,
     label: Optional[str] = None,
     zdir: str = "z",
@@ -7774,6 +8089,10 @@ def contour(
         colors (str or tuple, optional): Color specification (currently
             stored in metadata). Defaults to None.
         cmap (str, optional): Colormap for level colors. Defaults to 'viridis'.
+        norm (Normalize or str, optional): How levels map onto the colormap -- a
+            `matplotlib.colors.Normalize` (e.g. `SymLogNorm` for a field that crosses
+            zero) or a scale name such as ``'log'``. Replaces the linear ramp across
+            the level range, and cannot be combined with ``colors``.
         linewidths (float, optional): Width of contour lines. Defaults to 1.0.
         label (str, optional): Legend label. Defaults to None.
         zdir (str, optional): On a 3D axes only (matplotlib's ``Axes3D.contour``
@@ -7826,6 +8145,31 @@ def contour(
         matrix = _as_float_array(Z, ndim=2, name="Z")
 
     plot_obj = _get_or_create_plot()
+
+    def _level_line_colors(level_values: Sequence[float], lo: float, hi: float) -> List[ColorLike]:
+        """Every level's line color, in one call -- not one call per level.
+
+        A real ``Normalize`` with no ``vmin``/``vmax`` of its own autoscales itself the
+        first time it is called, *mutating the same object* every subsequent call reuses
+        (matplotlib's own documented behaviour, the same thing `colorbar()` later relies
+        on to read back the range a plot call actually used). Calling it once per level in
+        a loop would autoscale it to the *first* level alone and leave every other level
+        reading back that one-point range -- one solid colour, not a ramp. One call over
+        every level's value is both the fix and the honest data range for the norm to see.
+        """
+        if colors is not None:
+            return [colors] * len(level_values)
+        from matplotlib import colormaps
+
+        t = _normalize_cvalues(
+            np.asarray(level_values, dtype=np.float32),
+            norm,
+            None if norm is not None else lo,
+            None if norm is not None else hi,
+        )
+        rgba = colormaps.get_cmap(_resolve_cmap(cmap, "viridis"))(t)
+        return [tuple(float(c) for c in row) for row in rgba]
+
     if plot_obj.is_3d_scene():
         # A 2D `imshow()` placeholder (the non-3D path below) has no z-coordinate at
         # all -- calling it here used to silently draw something flat instead of
@@ -7844,17 +8188,10 @@ def contour(
             )
         segments, resolved_levels = _grid_contour_segments(xx, yy, matrix, levels, filled=False)
         lo, hi = (min(resolved_levels), max(resolved_levels)) if resolved_levels else (0.0, 1.0)
-        from matplotlib import colormaps
+        line_colors = _level_line_colors([level for level, _seg in segments], lo, hi)
 
         layers = []
-        for level, seg in segments:
-            if colors is not None:
-                line_color = colors
-            else:
-                t = 0.0 if hi == lo else (level - lo) / (hi - lo)
-                line_color = tuple(
-                    float(c) for c in colormaps.get_cmap(_resolve_cmap(cmap, "viridis"))(t)
-                )
+        for (level, seg), line_color in zip(segments, line_colors):
             z_value = float(level if offset is None else offset)
             verts = np.column_stack([seg[:, 0], seg[:, 1], np.full(len(seg), z_value)]).astype(
                 np.float32
@@ -7875,6 +8212,8 @@ def contour(
         return layers
 
     extent = (float(np.min(xx)), float(np.max(xx)), float(np.min(yy)), float(np.max(yy)))
+    segments, resolved_levels = _grid_contour_segments(xx, yy, matrix, levels, filled=False)
+    lo, hi = (min(resolved_levels), max(resolved_levels)) if resolved_levels else (0.0, 1.0)
     # aspect="auto" explicitly: imshow()'s own default is now 'equal' (matching
     # matplotlib's), but matplotlib's contour() itself defaults to 'auto', and a contour
     # domain is rarely square -- inheriting 'equal' here would squash it.
@@ -7890,6 +8229,9 @@ def contour(
             "levels": levels,
             "colors": colors,
             "cmap": cmap,
+            "norm": norm,
+            "vmin": lo,
+            "vmax": hi,
             "linewidths": linewidths,
         }
     )
@@ -7899,23 +8241,19 @@ def contour(
     # without this, `show()` on the exact same script drew nothing where the contour
     # should be. Tagged "contour_line" so that headless path skips these and draws its
     # own copy instead of both (see render_preview's own skip for the same tag).
-    segments, resolved_levels = _grid_contour_segments(xx, yy, matrix, levels, filled=False)
-    lo, hi = (min(resolved_levels), max(resolved_levels)) if resolved_levels else (0.0, 1.0)
     plot_obj = _get_or_create_plot()
-    for level, seg in segments:
-        if colors is not None:
-            line_color = colors
-        else:
-            from matplotlib import colormaps
-
-            t = 0.0 if hi == lo else (level - lo) / (hi - lo)
-            line_color = tuple(
-                float(c) for c in colormaps.get_cmap(_resolve_cmap(cmap, "viridis"))(t)
-            )
+    line_colors = _level_line_colors([level for level, _seg in segments], lo, hi)
+    line_layers = []
+    for (level, seg), line_color in zip(segments, line_colors):
         plot_obj.add_line_strip(seg[:, 0], seg[:, 1], color=line_color, width=float(linewidths))
         plot_obj.scene.layers[-1].metadata.update({"artist": "contour_line", "level": level})
+        line_layers.append(plot_obj.scene.layers[-1])
+    # Held so `clabel()` can mark exactly *these* lines rather than every "contour_line"
+    # layer in the panel -- two contour() calls on one axes would otherwise label each
+    # other's levels.
+    layer.metadata["line_layers"] = line_layers
     _set_dirty(plot_obj)
-    return layer
+    return _set_current_mappable(layer)
 
 
 def contourf(
@@ -7925,6 +8263,7 @@ def contourf(
     levels=10,
     *,
     cmap: str = "viridis",
+    norm: Optional[Any] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     **kwargs,
@@ -7945,6 +8284,9 @@ def contourf(
         levels (int or array-like, optional): Number of contour levels or
             explicit level values. Defaults to 10.
         cmap (str, optional): Colormap for level colors. Defaults to 'viridis'.
+        norm (Normalize or str, optional): How the field maps onto the colormap --
+            a `matplotlib.colors.Normalize` or a scale name such as ``'log'``.
+            Replaces the linear vmin..vmax ramp.
         alpha (float, optional): Transparency. Defaults to 1.0.
         label (str, optional): Legend label. Defaults to None.
         **kwargs: Additional keyword arguments.
@@ -8000,7 +8342,9 @@ def contourf(
     extent = (float(np.min(xx)), float(np.max(xx)), float(np.min(yy)), float(np.max(yy)))
     # aspect="auto" explicitly, for the same reason contour() passes it: imshow()'s
     # default is now 'equal', but a contourf domain is rarely square.
-    layer = imshow(matrix, extent=extent, cmap=cmap, alpha=alpha, aspect="auto", label=label)
+    layer = imshow(
+        matrix, extent=extent, cmap=cmap, norm=norm, alpha=alpha, aspect="auto", label=label
+    )
     layer.metadata.update(
         {
             "artist": "contourf",
@@ -8009,6 +8353,7 @@ def contourf(
             "Z": matrix,
             "levels": levels,
             "cmap": cmap,
+            "norm": norm,
             "alpha": alpha,
         }
     )
@@ -8370,26 +8715,87 @@ def quiverkey(Q: Any, X: float, Y: float, U: float, label: str, **kwargs: Any):
     return [arrow, txt]
 
 
-def clabel(CS: Any = None, levels: Optional[Any] = None, **kwargs: Any) -> list:
-    """Label contour lines. Accepted for matplotlib parity; draws nothing.
+def clabel(
+    CS: Any = None,
+    levels: Optional[Any] = None,
+    *,
+    fontsize: Optional[Any] = None,
+    inline: bool = True,
+    inline_spacing: float = 5,
+    fmt: Optional[Any] = None,
+    colors: Optional[ColorLike] = None,
+    use_clabeltext: bool = False,
+    manual: Any = False,
+    rightside_up: bool = True,
+    zorder: Optional[float] = None,
+    **kwargs: Any,
+) -> list:
+    """Label contour lines with their values (matplotlib's ``Axes.clabel``).
 
-    matplotlib places numeric labels along contour lines, breaking the line to
-    seat the text. GLPlot draws contours through the savefig path (see
-    :func:`contour`), where matplotlib's own ``clabel`` is available -- so the
-    live view has no contour geometry to label.
+    Drawn in **both** the live GL window and the headless PNG export, by two different
+    routes. The export replays this request through a real
+    ``matplotlib.axes.Axes.clabel()`` on a reconstructed ``ContourSet``, so it gets
+    matplotlib's own placement and genuinely broken paths. The live window has no such
+    machinery, but it does have the geometry -- :func:`contour` draws one real polyline
+    layer per level, each carrying its own ``level`` -- so
+    :func:`glplot.renderers.contour_labels.draw_contour_labels` seats the number on the
+    line itself and clears a small patch of background behind it, which reads as the same
+    break without rebuilding the path.
+
+    The live placement is deliberately simpler than matplotlib's: one label per level,
+    centred on the middle of the line's currently-visible run (so it follows pan/zoom
+    rather than drifting off-screen), and not rotated to the tangent.
+
+    Args:
+        CS: The layer :func:`contour` (or :func:`contourf`) returned.
+        levels (array-like, optional): Which levels to label. All of them if omitted.
+        fmt (str or callable, optional): Formats each level. Honoured by both paths.
+        fontsize (float, optional): Honoured by both paths.
+        inline, inline_spacing, colors, use_clabeltext, manual, rightside_up, zorder:
+            As in matplotlib's ``Axes.clabel``. Forwarded to the export; the live pass
+            uses only ``fmt``/``fontsize``/``levels``.
+        **kwargs: Accepted for matplotlib parity; forwarded to ``clabel`` as-is.
 
     Returns:
-        list: Always empty.
+        list: Always empty. matplotlib returns its ``Text`` artists; GLPlot draws the
+        labels as overlay geometry and has no per-label artist object to hand back.
+
+    Examples:
+        >>> cs = gplt.contour(X, Y, Z, levels=12)
+        >>> gplt.clabel(cs, inline=True, fontsize=10, fmt="%.1f")
+        >>> gplt.show()
     """
-    _get_or_create_plot()
-    _warn_unsupported(
-        "clabel",
-        {"clabel": True},
-        {
-            "clabel": "draws nothing: contour labelling needs the contour line geometry, "
-            "which GLPlot computes only on the savefig path"
-        },
+    metadata = getattr(CS, "metadata", None)
+    if not isinstance(metadata, dict):
+        raise TypeError(f"clabel(): CS must be the layer contour() returned, got {CS!r}")
+    request = dict(
+        fontsize=fontsize,
+        inline=inline,
+        inline_spacing=inline_spacing,
+        fmt=fmt,
+        colors=colors,
+        use_clabeltext=use_clabeltext,
+        manual=manual,
+        rightside_up=rightside_up,
+        zorder=zorder,
+        **kwargs,
     )
+    if levels is not None:
+        request["levels"] = levels
+    metadata["clabel"] = request
+
+    # Mark the individual level lines too: the live pass walks layers, and only these
+    # carry the polyline it has to seat a number on. `line_layers` is recorded by
+    # `contour()` so two contours on one axes cannot label each other's levels.
+    wanted = None if levels is None else {float(v) for v in np.atleast_1d(levels)}
+    for line_layer in metadata.get("line_layers") or []:
+        line_meta = getattr(line_layer, "metadata", None)
+        if not isinstance(line_meta, dict):
+            continue
+        if wanted is not None and float(line_meta.get("level", float("nan"))) not in wanted:
+            continue
+        line_meta["clabel"] = request
+    _set_dirty(_get_or_create_plot())
     return []
 
 

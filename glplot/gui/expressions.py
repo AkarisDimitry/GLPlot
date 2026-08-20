@@ -144,6 +144,22 @@ def square(x, period=1.0):
     return np.where(np.mod(xa / pa, 1.0) < 0.5, 1.0, -1.0)
 
 
+def interp(x, xp, fp):
+    """``np.interp`` that tolerates unsorted ``xp`` (matching :func:`mathops.resample`).
+
+    ``np.interp`` silently produces wrong results when ``xp`` is not ascending. User
+    expressions reference dataset columns of whatever row order they were loaded in, so this
+    sorts ``xp``/``fp`` together first instead of forcing users to pre-sort their data.
+    """
+    xp_a = np.asarray(xp, dtype=np.float64)
+    fp_a = np.asarray(fp, dtype=np.float64)
+    if xp_a.size >= 2 and not bool(np.all(np.diff(xp_a) >= 0.0)):
+        order = np.argsort(xp_a, kind="stable")
+        xp_a = xp_a[order]
+        fp_a = fp_a[order]
+    return np.interp(x, xp_a, fp_a)
+
+
 def noise(n_or_x, scale=1.0, seed=None):
     """Gaussian noise with standard deviation ``scale``.
 
@@ -245,7 +261,7 @@ SAFE_NAMES: Dict[str, Any] = {
     "sinc": np.sinc,
     "gradient": np.gradient,
     "diff": np.diff,
-    "interp": np.interp,
+    "interp": interp,
     # convenience
     "gauss": gauss,
     "sigmoid": sigmoid,

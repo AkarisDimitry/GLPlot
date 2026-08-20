@@ -100,6 +100,7 @@ UNIFORMS = {
         "u_alpha",
         "u_offset",
         "u_point_size_px",
+        "u_marker_shape",
         "u_point_outline_enabled",
         "u_point_outline_color",
         "u_point_outline_width_px",

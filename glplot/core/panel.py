@@ -18,7 +18,8 @@ origin, which is what ``glViewport`` wants).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Tuple
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from ..controllers import CameraController
 from .camera3d import Axes3DOptions, Camera3D
@@ -27,6 +28,61 @@ from .timeline import Timeline
 
 if TYPE_CHECKING:
     from ..options import EngineOptions
+
+
+@dataclass
+class ColorbarSpec:
+    """One colorbar attached to a :class:`Panel`, drawn as a screen-space overlay.
+
+    Deliberately not a :class:`Panel` itself: any rect registered on ``fig.panels`` is
+    click-to-activate and pan/zoom-able (see ``GPULinePlot._panel_index_at``), so a
+    colorbar built that way would silently steal "current axes" the moment a script did
+    ``im = plt.imshow(...); plt.colorbar(); plt.title(...)`` -- the title would land on
+    the colorbar. A ``ColorbarSpec`` instead just describes a strip of the figure and is
+    drawn by :func:`glplot.renderers.colorbar.draw_colorbars`, in the same whole-window,
+    camera-free pixel space :meth:`GPULinePlot._draw_panel_borders` already draws in.
+
+    ``norm`` is always a concrete, bounded ``matplotlib.colors.Normalize`` instance (never
+    a bare scale name and never unbounded) -- the single source of truth the gradient fill,
+    the tick locator, and the headless ``savefig()`` reconstruction all read alike, so the
+    live bar and the exported PNG cannot independently drift from what was actually asked
+    for.
+    """
+
+    #: (x0, y0, w, h) in figure fractions, bottom-left origin -- same convention as
+    #: :attr:`Panel.rect_frac`, and the strip vacated from the host panel's own rect.
+    rect_frac: Tuple[float, float, float, float]
+    #: "vertical" for a right/left bar, "horizontal" for a top/bottom one.
+    orientation: str
+    #: Which edge of the host panel this bar sits against: "right", "left", "top" or
+    #: "bottom". Distinct from ``orientation`` because a caller can ask for either
+    #: independently, as matplotlib's own ``colorbar()`` does.
+    location: str
+    #: Colormap name, resolved (never ``None``) at ``colorbar()`` call time.
+    cmap: str
+    #: A concrete ``matplotlib.colors.Normalize`` (or subclass) instance with real
+    #: ``vmin``/``vmax`` already resolved.
+    norm: Any
+    #: Explicit tick positions, or ``None`` to auto-locate from ``norm``'s type.
+    ticks: Optional[Any] = None
+    #: A tick label format (matplotlib ``Formatter``, format string, or ``None`` to
+    #: auto-format from the locator).
+    format: Optional[Any] = None
+    #: The colorbar's own axis label (``Colorbar.set_label``), or ``None``.
+    label: Optional[str] = None
+    #: Matplotlib-parity placement knobs, stored for the headless reconstruction (which
+    #: rebuilds a real matplotlib colorbar and can honour them precisely); the live
+    #: renderer's own bar geometry does not re-derive a precise aspect-ratio width from
+    #: these -- see ``colorbar()``'s docstring.
+    fraction: float = 0.15
+    pad: float = 0.05
+    shrink: float = 1.0
+    aspect: float = 20.0
+    #: When True, the bar sits *inside* the host panel's own rect (over the plotted
+    #: content, near ``location``'s edge) instead of shrinking the panel to make room
+    #: outside it. Ticks/label flip to point inward, toward the panel's centre, since
+    #: there is no room outside the panel for them to point into.
+    inset: bool = False
 
 
 class Panel:
@@ -63,6 +119,30 @@ class Panel:
         #: figure could only ever do all of them at once. Empty and paused by default, so a
         #: panel that is never animated costs one object and no frame time.
         self.timeline = Timeline()
+
+        #: Colorbars drawn against this panel's edges. Metadata only -- never a
+        #: :class:`Panel` of its own, never registered on ``fig.panels`` -- so a
+        #: colorbar can never become the active/pannable axes. See
+        #: :class:`ColorbarSpec` for why.
+        self.colorbars: List["ColorbarSpec"] = []
+
+        #: This panel's own axis names and axes title.
+        #:
+        #: Per panel for the same reason the cameras and scenes are: a split figure plots
+        #: four different quantities and has to be able to *name* them four different
+        #: ways. These were figure-global until they lived here, so a 2x2 grid could only
+        #: ever carry one x-name, one y-name and one title between all four panels --
+        #: whichever call ran last won, and the other three axes went unlabelled.
+        #:
+        #: The engine forwards ``xlabel``/``ylabel`` to the active panel's copy (the same
+        #: delegation ``scene``/``camera``/``cache`` use), so ``gplt.xlabel(...)`` keeps
+        #: writing "the current axes' x-name" and every existing single-panel caller is
+        #: unaffected. ``title`` is *not* forwarded that way -- ``engine.title`` is also
+        #: the GLFW window caption and is assigned in ``__init__`` before any panel
+        #: exists -- so ``set_title`` writes both, and readers prefer this one.
+        self.xlabel: str = ""
+        self.ylabel: str = ""
+        self.title: str = ""
 
         #: Explicit dimensionality: 2, 3, or ``None`` for "infer from the layers".
         #:

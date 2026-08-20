@@ -55,6 +55,8 @@ from .renderers import axes3d
 from .renderers.density import DensityRenderer
 from .renderers.exact import ExactLineRenderer
 from .renderers.interaction import InteractionRenderer
+from .renderers.colorbar import draw_colorbars
+from .renderers.contour_labels import draw_contour_labels
 from .renderers.legend import draw_legend
 from .utils.export import ExportManager
 from .utils.scale import forward as _scale_forward
@@ -239,6 +241,34 @@ class GPULinePlot:
         self.active_panel.cache = value
 
     @property
+    def xlabel(self) -> str:
+        """The active panel's x-axis name (``gplt.xlabel()``).
+
+        Forwarded to the panel for the same reason ``scene``/``camera`` are: a split
+        figure plots a different quantity per panel and has to be able to name each one.
+        Held as a plain attribute on the engine until this existed, which made it
+        figure-global -- a 2x2 grid got one x-name between all four panels.
+
+        Every reader keeps working unchanged: the live axis renderer reads
+        ``plot.xlabel`` inside the per-panel overlay pass (``_draw_panels`` swaps
+        ``active_panel_index`` around it), so it now resolves per panel for free.
+        """
+        return self.active_panel.xlabel
+
+    @xlabel.setter
+    def xlabel(self, value: str) -> None:
+        self.active_panel.xlabel = "" if value is None else str(value)
+
+    @property
+    def ylabel(self) -> str:
+        """The active panel's y-axis name (``gplt.ylabel()``). See :attr:`xlabel`."""
+        return self.active_panel.ylabel
+
+    @ylabel.setter
+    def ylabel(self, value: str) -> None:
+        self.active_panel.ylabel = "" if value is None else str(value)
+
+    @property
     def camera3d(self) -> Camera3D:
         """The active panel's 3D point of view."""
         return self.active_panel.camera3d
@@ -324,6 +354,13 @@ class GPULinePlot:
         """
         self.title = str(title)
         self.options.title = str(title)
+        # Also the *active panel's* own axes title, so a split figure can title each
+        # panel separately. `self.title` stays the window caption (and the single-panel
+        # axes title) rather than becoming a forwarding property like `xlabel`/`ylabel`:
+        # it is assigned in `__init__` before any panel exists, so forwarding it would
+        # write to a panel that is not there yet.
+        if getattr(self, "panels", None):
+            self.active_panel.title = str(title)
         self.options.axis_title_fontsize = fontsize
         self.options.axis_title_color = color
         self.frame.dirty_ui = True
@@ -2044,35 +2081,38 @@ class GPULinePlot:
     # --------------------------------------------------------
 
     def _draw_overlays(self) -> None:
-        """Draw the axis scale labels and the legend for the active panel.
+        """Draw the axis scale labels, contour labels and the legend for the active panel.
 
         Screen-aligned overlays that must repaint every frame (so they stay live and survive
         the cached impostor). Reads the active panel's camera and the engine's current pixel
         dimensions, which ``_draw_panels`` sets to the panel's rect when several panels exist.
         """
+        # Built once, outside the `axis_show_labels` gate below: the contour labels and the
+        # legend are not axis annotations and must still draw when the axis numbers are off.
+        window_world = self.camera_controller.world_window(self.width, self.height)
+        mvp = self.camera_controller.mvp(self.width, self.height)
+        ndc_scale, ndc_offset = self._get_ndc_transform(window_world)
+        ctx_labels = RenderContext(
+            mvp=mvp,
+            window_world=window_world,
+            ndc_scale=ndc_scale,
+            ndc_offset=ndc_offset,
+            width_px=self.width,
+            height_px=self.height,
+            fb_width=self.fb_width,
+            fb_height=self.fb_height,
+            dpr=self.fb_width / max(self.width, 1),
+            mode=self.policy.runtime.current_mode,
+            global_alpha=1.0,
+            lod_keep_prob=1.0,
+            is_density=self.display_density,
+            time=time.perf_counter(),
+            px_offset=self._panel_offset_px,
+        )
+
         # Draw Axis Labels (Scale) on every frame so they update dynamically and persist when
         # the scene is cached.
         if self.options.axis_show_labels:
-            window_world = self.camera_controller.world_window(self.width, self.height)
-            mvp = self.camera_controller.mvp(self.width, self.height)
-            ndc_scale, ndc_offset = self._get_ndc_transform(window_world)
-            ctx_labels = RenderContext(
-                mvp=mvp,
-                window_world=window_world,
-                ndc_scale=ndc_scale,
-                ndc_offset=ndc_offset,
-                width_px=self.width,
-                height_px=self.height,
-                fb_width=self.fb_width,
-                fb_height=self.fb_height,
-                dpr=self.fb_width / max(self.width, 1),
-                mode=self.policy.runtime.current_mode,
-                global_alpha=1.0,
-                lod_keep_prob=1.0,
-                is_density=self.display_density,
-                time=time.perf_counter(),
-                px_offset=self._panel_offset_px,
-            )
             if self._is_pure_3d_scene():
                 # A 3D scene's numbers live on the box's edges, not on two screen-aligned
                 # spines, so they come from the 3D anchors rather than the AxisManager.
@@ -2081,6 +2121,13 @@ class GPULinePlot:
             else:
                 self.axis_manager.update(ctx_labels)
                 self.renderer_manager.renderers["axis"]._draw_labels(self.axis_manager, ctx_labels)
+
+        # Inline contour values, seated on their own level lines. Same draw list and the
+        # same reasoning as the legend below: not an axis annotation, so outside that
+        # gate, and 2D-only (a 3D contour is real `wireframe3d` geometry with no
+        # screen-space line to seat a number on). Draws nothing unless `clabel()` asked.
+        if not self._is_pure_3d_scene():
+            draw_contour_labels(self, ctx_labels)
 
         # The legend, on the same background draw list as the axis labels and for the
         # same reason: it must composite over the cached impostor, which is not
@@ -2480,6 +2527,11 @@ class GPULinePlot:
             # Axis labels + legend, once per panel (each reads the active panel's camera and
             # pixel size via _draw_panels, which swaps them for the panel's rect).
             self._draw_panels(self._draw_overlays)
+
+            # Colorbars, once per frame in whole-window pixel space (not per-panel, like
+            # `_draw_panel_borders` one call earlier) -- see renderers/colorbar.py's module
+            # docstring for why a colorbar is screen-space metadata, not a `Panel`.
+            draw_colorbars(self)
 
             # HUD panels are only updated if HUD is enabled, but begin/end must wrap all
             if self.policy.runtime.hud_enabled_this_frame:
@@ -3303,11 +3355,16 @@ class GPULinePlot:
         from .utils.mpl_process import launch_snapshot_viewer
 
         snap = self.capture_snapshot(scale=2.0)
+        # `or None`, not a bare read: `xlabel`/`ylabel` are now always-present properties
+        # forwarding to the active panel (they used to be attributes that simply did not
+        # exist until `gplt.xlabel()` created them, which is what the `getattr` default
+        # was catching). An unset label is the empty string now, and this viewer's
+        # contract is that "no label" arrives as None.
         launch_snapshot_viewer(
             snap,
-            xlabel=getattr(self, "xlabel", None),
-            ylabel=getattr(self, "ylabel", None),
-            title=getattr(self, "title", None),
+            xlabel=getattr(self, "xlabel", None) or None,
+            ylabel=getattr(self, "ylabel", None) or None,
+            title=getattr(self, "title", None) or None,
         )
 
     def toggle_line_colormap(self) -> None:

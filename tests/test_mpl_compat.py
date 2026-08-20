@@ -1425,10 +1425,10 @@ class TestPieWedgeShape:
 class TestSingleViewportStubs:
     """Compat names that still map onto the single viewport GLPlot draws each panel into.
 
-    ``twinx``/``twiny`` (two scales in one viewport) and ``colorbar``/``tight_layout`` have no
-    real backing yet: they return the current axes and *say so* rather than pretending to have
+    ``twinx``/``twiny`` (two scales in one viewport) and ``tight_layout`` have no real
+    backing yet: they return the current axes and *say so* rather than pretending to have
     worked. ``subplot`` and ``subplot_mosaic``, by contrast, are now real -- see
-    :class:`TestRealSubplots`.
+    :class:`TestRealSubplots`. ``colorbar`` is real too -- see :class:`TestColorbar`.
     """
 
     @pytest.mark.parametrize("func", ["twinx", "twiny"])
@@ -1444,15 +1444,230 @@ class TestSingleViewportStubs:
         assert isinstance(twin, gplt.AxesProxy)
         assert twin.figure is gplt.gcf()
 
-    def test_colorbar_warns_and_draws_nothing(self, plot):
-        before = len(plot.scene.layers)
-        with pytest.warns(gplt.MatplotlibCompatWarning, match="draws nothing"):
-            gplt.colorbar()
-        assert len(plot.scene.layers) == before
-
     def test_tight_layout_warns_and_points_at_the_margins(self, plot):
         with pytest.warns(gplt.MatplotlibCompatWarning, match="axis_margin"):
             gplt.tight_layout()
+
+
+class TestColorbar:
+    """``colorbar()`` shrinks the host panel's own rect and attaches a real
+    :class:`~glplot.core.panel.ColorbarSpec` -- not a second GL viewport (see that
+    class's docstring for why not), so these tests stay at the metadata/geometry level
+    that is safe without a live GL window (CONTRACT 5.1).
+    """
+
+    def test_no_mappable_raises(self, plot):
+        with pytest.raises(RuntimeError, match="no colormapped layer"):
+            gplt.colorbar()
+
+    def test_default_location_is_right_and_shrinks_the_panel_width(self, plot):
+        panel = gplt.gca().panel
+        x0, y0, w, h = panel.rect_frac
+        im = gplt.imshow(np.random.default_rng(0).random((5, 5)), cmap="viridis")
+        cb = gplt.colorbar(im)
+
+        assert isinstance(cb, gplt.Colorbar)
+        assert len(panel.colorbars) == 1
+        spec = panel.colorbars[0]
+        assert spec.location == "right"
+        assert spec.orientation == "vertical"
+        # The host panel's own rect narrowed; its (x0, y0, h) are untouched.
+        assert panel.rect_frac[2] < w
+        assert panel.rect_frac[0] == x0
+        assert panel.rect_frac[1] == y0
+        assert panel.rect_frac[3] == h
+        # The bar sits in the strip vacated on the right, still inside the figure.
+        bx0, by0, bw, bh = spec.rect_frac
+        assert bx0 + bw == pytest.approx(x0 + w)
+        assert by0 == y0 and bh == h
+
+    @pytest.mark.parametrize(
+        "location,orientation", [("left", "vertical"), ("top", "horizontal"), ("bottom", "horizontal")]
+    )
+    def test_other_three_locations(self, plot, location, orientation):
+        panel = gplt.gca().panel
+        im = gplt.imshow(np.random.default_rng(1).random((5, 5)))
+        cb = gplt.colorbar(im, location=location)
+        spec = cb._spec
+        assert spec.location == location
+        assert spec.orientation == orientation
+        assert panel.colorbars[-1] is spec
+
+    def test_resolves_cmap_and_norm_from_a_scatter_layer(self, plot):
+        v = np.linspace(0.0, 5.0, 10)
+        layer = gplt.scatter(v, v, c=v, cmap="plasma", vmin=1.0, vmax=4.0)
+        cb = gplt.colorbar(layer)
+        spec = cb._spec
+        assert spec.cmap == "plasma"
+        assert spec.norm.vmin == pytest.approx(1.0)
+        assert spec.norm.vmax == pytest.approx(4.0)
+
+    def test_honours_an_explicit_normalize_instance(self, plot):
+        from matplotlib.colors import LogNorm
+
+        matrix = np.abs(np.random.default_rng(2).random((6, 6))) + 0.1
+        im = gplt.imshow(matrix, cmap="inferno", norm=LogNorm(vmin=0.5, vmax=2.0))
+        cb = gplt.colorbar(im)
+        assert isinstance(cb._spec.norm, LogNorm)
+        assert cb._spec.norm.vmin == pytest.approx(0.5)
+        assert cb._spec.norm.vmax == pytest.approx(2.0)
+
+    def test_bare_scalar_mappable(self, plot):
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.colors import Normalize
+
+        gplt.plot([0.0, 1.0], [0.0, 1.0])
+        sm = ScalarMappable(norm=Normalize(vmin=0.0, vmax=9.0), cmap="cool")
+        cb = gplt.colorbar(sm)
+        assert cb._spec.cmap == "cool"
+        assert cb._spec.norm.vmax == pytest.approx(9.0)
+
+    def test_current_mappable_is_used_when_none_given(self, plot):
+        gplt.imshow(np.random.default_rng(3).random((4, 4)), cmap="magma")
+        cb = gplt.colorbar()
+        assert cb._spec.cmap == "magma"
+
+    def test_set_label_reaches_the_spec(self, plot):
+        im = gplt.imshow(np.random.default_rng(4).random((4, 4)))
+        cb = gplt.colorbar(im)
+        cb.set_label("Intensity")
+        assert cb._spec.label == "Intensity"
+        cb.ax.set_ylabel("Other")
+        assert cb._spec.label == "Other"
+
+    def test_cax_warns_unsupported(self, plot):
+        im = gplt.imshow(np.random.default_rng(5).random((4, 4)))
+        with pytest.warns(gplt.MatplotlibCompatWarning, match="cax"):
+            gplt.colorbar(im, cax=object())
+
+    def test_inset_does_not_shrink_the_host_panel(self, plot):
+        """That is the whole point of `inset=True`: the bar goes *over* the plot."""
+        panel = gplt.gca().panel
+        before = panel.rect_frac
+        im = gplt.imshow(np.random.default_rng(6).random((4, 4)))
+        spec = gplt.colorbar(im, location="top", inset=True)._spec
+        assert panel.rect_frac == before
+        assert spec.inset is True
+        # ...and the strip itself lands inside the host's own rect.
+        bx, by, bw, bh = spec.rect_frac
+        hx, hy, hw, hh = before
+        assert bx >= hx and by >= hy
+        assert bx + bw <= hx + hw + 1e-9
+        assert by + bh <= hy + hh + 1e-9
+
+    @pytest.mark.parametrize(
+        "location,long_axis", [("right", 3), ("left", 3), ("top", 2), ("bottom", 2)]
+    )
+    def test_inset_bounds_honour_shrink(self, plot, location, long_axis):
+        """``shrink`` shortens an inset bar along its long axis and keeps it centred."""
+        from glplot.core.panel import ColorbarSpec
+        from glplot.pyplot import inset_colorbar_bounds
+
+        def bounds(shrink):
+            return inset_colorbar_bounds(
+                ColorbarSpec(
+                    rect_frac=(0.0, 0.0, 1.0, 1.0),
+                    orientation="vertical" if location in ("left", "right") else "horizontal",
+                    location=location,
+                    cmap="viridis",
+                    norm=None,
+                    fraction=0.05,
+                    shrink=shrink,
+                )
+            )
+
+        full, half = bounds(1.0), bounds(0.5)
+        assert half[long_axis] == pytest.approx(full[long_axis] * 0.5)
+        lead = long_axis - 2  # the offset paired with that length
+        full_mid = full[lead] + full[long_axis] * 0.5
+        half_mid = half[lead] + half[long_axis] * 0.5
+        assert half_mid == pytest.approx(full_mid)
+
+
+class TestScatterMarkerReachesTheExport:
+    """``scatter(marker=...)`` was stored on the layer but dropped by the PNG export.
+
+    Every point exported as a circle regardless of what was asked for -- most visibly on
+    ``hist2d``, which passes ``marker="s"`` on purpose because a 2D histogram's bins are
+    squares, and whose exported PNG therefore disagreed with the live window.
+    """
+
+    def test_marker_is_recorded_on_the_layer(self, plot):
+        layer = gplt.scatter([0.0, 1.0], [0.0, 1.0], marker="^")
+        assert layer.metadata["marker"] == "^"
+
+    def test_hist2d_asks_for_square_bins(self, plot):
+        rng = np.random.default_rng(0)
+        *_, layer = gplt.hist2d(rng.normal(size=200), rng.normal(size=200), bins=8)
+        assert layer.metadata["marker"] == "s"
+
+    def test_live_shader_has_a_shape_for_each_supported_marker(self, plot):
+        """The live GL path drew every marker as a circle until the shader gained shapes.
+
+        The mapping and the shader's ``switch`` are only meaningful together, so this
+        pins that every index the table hands out is one the shader actually implements.
+        """
+        from glplot.utils.shaders import MARKER_SHAPE_INDEX, SCATTER_FS, marker_shape_index
+
+        assert marker_shape_index(None) == 0, "no marker must stay the historical circle"
+        assert marker_shape_index("not-a-marker") == 0, "unknown markers degrade to a circle"
+        for marker, index in MARKER_SHAPE_INDEX.items():
+            assert isinstance(index, int)
+            if index != 0:  # 0 is the shader's fall-through, so it has no `shape ==` case
+                assert f"shape == {index}" in SCATTER_FS, f"{marker!r} -> {index} has no case"
+
+
+class TestPerPanelAxisNames:
+    """``xlabel``/``ylabel``/``title`` are per panel, not one shared value per figure.
+
+    They were figure-global until they moved onto :class:`~glplot.core.panel.Panel`, so a
+    2x2 grid could carry exactly one x-name between all four panels -- whichever call ran
+    last won and the other three axes went unnamed.
+    """
+
+    def test_each_panel_keeps_its_own_names(self, plot):
+        _, axs = gplt.subplots(1, 2)
+        axs[0].set_xlabel("Time (s)")
+        axs[0].set_ylabel("Volts")
+        axs[1].set_xlabel("Freq (Hz)")
+        axs[1].set_ylabel("Power")
+        assert (axs[0].panel.xlabel, axs[0].panel.ylabel) == ("Time (s)", "Volts")
+        assert (axs[1].panel.xlabel, axs[1].panel.ylabel) == ("Freq (Hz)", "Power")
+
+    def test_engine_property_forwards_to_the_active_panel(self, plot):
+        """``engine.xlabel`` is "the current axes' x-name", like ``engine.scene`` is."""
+        fig, axs = gplt.subplots(1, 2)
+        axs[0].set_xlabel("first")
+        axs[1].set_xlabel("second")
+        fig.active_panel_index = 0
+        assert fig.xlabel == "first"
+        fig.active_panel_index = 1
+        assert fig.xlabel == "second"
+
+    def test_unset_names_are_empty_not_missing(self, plot):
+        """The properties always exist now; "unset" is "" rather than AttributeError."""
+        _, axs = gplt.subplots(1, 2)
+        assert axs[0].panel.xlabel == ""
+        assert gplt.gcf().ylabel == ""
+
+    def test_title_is_per_panel_and_does_not_leak(self, plot):
+        """``set_title`` titles the panel it was called on, not every panel.
+
+        It still writes the window caption too (that is also the single-panel axes
+        title), which is exactly why an untitled sibling must not fall back to it.
+        """
+        _, axs = gplt.subplots(1, 2)
+        axs[1].set_title("Spectrum")
+        assert axs[1].panel.title == "Spectrum"
+        assert axs[0].panel.title == ""
+
+    def test_stock_window_caption_is_not_promoted_to_an_axes_title(self, plot):
+        """"GLPlot" is the default *window* caption and must never become a plot title."""
+        from glplot.utils.preview import _resolve_axes_title
+
+        fig, axs = gplt.subplots(1, 2)
+        assert fig.title in ("GLPlot", "")  # the untouched stock caption
+        assert _resolve_axes_title(axs[0].panel, fig) == ""
 
 
 class TestRealSubplots:
@@ -2229,9 +2444,58 @@ class TestPlottingStubs:
         parts = gplt.quiverkey(q, 0.9, 0.9, 2.0, "2 m/s")
         assert len(parts) == 2  # arrow + text
 
-    def test_clabel_is_an_empty_no_op_that_warns(self, plot):
-        with pytest.warns(gplt.MatplotlibCompatWarning, match="clabel"):
-            assert gplt.clabel() == []
+    def test_clabel_stashes_its_request_for_the_export(self, plot):
+        """The request rides on the contour layer, for ``render_preview()`` to replay."""
+        X, Y = np.meshgrid(np.linspace(-2, 2, 20), np.linspace(-2, 2, 20))
+        cs = gplt.contour(X, Y, X**2 + Y**2, levels=5)
+        assert gplt.clabel(cs, inline=True, fontsize=9, fmt="%.1f") == []
+        assert cs.metadata["clabel"] == {
+            "fontsize": 9,
+            "inline": True,
+            "inline_spacing": 5,
+            "fmt": "%.1f",
+            "colors": None,
+            "use_clabeltext": False,
+            "manual": False,
+            "rightside_up": True,
+            "zorder": None,
+        }
+
+    def test_clabel_also_marks_the_level_lines_for_the_live_pass(self, plot):
+        """The live renderer walks layers, so each level line needs the request too.
+
+        ``contour()`` draws one real polyline per level; those -- not the invisible
+        placeholder the request is stashed on -- are what the live pass seats a number on.
+        """
+        X, Y = np.meshgrid(np.linspace(-2, 2, 20), np.linspace(-2, 2, 20))
+        cs = gplt.contour(X, Y, X**2 + Y**2, levels=5)
+        lines = cs.metadata["line_layers"]
+        assert lines, "contour() must record its level lines for clabel() to find"
+        assert all("clabel" not in ly.metadata for ly in lines)
+        gplt.clabel(cs, fmt="%.2f")
+        assert all(ly.metadata["clabel"]["fmt"] == "%.2f" for ly in lines)
+
+    def test_clabel_levels_selects_which_lines_get_marked(self, plot):
+        X, Y = np.meshgrid(np.linspace(-2, 2, 20), np.linspace(-2, 2, 20))
+        cs = gplt.contour(X, Y, X**2 + Y**2, levels=[1.0, 2.0, 3.0])
+        chosen = 2.0
+        gplt.clabel(cs, levels=[chosen])
+        for line in cs.metadata["line_layers"]:
+            marked = "clabel" in line.metadata
+            assert marked == (float(line.metadata["level"]) == chosen)
+
+    def test_clabel_does_not_cross_label_a_second_contour(self, plot):
+        """Two contours on one axes must not label each other's levels."""
+        X, Y = np.meshgrid(np.linspace(-2, 2, 20), np.linspace(-2, 2, 20))
+        first = gplt.contour(X, Y, X**2 + Y**2, levels=3)
+        second = gplt.contour(X, Y, X - Y, levels=3)
+        gplt.clabel(first)
+        assert all("clabel" in ly.metadata for ly in first.metadata["line_layers"])
+        assert all("clabel" not in ly.metadata for ly in second.metadata["line_layers"])
+
+    def test_clabel_rejects_a_non_layer(self, plot):
+        with pytest.raises(TypeError, match="clabel"):
+            gplt.clabel(None)
 
     def test_figimage_draws_an_image(self, plot):
         layer = gplt.figimage(np.random.default_rng(0).random((8, 8)))

@@ -913,9 +913,43 @@ uniform int u_outline_enabled;
 uniform vec4 u_outline_color;
 uniform float u_outline_alpha;
 
+// Which shape the sprite is masked to: 0 circle (the default and the historical
+// behaviour), 1 square, 2 triangle-up, 3 diamond, 4 x-cross, 5 plus. `marker=` used to be
+// stored on the layer and honoured only by the headless PNG export, so the live window
+// drew every marker as a circle and silently disagreed with the exported figure.
+uniform int u_marker_shape;
+
+// Half-width of a cross's stroke, as a fraction of the sprite half-extent. Thin enough to
+// read as a drawn cross rather than a blob, thick enough to survive a 4 px sprite.
+const float CROSS_HALF_WIDTH = 0.30;
+
+// A normalised radius for `shape`: <1 inside, ==1 on the boundary, >1 outside -- the same
+// contract `length(q)` has for a circle, so every band/feather/outline test below keeps
+// working unchanged whichever shape is selected.
+float marker_radius(vec2 q, int shape) {
+    if (shape == 1) return max(abs(q.x), abs(q.y));            // square (Chebyshev)
+    // gl_PointCoord runs y-DOWN, so the apex of an "up" triangle is at q.y == -1.
+    if (shape == 2) return max(q.y, 2.0 * abs(q.x) - q.y);     // triangle, apex up
+    if (shape == 6) return max(-q.y, 2.0 * abs(q.x) + q.y);    // triangle, apex down
+    if (shape == 3) return abs(q.x) + abs(q.y);                // diamond (Manhattan)
+    if (shape == 4) {                                          // x: plus, rotated 45 deg
+        vec2 d = vec2(q.x + q.y, q.y - q.x) * 0.70710678;
+        return min(max(abs(d.x) / CROSS_HALF_WIDTH, abs(d.y)),
+                   max(abs(d.y) / CROSS_HALF_WIDTH, abs(d.x)));
+    }
+    if (shape == 5) {                                          // plus: two crossed bars
+        return min(max(abs(q.x) / CROSS_HALF_WIDTH, abs(q.y)),
+                   max(abs(q.y) / CROSS_HALF_WIDTH, abs(q.x)));
+    }
+    return length(q);                                          // 0: circle
+}
+
 void main() {
     vec2 p = gl_PointCoord - vec2(0.5);
-    float r = length(p) * 2.0;  // 0 center, ~1 edge
+    // q spans [-1, 1] across the sprite, so `length(q)` is bit-for-bit the `length(p)*2.0`
+    // this shader used before shapes existed.
+    vec2 q = p * 2.0;
+    float r = marker_radius(q, u_marker_shape);  // 0 center, ~1 edge
 
     if (r > 1.0) discard;
 
@@ -955,6 +989,37 @@ void main() {
     FragColor = col;
 }
 """
+
+#: matplotlib marker string -> the ``u_marker_shape`` value ``SCATTER_FS`` switches on.
+#:
+#: Lives beside the shader rather than in the renderer so the two cannot drift: the
+#: integers here are only meaningful as the cases that shader implements.
+#:
+#: Deliberately partial. matplotlib knows dozens of markers (and accepts paths and
+#: verts); these are the six the fragment shader draws. Anything else falls back to the
+#: circle -- the shape GLPlot has always drawn for every marker -- so an unknown marker
+#: degrades to today's behaviour rather than to nothing.
+MARKER_SHAPE_INDEX = {
+    "o": 0,
+    ".": 0,
+    "s": 1,
+    "^": 2,
+    "v": 6,
+    "D": 3,
+    "d": 3,
+    "x": 4,
+    "X": 4,
+    "+": 5,
+    "P": 5,
+}
+
+
+def marker_shape_index(marker: object) -> int:
+    """``u_marker_shape`` for a layer's ``metadata["marker"]``; 0 (circle) for anything else."""
+    if not isinstance(marker, str):
+        return 0
+    return MARKER_SHAPE_INDEX.get(marker, 0)
+
 
 # --- STRIPS ---
 

@@ -38,12 +38,25 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from glplot.gui import dynamics, icons, layerops, mathops, theme, widgets
+from glplot.gui import (
+    clipboard,
+    dynamics,
+    icons,
+    layerops,
+    mathadvise,
+    mathops,
+    mathops2d,
+    mathopsnd,
+    styles,
+    theme,
+    widgets,
+)
 from glplot.gui.datasets import Column, DataSet
 from glplot.gui.history import Command, snapshot
 from glplot.gui.panels.base import Panel
@@ -92,7 +105,7 @@ _REPLACEABLE_LAYER_TYPES = frozenset({"scatter", "polyline", "line_family"})
 
 _INTEGRAL_METHODS = ("trapezoid", "simpson", "rectangle")
 _DERIVATIVE_METHODS = ("central", "forward", "savgol")
-_SMOOTH_METHODS = ("moving_average", "gaussian", "savgol", "median")
+_SMOOTH_METHODS = ("moving_average", "gaussian", "savgol", "median", "ema")
 _NOISE_KINDS = ("gaussian", "uniform", "poisson", "salt_pepper")
 _RESAMPLE_KINDS = ("linear", "cubic")
 _NORMALIZE_MODES = ("minmax", "zscore", "max_abs", "area")
@@ -132,6 +145,13 @@ _MAX_FIT_PEAKS = 10
 # first thing a user sees on the custom tab is a fit and not a failure.
 _DEFAULT_FIT_EXPR = "a*exp(-x/b) + c"
 
+#: Confidence-band levels the Fit tab offers, and their numeric value. Kept as a small
+#: fixed set (rather than a free slider) because mathops.confidence_band's no-scipy
+#: fallback table only covers these; a slider would silently be exact for scipy and
+#: approximate for the four values that table happens to include.
+_CONFIDENCE_LEVELS: Tuple[str, ...] = ("68%", "90%", "95%", "99%")
+_CONFIDENCE_LEVEL_VALUES: Dict[str, float] = {"68%": 0.68, "90%": 0.90, "95%": 0.95, "99%": 0.99}
+
 _APPLY_MODES: Tuple[Tuple[str, str], ...] = (
     ("new_layer", "New layer"),
     ("new_dataset", "New dataset"),
@@ -155,19 +175,40 @@ _TABS: Tuple[Tuple[str, str, str], ...] = (
     ("peaks", "Peaks", "_tab_peaks"),
     ("histogram", "Histogram", "_tab_histogram"),
     ("stats", "Statistics", "_tab_stats"),
+    ("correlate", "Correlate", "_tab_correlate"),
     ("dynamics", "Dynamics", "_tab_dynamics"),
+    ("cluster", "Cluster", "_tab_cluster"),
+    ("density2d", "Density 2D", "_tab_density2d"),
+    ("envelope", "Envelope", "_tab_envelope"),
+    ("rolling", "Rolling stats", "_tab_rolling"),
+    ("spatial", "Spatial", "_tab_spatial"),
+    ("compare", "Compare", "_tab_compare"),
+    ("pca", "PCA", "_tab_pca"),
+    ("umap", "UMAP", "_tab_umap"),
 )
 
-#: The tabs, grouped for the top-level category bar. Thirteen operations overflow the
+#: The tabs, grouped for the top-level category bar. Twenty operations overflow the
 #: panel's tab strip at its default width (they scroll out of sight, so a user cannot even
-#: see that they exist); grouping them under three headings keeps every operation one
+#: see that they exist); grouping them under five headings keeps every operation one
 #: glance away. Each key appears in exactly one category (asserted below), and the order
 #: here is the presentation order both bars use.
+#:
+#: "Multivariate" is deliberately its own category, not folded into Statistics: every tab
+#: everywhere else in this panel treats the source as one (x, y) *signal* -- one ordered
+#: curve in, a transformed curve or a scalar summary out. Cluster, Density 2D and Spatial
+#: instead treat it as an unordered 2-D *point cloud*, with a different preview (a
+#: scatter or a heatmap, not a line) and a different Apply story (a data-driven colour or
+#: the existing hist2d layer kind, not a transformed y). That is a different kind of tab,
+#: not a different flavour of statistics.
 _CATEGORIES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Calculus", ("integral", "derivative", "resample", "normalize")),
-    ("Signal", ("smooth", "filter", "detrend", "noise", "fft", "autocorr", "peaks")),
-    ("Statistics", ("fit", "histogram", "stats")),
+    (
+        "Signal",
+        ("smooth", "filter", "detrend", "noise", "fft", "autocorr", "peaks", "envelope", "rolling"),
+    ),
+    ("Statistics", ("fit", "histogram", "stats", "correlate", "compare")),
     ("Dynamics", ("dynamics",)),
+    ("Multivariate", ("cluster", "density2d", "spatial", "pca", "umap")),
 )
 
 #: key -> (title, body method name), so a category can render a tab from its key alone.
@@ -193,6 +234,23 @@ _DESCRIBE_ROWS: Tuple[Tuple[str, str], ...] = (
     ("var", "Variance"),
     ("sum", "Sum"),
     ("rms", "RMS"),
+)
+
+#: The extra rows "Show more" adds to the Statistics tab -- everything
+#: mathops.describe_extended() has beyond describe(). Percentile keys must match its
+#: default ``percentiles=(5.0, 25.0, 75.0, 95.0)`` exactly, since the key format is
+#: ``f"percentile_{p:g}"``.
+_DESCRIBE_EXTENDED_ROWS: Tuple[Tuple[str, str], ...] = (
+    ("percentile_5", "5th percentile"),
+    ("percentile_25", "25th percentile (Q1)"),
+    ("percentile_75", "75th percentile (Q3)"),
+    ("percentile_95", "95th percentile"),
+    ("iqr", "Interquartile range"),
+    ("mad", "Median abs deviation"),
+    ("skewness", "Skewness"),
+    ("kurtosis", "Excess kurtosis"),
+    ("nan_count", "Non-finite samples"),
+    ("outlier_count", "Outliers (Tukey fence)"),
 )
 
 
@@ -385,12 +443,50 @@ class _Result:
     #: must show the whole signal with the peaks marked on it.
     base_x: Optional[np.ndarray] = None
     base_y: Optional[np.ndarray] = None
-    #: Points drawn as dots on top of the preview line (the detected peaks).
+    #: Points drawn as dots on top of the preview line (the detected peaks, by default).
     markers: Optional[Tuple[np.ndarray, np.ndarray]] = None
+    #: Legend/count label for ``markers`` -- "peaks" fits every existing caller (Peaks,
+    #: Autocorr, Dynamics); Fit's output-grid mode overrides it to "data" since its
+    #: markers are the original samples, not detected peaks.
+    marker_label: str = "peaks"
     #: Named columns for a multi-column "new dataset" Apply (the full peak table). When
     #: set, it -- not ``x``/``y`` -- is what New dataset writes; None keeps the 2-column
     #: (x, y) default every other operation uses.
     table: Optional[List[Tuple[str, np.ndarray]]] = None
+    #: (lower, upper) confidence band, same x as ``y``/``base_y``, drawn as a translucent
+    #: fill behind the line. Only the Fit tab sets this; every other operation leaves it
+    #: None and the preview simply omits the band.
+    band: Optional[Tuple[np.ndarray, np.ndarray]] = None
+    #: Per-point category labels (e.g. a cluster id), same length as ``x``/``y``. When
+    #: set, the preview draws an unordered scatter coloured by category
+    #: (``widgets.mini_scatter``) instead of ``mini_plot``'s connected line, "New layer"
+    #: makes the points a data-driven colour via GLPlot's existing per-point ``c=``
+    #: encoding, and "Add column" writes the labels rather than ``y``. Only the Cluster
+    #: tab sets this.
+    color_values: Optional[np.ndarray] = None
+    #: Colormap the ``color_values`` should be rendered with on a new layer (matches
+    #: ``pyplot.scatter(cmap=...)``'s convention). Irrelevant when ``color_values`` is None.
+    color_cmap: str = "viridis"
+    #: A 2-D density grid (histogram or KDE) for the preview only -- ``x``/``y`` stay the
+    #: raw point pass-through so New layer/Add column/Replace keep operating on real data,
+    #: not the grid. ``grid_x``/``grid_y`` are bin edges (length ``nx+1``/``ny+1``,
+    #: matching ``np.histogram2d``); ``grid_z`` has shape ``(nx, ny)``. Only the
+    #: Density 2D tab sets these.
+    grid_x: Optional[np.ndarray] = None
+    grid_y: Optional[np.ndarray] = None
+    grid_z: Optional[np.ndarray] = None
+    #: True for an unordered point-cloud result with no per-point category (Spatial):
+    #: the preview must still use ``mini_scatter``, not ``mini_plot``'s connected line,
+    #: but there is no ``color_values`` to distinguish it by (that condition alone
+    #: already routes Cluster through the scatter preview). ``markers`` here are
+    #: whatever points the tab wants called out (Spatial's convex hull vertices).
+    force_scatter: bool = False
+    #: Which of the 4 Apply modes this result offers, in ``_APPLY_MODES`` order. None
+    #: (the default) means all 4, as every existing tab already behaves. A result that
+    #: has no natural (x, y) curve to plot or column to attach -- one row of summary
+    #: statistics -- restricts this to ``("new_dataset",)`` rather than disabling Apply
+    #: outright, so its numbers are still one click from becoming data.
+    apply_modes: Optional[Tuple[str, ...]] = None
 
 
 # ----------------------------------------------------------------------------------
@@ -439,6 +535,11 @@ class MathLabPanel(Panel):
         self._smooth_window = 11
         self._smooth_sigma = 0.0  # 0 => let mathops default it to window / 6
         self._smooth_polyorder = 3
+        self._smooth_alpha = 0.0  # 0 => let mathops default it to 2 / (window + 1)
+
+        self._rolling_stat = "mean"
+        self._rolling_window = 11
+        self._rolling_center = True
 
         self._noise_kind = "gaussian"
         self._noise_amplitude = 0.1
@@ -460,6 +561,10 @@ class MathLabPanel(Panel):
         self._filter_order = 4
         self._filter_cutoff = 0.25
         self._filter_cutoff_hi = 0.40
+        #: IIR filter family: butter (default, no ripple) | cheby1 | cheby2 | bessel.
+        self._filter_family = "butter"
+        self._filter_ripple = 1.0  # cheby1 passband ripple, dB
+        self._filter_attenuation = 40.0  # cheby2 stopband attenuation, dB
 
         self._detrend_kind = "linear"  # constant | linear | asls
         # AsLS controls: smoothness as log10(lambda) so a slider spans decades, and the
@@ -469,6 +574,7 @@ class MathLabPanel(Panel):
 
         # Prominence as a fraction of the signal's peak-to-peak range, for the same reason:
         # 0.05 means "at least 5% of the full swing", meaningful at any scale.
+        self._peak_mode = "peaks"  # peaks | valleys
         self._peak_prominence = 0.05
         self._peak_distance_on = False
         self._peak_distance = 1
@@ -476,10 +582,36 @@ class MathLabPanel(Panel):
         # Max lag as a fraction of the signal length: the ACF is noisiest at long lags
         # (fewer overlapping samples), so half the record is a sensible default ceiling.
         self._autocorr_maxlag = 0.5
+        self._autocorr_mode = "auto"  # auto | cross
+        self._autocorr_cross_col = ""
+        #: Stashed by _draw_tab_body every frame so a tab body (called with no
+        #: arguments) can read the current source's dataset for a column picker.
+        self._current_source: Optional[_Source] = None
 
         self._hist_bins = 50
         self._hist_density = False
         self._hist_dist = "normal"
+
+        #: Statistics tab: percentiles/IQR/MAD/skewness/kurtosis/outliers, off by default
+        #: so the common case (the 9-row describe() summary) stays uncluttered.
+        self._stats_show_more = False
+        #: Statistics tab: confidence interval for the mean, off by default (extra rows
+        #: only when asked for, matching "Show more" above).
+        self._stats_ci = False
+        self._stats_ci_level = "95%"
+
+        # Correlate tab: confidence interval for Pearson r (Fisher z).
+        self._correlate_ci = False
+        self._correlate_ci_level = "95%"
+
+        # Compare tab: two-sample hypothesis test against another column.
+        self._compare_col = ""
+        self._compare_method = "welch"
+        #: Compare tab: confidence interval for the mean difference. Restricted to
+        #: welch/student (see mathops.DIFFERENCE_CI_METHODS): mannwhitney/ks test the
+        #: full distribution, not the mean, and have no matching closed-form interval.
+        self._compare_ci = False
+        self._compare_ci_level = "95%"
 
         # Dynamics tab. Delay is in samples (the panel cannot know the signal's period, so
         # a sample count is the honest unit); dim is the embedding dimension used for the
@@ -488,6 +620,36 @@ class MathLabPanel(Panel):
         self._dyn_mode = "phase"
         self._dyn_delay = 10
         self._dyn_dim = 3
+
+        # Cluster tab (Multivariate). k=3 is a reasonable "show me something" default on
+        # data with no obvious cluster count; seed is fixed so results are reproducible
+        # across frames and reruns until the user asks for a fresh reroll.
+        self._cluster_method = "kmeans"  # kmeans | hierarchical
+        self._cluster_k = 3
+        self._cluster_seed = 0
+        self._cluster_linkage = "ward"
+
+        # Density 2D tab (Multivariate).
+        self._density_mode = "histogram"
+        self._density_bins = 40
+        self._density_grid = 40
+        self._density_custom_bw = False
+        self._density_bw_factor = 1.0
+
+        # PCA tab (Multivariate). Columns start empty and default to "every column of
+        # the dataset" the first time the tab is shown against a real dataset (see
+        # _tab_pca) -- an empty tuple here is "not yet initialised", not "none picked".
+        self._pca_columns: Tuple[str, ...] = ()
+        self._pca_n_components = 2
+        self._pca_scale = "zscore"
+
+        # UMAP tab (Multivariate). Same column-selection convention as PCA above.
+        self._umap_columns: Tuple[str, ...] = ()
+        self._umap_n_components = 2
+        self._umap_n_neighbors = 15
+        self._umap_min_dist = 0.1
+        self._umap_scale = "zscore"
+        self._umap_seed = 0
 
         self._fit_model = "polynomial"
         self._fit_degree = 3
@@ -500,6 +662,20 @@ class MathLabPanel(Panel):
         #: heuristics read the source data, which a tab body never sees, so this is the
         #: only way the tab can show the automatic start or seed "Manual" from it.
         self._fit_auto: Dict[str, List[float]] = {}
+        #: Outlier-robust fit (nonlinear models only): scipy.optimize's robust loss kinds.
+        self._fit_robust = False
+        self._fit_loss = "soft_l1"
+        #: Confidence band: shown on any model (polynomial included), off by default so
+        #: the common case -- just the fit line -- stays uncluttered.
+        self._fit_band = False
+        self._fit_band_level = "95%"
+        #: Output grid: off evaluates the fit at the source's own x samples (today's
+        #: behaviour, and what Replace source needs); on evaluates it at N evenly spaced
+        #: points across the x range instead -- a smooth curve independent of how many
+        #: samples the input has, which is the whole point for a sparse or unevenly
+        #: sampled fit. This is the "how many points to add" control Apply needed.
+        self._fit_output_grid = False
+        self._fit_output_points = 200
 
         # -- apply --
         # Per-tab, keyed by the _TABS key. A name typed on Smooth is about the smoothed
@@ -537,6 +713,19 @@ class MathLabPanel(Panel):
         self._copied_frames = 0
         self._copied_key = ""
 
+        # -- CSV export -- path field shared by every tab, same convention as the Data
+        # Editor's Import/Export section (no native file dialog exists anywhere in this
+        # GUI -- CONTRACT-adjacent: pyimgui has none to offer).
+        self._csv_path = os.path.join(os.getcwd(), "mathlab_export.csv")
+        self._exported_frames = 0
+        self._exported_key = ""
+
+        # -- "Suggested next step" -- cached on the source's own key, not the per-frame
+        # fingerprint _cached_result uses: a suggestion should react to a new source, not
+        # to every keystroke of a parameter on whatever tab happens to be open.
+        self._advise_key: Optional[Tuple[Any, ...]] = None
+        self._advise_cache: List[mathadvise.Recommendation] = []
+
     # -- public API (the workspace's Math actions call this) ------------------------
 
     def show_operation(self, key: str) -> None:
@@ -569,7 +758,48 @@ class MathLabPanel(Panel):
             widgets.error_box(source_error or "No source selected.")
             return
 
+        self._draw_recommendations(source)
         self._draw_tabs(source)
+
+    def _draw_recommendations(self, source: _Source) -> None:
+        """A collapsible "Suggested next step" strip, driven by :mod:`mathadvise`.
+
+        Heuristic, explicitly labeled as such -- this is a nudge toward a tab worth
+        trying, not a verdict about the data. A failing estimator is swallowed rather
+        than surfaced: a broken suggestion is not worth interrupting the panel over.
+        """
+        if source.key != self._advise_key:
+            self._advise_key = source.key
+            try:
+                n_columns = len(source.dataset.column_names()) if source.dataset is not None else 0
+                self._advise_cache = mathadvise.recommend(
+                    source.x_raw,
+                    source.y_raw,
+                    has_dataset=source.dataset is not None,
+                    n_columns=n_columns,
+                )
+            except Exception:
+                self._advise_cache = []
+
+        if not widgets.section("Suggested next step", default_open=False):
+            return
+
+        if not self._advise_cache:
+            imgui.text_disabled("No strong signal in this data -- browse the tabs below.")
+            return
+
+        imgui.text_wrapped(
+            "Heuristic hints from a quick look at the data, not a verdict -- a nudge "
+            "toward a tab worth trying."
+        )
+        for rec in self._advise_cache:
+            imgui.bullet_text(rec.title)
+            imgui.same_line()
+            widgets.help_marker(rec.reason)
+            imgui.same_line()
+            if imgui.small_button(f"Try it##advise_{rec.tab_key}"):
+                self.show_operation(rec.tab_key)
+        imgui.separator()
 
     def _draw_notice(self) -> None:
         """Show the last deferred message (e.g. "not undoable"), with a dismiss button."""
@@ -814,6 +1044,12 @@ class MathLabPanel(Panel):
         try:
             if child_visible:
                 imgui.spacing()
+                # A handful of tabs (Autocorr's cross-correlate mode, Statistics'
+                # Compare) need a second column from the *current* dataset to draw
+                # their own picker, but tab bodies are called with no arguments (they
+                # read only self). Stashing the source here -- freshest every frame --
+                # is cheaper than threading it through every tab method's signature.
+                self._current_source = source
                 body: Callable[[], Tuple[Any, ...]] = getattr(self, method_name)
                 imgui.push_item_width(-140.0)
                 try:
@@ -824,11 +1060,13 @@ class MathLabPanel(Panel):
                 result, error = self._cached_result(source, params)
                 imgui.spacing()
                 self._draw_preview(source, result, error)
+                if result is not None:
+                    imgui.spacing()
+                    self._draw_export_row(result, key)
                 if result is not None and result.stats:
                     imgui.spacing()
                     self._draw_report_header(source, result, key)
-                    for label, value in result.stats:
-                        widgets.stat_row(label, value)
+                    widgets.stats_table(f"##stats_{key}", ("Statistic", "Value"), result.stats)
         finally:
             # CONTRACT 2.2: end_child is unconditional.
             imgui.end_child()
@@ -927,7 +1165,9 @@ class MathLabPanel(Panel):
             _SMOOTH_METHODS,
             help="moving_average: boxcar, edge-corrected. gaussian: soft kernel. savgol: "
             "preserves peak height and width (needs scipy). median: kills salt-and-pepper "
-            "spikes without rounding off edges.",
+            "spikes without rounding off edges. ema: exponential moving average -- "
+            "causal (only past/current samples), what a live/streaming computation "
+            "could actually produce, unlike the other four which are centered.",
         )
         changed, window = imgui.input_int("Window", int(self._smooth_window))
         if changed:
@@ -948,12 +1188,23 @@ class MathLabPanel(Panel):
             changed, polyorder = imgui.input_int("Poly order", int(self._smooth_polyorder))
             if changed:
                 self._smooth_polyorder = max(0, min(int(polyorder), 10))
+        if self._smooth_method == "ema":
+            _c, self._smooth_alpha = widgets.labeled_slider_float(
+                "Alpha",
+                self._smooth_alpha,
+                vmin=0.0,
+                vmax=1.0,
+                help="0 means 2 / (window + 1), the standard 'N-period EMA' convention. "
+                "Larger alpha weights recent samples more (less smoothing, faster to "
+                "react); smaller weights history more (more smoothing, slower to react).",
+            )
         return (
             "smooth",
             self._smooth_method,
             int(self._smooth_window),
             float(self._smooth_sigma),
             int(self._smooth_polyorder),
+            float(self._smooth_alpha),
         )
 
     def _tab_noise(self) -> Tuple[Any, ...]:
@@ -1042,6 +1293,17 @@ class MathLabPanel(Panel):
             help="lowpass: keep slow variation, drop fast wiggles. highpass: the reverse. "
             "bandpass: keep a band. bandstop: notch a band out (e.g. mains hum).",
         )
+        _c, self._filter_family = widgets.enum_combo(
+            "Family",
+            self._filter_family,
+            mathops.IIR_FAMILIES,
+            help="butter (default): maximally flat passband, no ripple anywhere. "
+            "cheby1: sharper roll-off than butter at the same order, at the cost of "
+            "ripple in the PASSBAND (set below). cheby2: sharper roll-off with a flat "
+            "passband like butter, but ripple in the STOPBAND instead (set below). "
+            "bessel: gentler roll-off but near-linear phase and minimal ringing -- "
+            "best when a pulse/waveform's SHAPE matters more than a sharp cutoff.",
+        )
         changed, order = imgui.input_int("Order", int(self._filter_order))
         if changed:
             self._filter_order = max(1, min(int(order), 8))
@@ -1050,6 +1312,26 @@ class MathLabPanel(Panel):
             "and backwards (zero phase), so a feature is not shifted and the effective "
             "order is doubled."
         )
+        if self._filter_family == "cheby1":
+            _c, self._filter_ripple = widgets.labeled_slider_float(
+                "Passband ripple (dB)",
+                self._filter_ripple,
+                vmin=0.01,
+                vmax=10.0,
+                help="How much gain is allowed to wobble inside the passband. Smaller "
+                "is flatter (closer to butter) but needs a higher order for the same "
+                "roll-off sharpness; larger buys a sharper transition at the same order.",
+            )
+        elif self._filter_family == "cheby2":
+            _c, self._filter_attenuation = widgets.labeled_slider_float(
+                "Stopband attenuation (dB)",
+                self._filter_attenuation,
+                vmin=10.0,
+                vmax=100.0,
+                help="How strongly the stopband must be suppressed. Larger pushes the "
+                "rejected frequencies down further, at the cost of a slower transition "
+                "for the same order.",
+            )
         is_band = self._filter_type in ("bandpass", "bandstop")
         if is_band:
             _c, self._filter_cutoff = widgets.labeled_slider_float(
@@ -1078,6 +1360,9 @@ class MathLabPanel(Panel):
             int(self._filter_order),
             float(self._filter_cutoff),
             float(self._filter_cutoff_hi),
+            self._filter_family,
+            float(self._filter_ripple),
+            float(self._filter_attenuation),
         )
 
     def _tab_detrend(self) -> Tuple[Any, ...]:
@@ -1120,13 +1405,23 @@ class MathLabPanel(Panel):
         )
 
     def _tab_peaks(self) -> Tuple[Any, ...]:
-        """Peak-detection parameters. Prominence is a fraction of the signal's range."""
-        imgui.text_disabled("Local maxima, marked on the signal below.")
+        """Peak/valley-detection parameters. Prominence is a fraction of the signal's range."""
+        _c, self._peak_mode = widgets.enum_combo(
+            "Mode",
+            self._peak_mode,
+            ("peaks", "valleys"),
+            help="peaks: local maxima. valleys: local minima -- exactly the same "
+            "detector run on the negated signal, so every knob below means the same "
+            "thing either way.",
+        )
+        noun = "valleys" if self._peak_mode == "valleys" else "peaks"
+        extrema_word = "minima" if self._peak_mode == "valleys" else "maxima"
+        imgui.text_disabled(f"Local {extrema_word}, marked on the signal below.")
         imgui.same_line()
         widgets.help_marker(
-            "Prominence is how far a peak stands above the surrounding baseline, as a "
-            "fraction of the signal's full peak-to-peak swing. Raise it to reject noise "
-            "wiggles; lower it to catch small real peaks. This is the one knob that "
+            f"Prominence is how far a {noun[:-1]} stands above the surrounding baseline, "
+            "as a fraction of the signal's full peak-to-peak swing. Raise it to reject "
+            "noise wiggles; lower it to catch small real ones. This is the one knob that "
             "matters most."
         )
         _c, self._peak_prominence = widgets.labeled_slider_float(
@@ -1157,6 +1452,7 @@ class MathLabPanel(Panel):
         )
         return (
             "peaks",
+            self._peak_mode,
             float(self._peak_prominence),
             int(self._peak_distance) if self._peak_distance_on else None,
         )
@@ -1202,6 +1498,93 @@ class MathLabPanel(Panel):
         if model == "custom":
             return mathops.custom_model(expr)
         return mathops.resolve_model(model)
+
+    def _fit_band_controls(self) -> Tuple[bool, float]:
+        """The confidence-band checkbox + level picker. Available on every model."""
+        _c, self._fit_band = imgui.checkbox("Show confidence band", self._fit_band)
+        imgui.same_line()
+        widgets.help_marker(
+            "A shaded region around the fit showing where the true curve likely lies, "
+            "propagated from the fit's own parameter uncertainty. Wider where the data "
+            "is sparser or noisier; not meaningful when a parameter's own standard error "
+            "is infinite (an underdetermined fit)."
+        )
+        if self._fit_band:
+            imgui.same_line()
+            _c, self._fit_band_level = widgets.enum_combo(
+                "##fit_band_level", self._fit_band_level, _CONFIDENCE_LEVELS
+            )
+        return self._fit_band, _CONFIDENCE_LEVEL_VALUES.get(self._fit_band_level, 0.95)
+
+    def _fit_output_controls(self) -> Tuple[bool, int]:
+        """The output-grid checkbox + point-count field. Available on every model.
+
+        This is the "how many points should Apply add" control: off (default) evaluates
+        the fit at the source's own x samples, matching the input point-for-point. On
+        evaluates it at N evenly spaced points across the x range instead, independent
+        of the input's own sample count -- a smooth curve for a sparse or unevenly
+        sampled fit, not a same-density echo of it.
+        """
+        _c, self._fit_output_grid = imgui.checkbox(
+            "Evaluate on a smooth grid", self._fit_output_grid
+        )
+        imgui.same_line()
+        widgets.help_marker(
+            "Off: the fit is evaluated at the source's own x samples. On: evaluated at "
+            "N evenly spaced points across the x range instead -- pick N below. Useful "
+            "when the input is sparse or unevenly sampled and a smooth curve, not a "
+            "same-density echo of the input, is what 'New layer'/'New dataset' should "
+            "commit. 'Replace source' is unavailable while this is on, since the point "
+            "count no longer matches the input."
+        )
+        n_points = int(self._fit_output_points)
+        if self._fit_output_grid:
+            imgui.same_line()
+            changed, n = imgui.input_int("Points##fit_output_points", n_points)
+            if changed:
+                self._fit_output_points = max(2, min(int(n), 100_000))
+                n_points = self._fit_output_points
+        return bool(self._fit_output_grid), n_points
+
+    def _ci_controls(self, flag_attr: str, level_attr: str, *, help: str) -> Tuple[bool, float]:
+        """A "Show confidence interval" checkbox + level picker, generic over which
+        tab's state it reads/writes (``flag_attr``/``level_attr`` name the two ``self``
+        attributes). Point 2 of the user's request: a confidence interval option,
+        available wherever a point estimate is reported, not just on the Fit tab.
+        """
+        show = bool(getattr(self, flag_attr))
+        _c, show = imgui.checkbox("Show confidence interval", show)
+        setattr(self, flag_attr, show)
+        imgui.same_line()
+        widgets.help_marker(help)
+        if show:
+            imgui.same_line()
+            level_label = getattr(self, level_attr)
+            _c, level_label = widgets.enum_combo(f"##{flag_attr}", level_label, _CONFIDENCE_LEVELS)
+            setattr(self, level_attr, level_label)
+        return show, _CONFIDENCE_LEVEL_VALUES.get(getattr(self, level_attr), 0.95)
+
+    def _fit_robust_controls(self) -> Tuple[bool, str]:
+        """The outlier-robust-fit checkbox + loss picker. Nonlinear models only."""
+        _c, self._fit_robust = imgui.checkbox("Robust fit (outliers)", self._fit_robust)
+        imgui.same_line()
+        widgets.help_marker(
+            "Down-weights points that do not fit the model instead of forcing the curve "
+            "toward them. Use this when a few bad points are dragging an ordinary fit off "
+            "course. Reported parameter errors are approximate under a robust loss -- "
+            "treat them as a rough sense of scale, not an exact standard error."
+        )
+        if self._fit_robust:
+            imgui.same_line()
+            _c, self._fit_loss = widgets.enum_combo(
+                "##fit_loss",
+                self._fit_loss,
+                mathops.ROBUST_LOSS_KINDS,
+                help="soft_l1/huber/cauchy/arctan down-weight large residuals "
+                "increasingly aggressively. linear is ordinary least squares, kept for "
+                "comparison.",
+            )
+        return self._fit_robust, self._fit_loss
 
     def _fit_guess_controls(
         self, model: str, spec: mathops.FitModel
@@ -1286,13 +1669,18 @@ class MathLabPanel(Panel):
                 "Least squares. Clamped to 20 and to the sample count; a high degree on "
                 "few points oscillates wildly between them."
             )
-            return ("fit", "polynomial", int(self._fit_degree), "", None)
+            band, level = self._fit_band_controls()
+            use_grid, n_points = self._fit_output_controls()
+            return (
+                "fit", "polynomial", int(self._fit_degree), "", None, False, "soft_l1",
+                band, level, use_grid, n_points,
+            )
 
         if not mathops.fit_available():
             # No numpy fallback exists for curve_fit, so say so plainly instead of
             # offering a control that cannot work. Polynomial is still right there.
             widgets.error_box(mathops.FIT_UNAVAILABLE_MESSAGE)
-            return ("fit", model, 0, self._fit_expr, None)
+            return ("fit", model, 0, self._fit_expr, None, False, "soft_l1", False, 0.95, False, 200)
 
         if model in _MULTIPEAK_MODELS:
             npeaks_changed, npeaks = imgui.input_int("Peaks", int(self._fit_npeaks))
@@ -1320,11 +1708,17 @@ class MathLabPanel(Panel):
             spec = self._fit_spec(model, self._fit_expr, int_slot)
         except ValueError as exc:
             widgets.error_box(str(exc))
-            return ("fit", model, int_slot, self._fit_expr, None)
+            return ("fit", model, int_slot, self._fit_expr, None, False, "soft_l1", False, 0.95, False, 200)
 
         imgui.text_disabled(spec.formula)
         p0 = self._fit_guess_controls(model, spec)
-        return ("fit", model, int_slot, self._fit_expr, p0)
+        robust, loss = self._fit_robust_controls()
+        band, level = self._fit_band_controls()
+        use_grid, n_points = self._fit_output_controls()
+        return (
+            "fit", model, int_slot, self._fit_expr, p0, robust, loss, band, level,
+            use_grid, n_points,
+        )
 
     def _tab_fft(self) -> Tuple[Any, ...]:
         """FFT parameters (there are none: the transform is fully determined)."""
@@ -1337,15 +1731,145 @@ class MathLabPanel(Panel):
         )
         return ("fft",)
 
-    def _tab_autocorr(self) -> Tuple[Any, ...]:
-        """Autocorrelation parameters: how far out in lag to compute."""
-        imgui.text_disabled("Self-similarity vs lag; a peak marks a repeating period.")
+    def _tab_envelope(self) -> Tuple[Any, ...]:
+        """Envelope parameters (there are none: the transform is fully determined)."""
+        imgui.text_disabled("The amplitude envelope of an oscillating signal.")
         imgui.same_line()
         widgets.help_marker(
-            "The autocorrelation is 1 at lag 0 and shows a peak at the lag of any period "
-            "the signal repeats over -- often clearer than an FFT on a short record. The "
-            "first peak (marked) is reported as the dominant period, in x units."
+            "Traces the top of the signal's swing -- the curve you would draw by eye "
+            "connecting each cycle's peaks. Useful for amplitude-modulated or decaying "
+            "oscillations, where the envelope itself (not the oscillation) is the "
+            "interesting signal. Computed via the Hilbert transform; like FFT, a "
+            "non-uniform x grid is linearly resampled onto a uniform one first."
         )
+        return ("envelope",)
+
+    def _tab_rolling(self) -> Tuple[Any, ...]:
+        """Moving-window statistic parameters."""
+        _c, self._rolling_stat = widgets.enum_combo(
+            "Statistic",
+            self._rolling_stat,
+            mathops.ROLLING_STATS,
+            help="mean/median: a smoothed trend, like Smooth. std: a rolling "
+            "volatility/noise-level trace -- where the signal gets noisier, not just "
+            "what it averages to. min/max: a moving envelope of the signal's own "
+            "extremes.",
+        )
+        changed, window = imgui.input_int("Window", int(self._rolling_window))
+        if changed:
+            self._rolling_window = max(1, int(window))
+        widgets.help_marker("Width of the moving window, in samples.")
+        _c, self._rolling_center = imgui.checkbox("Center", self._rolling_center)
+        imgui.same_line()
+        widgets.help_marker(
+            "On: each point uses the samples around it -- best for exploring data you "
+            "already have in full. Off: trailing/causal, using only samples up to and "
+            "including each point -- what a live computation could actually produce "
+            "without seeing the future."
+        )
+        return (
+            "rolling",
+            self._rolling_stat,
+            int(self._rolling_window),
+            bool(self._rolling_center),
+        )
+
+    def _column_picker(
+        self, label: str, current: str, *, help: Optional[str] = None
+    ) -> Optional[str]:
+        """A combo over the *current* source's dataset columns (see ``_current_source``).
+
+        Returns the selected column name, or None with an explanatory disabled line when
+        the source has no dataset (a plotted layer has no table to pick a second column
+        from) or the dataset has no columns.
+        """
+        source = self._current_source
+        dataset = source.dataset if source is not None else None
+        if dataset is None:
+            imgui.text_disabled(f"{label}: needs a dataset source (a plotted layer has no table).")
+            return None
+        names = dataset.column_names()
+        if not names:
+            imgui.text_disabled(f"{label}: the dataset has no columns.")
+            return None
+        value = current if current in names else names[0]
+        _c, picked = widgets.enum_combo(label, value, tuple(names), help=help)
+        return picked
+
+    def _multi_column_picker(
+        self, label: str, selected: Tuple[str, ...], *, help: Optional[str] = None
+    ) -> Tuple[str, ...]:
+        """A checkbox per column of the *current* source's dataset (see
+        ``_current_source``) -- PCA/UMAP's input, unlike every other tab's single (x, y)
+        pair, is however many columns the user picks.
+
+        Returns the selected column names in dataset order, or ``()`` with an
+        explanatory disabled line when the source has no dataset (a plotted layer has
+        no table) or the dataset has no columns.
+        """
+        source = self._current_source
+        dataset = source.dataset if source is not None else None
+        if dataset is None:
+            imgui.text_disabled(f"{label}: needs a dataset source (a plotted layer has no table).")
+            return ()
+        names = dataset.column_names()
+        if not names:
+            imgui.text_disabled(f"{label}: the dataset has no columns.")
+            return ()
+        imgui.text(label)
+        if help:
+            imgui.same_line()
+            widgets.help_marker(help)
+        chosen = set(selected)
+        for name in names:
+            checked = name in chosen
+            changed, checked = imgui.checkbox(f"{name}##{label}_{name}", checked)
+            if changed:
+                if checked:
+                    chosen.add(name)
+                else:
+                    chosen.discard(name)
+        return tuple(n for n in names if n in chosen)
+
+    def _tab_autocorr(self) -> Tuple[Any, ...]:
+        """Autocorrelation (self vs. a delayed copy) or cross-correlation (vs. another
+        column) parameters: how far out in lag to compute."""
+        _c, self._autocorr_mode = widgets.enum_combo(
+            "Mode",
+            self._autocorr_mode,
+            ("auto", "cross"),
+            help="auto: how the signal correlates with a delayed copy of ITSELF -- a "
+            "peak marks a repeating period. cross: how it correlates with a delayed "
+            "copy of ANOTHER column -- a peak marks a lag/delay between the two.",
+        )
+        cross_col = ""
+        if self._autocorr_mode == "cross":
+            picked = self._column_picker(
+                "Compare to",
+                self._autocorr_cross_col,
+                help="The second column, correlated against the source's y at every lag.",
+            )
+            if picked is not None:
+                self._autocorr_cross_col = picked
+                cross_col = picked
+
+        if self._autocorr_mode == "auto":
+            imgui.text_disabled("Self-similarity vs lag; a peak marks a repeating period.")
+            imgui.same_line()
+            widgets.help_marker(
+                "The autocorrelation is 1 at lag 0 and shows a peak at the lag of any "
+                "period the signal repeats over -- often clearer than an FFT on a short "
+                "record. The first peak (marked) is reported as the dominant period, in "
+                "x units."
+            )
+        else:
+            imgui.text_disabled("Similarity vs lag against another column; a peak marks a delay.")
+            imgui.same_line()
+            widgets.help_marker(
+                "A peak at a positive lag means the compared column lags the source's y "
+                "by that many samples; a peak at a negative lag means it leads. Unlike "
+                "autocorrelation this is not symmetric and is not 1 at lag 0."
+            )
         _c, self._autocorr_maxlag = widgets.labeled_slider_float(
             "Max lag",
             self._autocorr_maxlag,
@@ -1354,12 +1878,319 @@ class MathLabPanel(Panel):
             help="Largest lag to compute, as a fraction of the record length. The estimate "
             "is noisier at long lags, so half is a good default.",
         )
-        return ("autocorr", float(self._autocorr_maxlag))
+        return ("autocorr", self._autocorr_mode, cross_col, float(self._autocorr_maxlag))
 
     def _tab_stats(self) -> Tuple[Any, ...]:
-        """Statistics has no parameters; describe() is fully determined by the source."""
+        """Statistics: the source's y column, described. "Show more" adds shape/robust
+        statistics (percentiles, IQR, MAD, skewness, kurtosis, outlier count)."""
         imgui.text_disabled("Summary of the source's y column. Every statistic is nan-safe.")
-        return ("stats",)
+        _c, self._stats_show_more = imgui.checkbox("Show more", self._stats_show_more)
+        imgui.same_line()
+        widgets.help_marker(
+            "Percentiles, interquartile range, median absolute deviation, skewness, "
+            "excess kurtosis, and a count of samples outside the standard Tukey fence "
+            "(1.5x the IQR beyond Q1/Q3) -- the shape and robust-spread statistics "
+            "describe() alone does not report."
+        )
+        show_ci, ci_level = self._ci_controls(
+            "_stats_ci",
+            "_stats_ci_level",
+            help="A range likely to contain the TRUE population mean, via Student's t "
+            "-- not the spread of the data itself (that is the Std deviation row).",
+        )
+        return ("stats", bool(self._stats_show_more), show_ci, ci_level)
+
+    def _tab_correlate(self) -> Tuple[Any, ...]:
+        """Correlate has no parameters: it reads the source's own (x, y) pair."""
+        imgui.text_disabled("How the source's y column tracks its x column.")
+        imgui.same_line()
+        widgets.help_marker(
+            "Pearson r measures a LINEAR relationship; Spearman rho measures any "
+            "consistently increasing or decreasing one (robust to outliers and curved-"
+            "but-monotonic relationships Pearson misses). Both range -1 to 1, with the "
+            "p-value the chance of seeing a correlation this strong from independent "
+            "data. The overlay is the ordinary least-squares line through the points."
+        )
+        show_ci, ci_level = self._ci_controls(
+            "_correlate_ci",
+            "_correlate_ci_level",
+            help="A range likely to contain the TRUE Pearson r, via Fisher's z-"
+            "transform -- narrower with more points or a stronger relationship.",
+        )
+        return ("correlate", show_ci, ci_level)
+
+    def _tab_compare(self) -> Tuple[Any, ...]:
+        """Two-sample hypothesis test: is the source's y column drawn from the same
+        population as another column?"""
+        picked = self._column_picker(
+            "Compare to",
+            self._compare_col,
+            help="The second, independent sample -- not a paired (x, y) relationship "
+            "the way Correlate reads its input, so it need not be the same length.",
+        )
+        if picked is not None:
+            self._compare_col = picked
+        _c, self._compare_method = widgets.enum_combo(
+            "Method",
+            self._compare_method,
+            mathops.TWO_SAMPLE_METHODS,
+            help="welch: tests whether the two means differ, without assuming equal "
+            "variances (the safe default). student: the same, assuming equal "
+            "variances. mannwhitney: a rank-based test for which sample tends larger, "
+            "no normality assumed -- robust to outliers and skew. ks: tests whether "
+            "the full distributions differ in shape, not just location.",
+        )
+        show_ci, ci_level = self._ci_controls(
+            "_compare_ci",
+            "_compare_ci_level",
+            help="A range likely to contain the TRUE difference of the two population "
+            "means (welch/student only -- mannwhitney/ks test the full distribution, "
+            "not the mean, so no matching interval exists for them).",
+        )
+        return ("compare", self._compare_col, self._compare_method, show_ci, ci_level)
+
+    def _tab_cluster(self) -> Tuple[Any, ...]:
+        """K-means or hierarchical clustering of the source's (x, y) points into k groups."""
+        imgui.text_disabled("Groups the plotted (x, y) points into k clusters.")
+        imgui.same_line()
+        widgets.help_marker(
+            "Clusters exactly the two columns already plotted -- this tab does not "
+            "select more variables. If your data has more than two dimensions worth "
+            "clustering on, reduce it to two first (e.g. with Correlate or a Data Editor "
+            "transform), then cluster the result."
+        )
+        _c, self._cluster_method = widgets.enum_combo(
+            "Method",
+            self._cluster_method,
+            ("kmeans", "hierarchical"),
+            help="kmeans: fast, assumes roughly spherical/similarly-sized clusters, "
+            "restarted from several random seeds to avoid a bad local minimum. "
+            "hierarchical: builds a merge tree bottom-up and cuts it to k groups -- no "
+            "randomness, and copes better with elongated or unevenly sized clusters.",
+        )
+        changed, k = imgui.input_int("Clusters (k)", int(self._cluster_k))
+        if changed:
+            self._cluster_k = max(2, min(int(k), 10))
+        widgets.help_marker(
+            "Number of groups to find. There is no single 'correct' k -- try a few and "
+            "see which one splits the data into groups that actually look separated in "
+            "the preview."
+        )
+
+        if self._cluster_method == "hierarchical":
+            if not mathops2d.hierarchical_available():
+                widgets.error_box(mathops2d.HIERARCHICAL_UNAVAILABLE_MESSAGE)
+            _c, self._cluster_linkage = widgets.enum_combo(
+                "Linkage",
+                self._cluster_linkage,
+                mathops2d.HIERARCHICAL_METHODS,
+                help="ward: minimises within-cluster variance, usually the best "
+                "default. single/complete/average: link clusters by their nearest, "
+                "farthest, or average pairwise distance -- single is prone to "
+                "'chaining' long strands together; complete and average stay compact.",
+            )
+            return ("cluster", "hierarchical", int(self._cluster_k), self._cluster_linkage)
+
+        _c, self._cluster_seed = imgui.input_int("Seed", int(self._cluster_seed))
+        imgui.same_line()
+        widgets.help_marker(
+            "K-means starts from a random guess and can land in different (equally "
+            "valid) groupings depending on it. Changing the seed reruns with a different "
+            "start; the same seed always reproduces the same result."
+        )
+        return ("cluster", "kmeans", int(self._cluster_k), int(self._cluster_seed))
+
+    def _tab_density2d(self) -> Tuple[Any, ...]:
+        """2-D density of the source's (x, y) points: a binned histogram, or a KDE surface."""
+        imgui.text_disabled("Density of the plotted (x, y) points, not their trend over x.")
+        imgui.same_line()
+        widgets.help_marker(
+            "Like Cluster, this reads exactly the two columns already plotted -- no "
+            "further column selection. For 'New layer', pick 'heat map (hist2d)' from "
+            "the Kind dropdown below to commit this as a real layer."
+        )
+        _c, self._density_mode = widgets.enum_combo(
+            "Mode",
+            self._density_mode,
+            ("histogram", "kde"),
+            help="histogram: a plain 2-D bin count, pure numpy, always available. kde: a "
+            "smooth probability-density surface (scipy.stats.gaussian_kde) -- reads "
+            "better with fewer samples, at the cost of needing scipy.",
+        )
+
+        if self._density_mode == "histogram":
+            changed, bins = imgui.input_int("Bins", int(self._density_bins))
+            if changed:
+                self._density_bins = max(5, min(int(bins), 100))
+            widgets.help_marker(
+                "Bin count per axis. More bins resolve finer structure but need more "
+                "points per bin to stay meaningful -- with few samples, fewer, bigger "
+                "bins read more honestly."
+            )
+            return ("density2d", "histogram", int(self._density_bins), 0, False, 1.0)
+
+        if not mathops2d.kde2d_available():
+            widgets.error_box(mathops2d.KDE_UNAVAILABLE_MESSAGE)
+            return ("density2d", "kde", self._density_bins, int(self._density_grid), False, 1.0)
+
+        changed, grid = imgui.input_int("Grid resolution", int(self._density_grid))
+        if changed:
+            self._density_grid = max(5, min(int(grid), 100))
+        widgets.help_marker(
+            "Grid points per axis the KDE surface is evaluated on -- how detailed the "
+            "drawn grid is, not how smooth the density estimate itself is (that is the "
+            "bandwidth, below)."
+        )
+        _c, self._density_custom_bw = imgui.checkbox("Custom bandwidth", self._density_custom_bw)
+        imgui.same_line()
+        widgets.help_marker(
+            "Off: scipy picks a bandwidth automatically (Scott's rule) from the point "
+            "count and spread. On: scale it manually -- below 1 is peakier/more "
+            "detailed, above 1 is smoother -- useful when the automatic choice over- or "
+            "under-smooths."
+        )
+        bw_factor = 1.0
+        if self._density_custom_bw:
+            imgui.same_line()
+            _c, self._density_bw_factor = widgets.labeled_slider_float(
+                "##bw_factor", self._density_bw_factor, vmin=0.1, vmax=3.0, fmt="%.2f"
+            )
+            bw_factor = float(self._density_bw_factor)
+        return (
+            "density2d",
+            "kde",
+            int(self._density_bins),
+            int(self._density_grid),
+            bool(self._density_custom_bw),
+            bw_factor,
+        )
+
+    def _tab_spatial(self) -> Tuple[Any, ...]:
+        """Spatial statistics have no parameters: they read the source's own (x, y) pair."""
+        imgui.text_disabled("Spacing, extent and the convex hull of the plotted points.")
+        imgui.same_line()
+        widgets.help_marker(
+            "Nearest-neighbour distance describes how tightly the points are packed -- "
+            "a minimum far below the mean flags near-duplicates or a locally dense "
+            "clump. The convex hull is the smallest polygon containing every point; its "
+            "vertices are marked on the preview. Needs at least 3 non-collinear points "
+            "to have a hull at all."
+        )
+        return ("spatial",)
+
+    def _default_nd_columns(self, current: Tuple[str, ...]) -> Tuple[str, ...]:
+        """"Every column of the dataset" the first time an N-D tab meets a real source.
+
+        Shared by PCA and UMAP: both start with ``current == ()`` (see the fields'
+        own comments in __init__) and want the same "just try it" default once a
+        dataset with columns actually exists, without overriding a deliberate pick
+        the user later empties back out to zero.
+        """
+        if current:
+            return current
+        source = self._current_source
+        dataset = source.dataset if source is not None else None
+        if dataset is None:
+            return current
+        return tuple(dataset.column_names())
+
+    def _tab_pca(self) -> Tuple[Any, ...]:
+        """Principal component analysis: project 2+ columns onto their top directions
+        of variance."""
+        imgui.text_disabled("Reduce several columns to their top directions of variance.")
+        imgui.same_line()
+        widgets.help_marker(
+            "Pick 2 or more columns below. The preview always shows PC1 vs PC2 -- the "
+            "two directions capturing the most spread in the data -- as a scatter; "
+            "'New dataset' commits every requested component as its own column."
+        )
+        self._pca_columns = self._default_nd_columns(self._pca_columns)
+        self._pca_columns = self._multi_column_picker(
+            "Columns",
+            self._pca_columns,
+            help="Every column selected here becomes one input dimension. Unrelated "
+            "columns dilute the result -- pick the ones you actually think vary "
+            "together.",
+        )
+        changed, n = imgui.input_int("Components", int(self._pca_n_components))
+        if changed:
+            self._pca_n_components = max(2, min(int(n), 20))
+        widgets.help_marker(
+            "How many components to compute and commit to 'New dataset'. The preview "
+            "only ever plots the first two, regardless of this count."
+        )
+        _c, self._pca_scale = widgets.enum_combo(
+            "Scale",
+            self._pca_scale,
+            mathopsnd.SCALE_MODES,
+            help="none: use the columns as-is. zscore (default): each column is "
+            "centered and divided by its own standard deviation first, so PCA finds "
+            "structure, not just whichever column happens to have the biggest raw "
+            "numbers. minmax: each column mapped onto [0, 1] first instead.",
+        )
+        return ("pca", self._pca_columns, int(self._pca_n_components), self._pca_scale)
+
+    def _tab_umap(self) -> Tuple[Any, ...]:
+        """UMAP: a nonlinear embedding of 2+ columns onto 2 (or more) dimensions."""
+        imgui.text_disabled("Nonlinear embedding of several columns onto a 2-D layout.")
+        imgui.same_line()
+        widgets.help_marker(
+            "Unlike PCA, UMAP has no linear formula and no explained-variance readout "
+            "-- it optimises a layout where points close in the original columns stay "
+            "close in the embedding. Better at revealing clusters/manifolds a linear "
+            "projection would flatten together; the trade-off is that distances and "
+            "axis directions in the result are not otherwise meaningful."
+        )
+        if not mathopsnd.umap_available():
+            widgets.error_box(mathopsnd.UMAP_UNAVAILABLE_MESSAGE)
+        self._umap_columns = self._default_nd_columns(self._umap_columns)
+        self._umap_columns = self._multi_column_picker(
+            "Columns",
+            self._umap_columns,
+            help="Every column selected here becomes one input dimension.",
+        )
+        changed, n = imgui.input_int("Components", int(self._umap_n_components))
+        if changed:
+            self._umap_n_components = max(2, min(int(n), 10))
+        widgets.help_marker("Output dimensionality. The preview only ever plots the first two.")
+        changed, neighbors = imgui.input_int("Neighbors", int(self._umap_n_neighbors))
+        if changed:
+            self._umap_n_neighbors = max(2, min(int(neighbors), 200))
+        widgets.help_marker(
+            "Local neighborhood size. Small: preserves fine local structure (tight, "
+            "many small clusters). Large: preserves more of the overall/global "
+            "layout. Automatically capped below the point count."
+        )
+        changed, min_dist = imgui.slider_float("Min distance", float(self._umap_min_dist), 0.0, 1.0)
+        if changed:
+            self._umap_min_dist = float(min_dist)
+        widgets.help_marker(
+            "How tightly points are allowed to pack in the embedding. Small: "
+            "same-neighborhood points can sit almost on top of each other (reads "
+            "more like discrete clusters). Large: spread out more evenly (reads "
+            "more like a continuous shape)."
+        )
+        _c, self._umap_scale = widgets.enum_combo(
+            "Scale", self._umap_scale, mathopsnd.SCALE_MODES,
+            help="Same per-column preprocessing as PCA's Scale option, applied before "
+            "UMAP runs -- see there for what each mode does.",
+        )
+        _c, self._umap_seed = imgui.input_int("Seed", int(self._umap_seed))
+        imgui.same_line()
+        widgets.help_marker(
+            "UMAP's layout optimisation is stochastic; the same seed always "
+            "reproduces the same embedding, a different seed gives an equally valid "
+            "but differently arranged one."
+        )
+        return (
+            "umap",
+            self._umap_columns,
+            int(self._umap_n_components),
+            int(self._umap_n_neighbors),
+            float(self._umap_min_dist),
+            self._umap_scale,
+            int(self._umap_seed),
+        )
 
     def _tab_dynamics(self) -> Tuple[Any, ...]:
         """Dynamical-systems analysis: reconstruct and characterise the flow behind y(t)."""
@@ -1497,7 +2328,7 @@ class MathLabPanel(Panel):
             )
 
         if kind == "smooth":
-            _, method, window, sigma, polyorder = params
+            _, method, window, sigma, polyorder, alpha = params
             xa = np.asarray(x_raw, dtype=np.float64)
             ya = np.asarray(y_raw, dtype=np.float64)
             kwargs: Dict[str, Any] = {}
@@ -1505,6 +2336,8 @@ class MathLabPanel(Panel):
                 kwargs["sigma"] = sigma
             if method == "savgol":
                 kwargs["polyorder"] = polyorder
+            if method == "ema" and alpha > 0.0:
+                kwargs["alpha"] = alpha
             out = mathops.smooth(y_raw, method=method, window=window, **kwargs)
             residual = ya - out
             with np.errstate(all="ignore"):
@@ -1598,7 +2431,7 @@ class MathLabPanel(Panel):
             )
 
         if kind == "filter":
-            _, btype, order, frac_lo, frac_hi = params
+            _, btype, order, frac_lo, frac_hi, family, ripple, attenuation = params
             xs, ys = _sorted_by_x(x_raw, y_raw)
             if xs.size < 2 or float(xs[-1] - xs[0]) <= 0.0:
                 raise ValueError("filtering needs at least 2 samples over a non-zero x span")
@@ -1607,17 +2440,30 @@ class MathLabPanel(Panel):
             lo = min(max(frac_lo, 1e-6), 1.0 - 1e-6) * nyquist
             hi = min(max(frac_hi, 1e-6), 1.0 - 1e-6) * nyquist
             cutoff: Any = (lo, hi) if is_band else lo
-            out = mathops.butter_filter(x_raw, y_raw, cutoff, btype=btype, order=int(order))
+            out = mathops.iir_filter(
+                x_raw,
+                y_raw,
+                cutoff,
+                btype=btype,
+                family=family,
+                order=int(order),
+                ripple=ripple,
+                attenuation=attenuation,
+            )
             ya = np.asarray(ys, dtype=np.float64)
             residual = ya - out
             with np.errstate(all="ignore"):
                 rms = float(np.sqrt(np.nanmean(residual**2))) if residual.size else float("nan")
-            stats = [("Nyquist frequency", _fmt(nyquist))]
+            stats = [("Family", family), ("Nyquist frequency", _fmt(nyquist))]
             if is_band:
                 stats.append(("Low cutoff", _fmt(lo)))
                 stats.append(("High cutoff", _fmt(hi)))
             else:
                 stats.append(("Cutoff frequency", _fmt(lo)))
+            if family == "cheby1":
+                stats.append(("Passband ripple", f"{ripple:g} dB"))
+            elif family == "cheby2":
+                stats.append(("Stopband attenuation", f"{attenuation:g} dB"))
             stats.append(("Removed (RMS)", _fmt(rms)))
             return _Result(
                 x=xs,
@@ -1625,7 +2471,7 @@ class MathLabPanel(Panel):
                 x_name=source.x_name,
                 y_name=f"{y_name} filtered",
                 suffix="filtered",
-                plot_label=f"{btype} (order {order})",
+                plot_label=f"{btype} {family} (order {order})",
                 overlay=ya,
                 stats=stats,
             )
@@ -1670,30 +2516,38 @@ class MathLabPanel(Panel):
             )
 
         if kind == "peaks":
-            _, prominence_frac, distance = params
+            _, peak_mode, prominence_frac, distance = params
+            is_valleys = peak_mode == "valleys"
+            noun = "Valley" if is_valleys else "Peak"
             xs, ys = _sorted_by_x(x_raw, y_raw)
             with np.errstate(all="ignore"):
                 span = float(np.nanmax(ys) - np.nanmin(ys)) if ys.size else 0.0
             prominence = prominence_frac * span if span > 0.0 else None
-            peak_x, peak_y, props = mathops.find_peaks(
-                x_raw, y_raw, prominence=prominence, distance=distance
+            # Valleys are exactly the same detector run on the negated signal -- no
+            # separate algorithm, so the two modes can never disagree on what counts.
+            search_y = (-np.asarray(y_raw, dtype=np.float64)) if is_valleys else y_raw
+            peak_x, search_peak_y, props = mathops.find_peaks(
+                x_raw, search_y, prominence=prominence, distance=distance
             )
+            peak_y = -search_peak_y if is_valleys else search_peak_y
             prominences = np.asarray(props.get("prominences", np.empty(0)), dtype=np.float64)
             widths = np.asarray(props.get("widths", np.empty(0)), dtype=np.float64)
             areas = np.asarray(props.get("areas", np.empty(0)), dtype=np.float64)
-            stats = [("Peaks found", str(int(peak_x.size)))]
+            stats = [(f"{noun}s found", str(int(peak_x.size)))]
             table: Optional[List[Tuple[str, np.ndarray]]] = None
             if peak_x.size:
-                tallest = int(np.argmax(peak_y))
-                stats.append(("Tallest peak at x", _fmt(float(peak_x[tallest]))))
-                stats.append(("Tallest peak height", _fmt(float(peak_y[tallest]))))
+                extreme = int(np.argmin(peak_y)) if is_valleys else int(np.argmax(peak_y))
+                extreme_label = f"Deepest {noun.lower()}" if is_valleys else f"Tallest {noun.lower()}"
+                value_label = "value" if is_valleys else "height"
+                stats.append((f"{extreme_label} at x", _fmt(float(peak_x[extreme]))))
+                stats.append((f"{extreme_label} {value_label}", _fmt(float(peak_y[extreme]))))
                 if peak_x.size > 1:
                     stats.append(("Mean spacing", _fmt(float(np.mean(np.diff(peak_x))))))
                 if widths.size and bool(np.any(np.isfinite(widths))):
                     stats.append(("Mean width", _fmt(_nan_reduce(widths, np.nanmean))))
                 if areas.size and bool(np.any(np.isfinite(areas))):
                     stats.append(("Total area", _fmt(float(np.nansum(areas)))))
-                    stats.append(("Largest peak area", _fmt(float(areas[tallest]))))
+                    stats.append((f"Largest {noun.lower()} area", _fmt(float(areas[extreme]))))
                 # The deliverable of peak analysis: a full table, applied as a new dataset.
                 table = [
                     ("position", peak_x),
@@ -1709,8 +2563,8 @@ class MathLabPanel(Panel):
                 x=peak_x,
                 y=peak_y,
                 x_name=source.x_name,
-                y_name=f"{y_name} peaks",
-                suffix="peaks",
+                y_name=f"{y_name} {noun.lower()}s",
+                suffix=f"{noun.lower()}s",
                 plot_label="signal",
                 base_x=np.asarray(xs, dtype=np.float64),
                 base_y=np.asarray(ys, dtype=np.float64),
@@ -1774,12 +2628,28 @@ class MathLabPanel(Panel):
             )
 
         if kind == "fit":
-            _, model_key, degree, expr, p0 = params
+            _, model_key, degree, expr, p0, robust, loss, want_band, level, use_grid, n_points = params
             ya = np.asarray(y_raw, dtype=np.float64)
             xa = np.asarray(x_raw, dtype=np.float64)
 
+            def _output_grid(fn: Callable[..., Any], fit_params: np.ndarray) -> np.ndarray:
+                """N evenly spaced points across the x range, evaluated through ``fn``.
+
+                The "how many points should Apply add" control: a fitted model is
+                defined everywhere, not just at the input's own samples, so committing
+                it at N points of the caller's choosing -- not one point per original
+                sample -- is what makes a sparse or unevenly sampled fit usable as a
+                smooth curve.
+                """
+                x_min = float(np.nanmin(xa)) if xa.size else 0.0
+                x_max = float(np.nanmax(xa)) if xa.size else 0.0
+                grid = np.linspace(x_min, x_max, max(2, int(n_points))) if x_max > x_min else xa
+                with np.errstate(all="ignore"):
+                    values = np.asarray(fn(grid, *fit_params), dtype=np.float64)
+                return grid, np.broadcast_to(values, grid.shape).astype(np.float64, copy=True)
+
             if model_key == "polynomial":
-                coeffs, y_fit = mathops.fit_polynomial(x_raw, y_raw, degree)
+                coeffs, cov, y_fit = mathops.fit_polynomial_covariance(x_raw, y_raw, degree)
                 stats: List[Tuple[str, str]] = [
                     ("R squared", _fmt(_r_squared(ya, y_fit))),
                     ("Effective degree", _fmt(float(len(coeffs) - 1))),
@@ -1789,15 +2659,30 @@ class MathLabPanel(Panel):
                     power = len(coeffs) - 1 - i
                     name = "constant" if power == 0 else ("x" if power == 1 else f"x^{power}")
                     stats.append((f"Coefficient of {name}", _fmt(float(coeff))))
+
+                poly_fn = lambda xx, *c: np.polyval(c, xx)  # noqa: E731
+                if use_grid:
+                    x_out, y_out = _output_grid(poly_fn, coeffs)
+                    overlay_out, markers_out = None, (xa, ya)
+                    stats.append(("Output points", str(int(x_out.size))))
+                else:
+                    x_out, y_out, overlay_out, markers_out = xa, y_fit, ya, None
+                band = None
+                if want_band:
+                    band = mathops.confidence_band(x_out, coeffs, cov, poly_fn, level=level)
                 return _Result(
-                    x=xa,
-                    y=y_fit,
+                    x=x_out,
+                    y=y_out,
                     x_name=source.x_name,
                     y_name=f"{y_name} fit",
                     suffix="fit",
                     plot_label=f"polynomial fit (degree {len(coeffs) - 1})",
-                    overlay=ya,
+                    overlay=overlay_out,
+                    markers=markers_out,
+                    marker_label="data",
+                    x_changed=use_grid,
                     stats=stats,
+                    band=band,
                 )
 
             if not mathops.fit_available():
@@ -1814,13 +2699,16 @@ class MathLabPanel(Panel):
             except ValueError:
                 self._fit_auto.pop(key, None)
 
-            popt, pcov, y_fit, names = mathops.fit_model(
-                xa,
-                ya,
-                spec,
-                p0=(np.asarray(p0, dtype=np.float64) if p0 is not None else None),
-            )
+            start = np.asarray(p0, dtype=np.float64) if p0 is not None else None
+            if robust:
+                popt, pcov, y_fit, names = mathops.fit_model_robust(
+                    xa, ya, spec, p0=start, loss=loss
+                )
+            else:
+                popt, pcov, y_fit, names = mathops.fit_model(xa, ya, spec, p0=start)
             errors = mathops.fit_errors(pcov)
+            # Goodness-of-fit always compares the model to the ACTUAL data at the
+            # ACTUAL sample points -- independent of what the output grid below commits.
             summary = mathops.fit_statistics(ya, y_fit, len(names))
             stats = [
                 ("R squared", _fmt(summary["r_squared"])),
@@ -1845,15 +2733,30 @@ class MathLabPanel(Panel):
                 stats.append(("Total peak area", _fmt(float(sum(peak_areas)))))
                 for i, area in enumerate(peak_areas, start=1):
                     stats.append((f"Peak {i} area", _fmt(float(area))))
+
+            if use_grid:
+                x_out, y_out = _output_grid(spec.fn, popt)
+                overlay_out, markers_out = None, (xa, ya)
+                stats.append(("Output points", str(int(x_out.size))))
+            else:
+                x_out, y_out, overlay_out, markers_out = xa, y_fit, ya, None
+            band = None
+            if want_band:
+                band = mathops.confidence_band(x_out, popt, pcov, spec.fn, level=level)
+            plot_label = f"{spec.label} fit" + (" (robust)" if robust else "")
             return _Result(
-                x=xa,
-                y=y_fit,
+                x=x_out,
+                y=y_out,
                 x_name=source.x_name,
                 y_name=f"{y_name} fit",
                 suffix="fit",
-                plot_label=f"{spec.label} fit",
-                overlay=ya,
+                plot_label=plot_label,
+                overlay=overlay_out,
+                markers=markers_out,
+                marker_label="data",
+                x_changed=use_grid,
                 stats=stats,
+                band=band,
             )
 
         if kind == "fft":
@@ -1884,62 +2787,383 @@ class MathLabPanel(Panel):
                 stats=stats,
             )
 
-        if kind == "autocorr":
-            _, maxlag_frac = params
+        if kind == "envelope":
+            x_out, env = mathops.envelope(x_raw, y_raw)
+            # The original signal, shown as context under the traced envelope. If x had
+            # to be resampled onto a uniform grid, interpolate the original onto that
+            # same grid so the overlay still lines up sample-for-sample.
             xs, ys = _sorted_by_x(x_raw, y_raw)
+            if x_out.shape == xs.shape and np.allclose(x_out, xs):
+                overlay_y = ys
+            else:
+                overlay_y = np.interp(x_out, xs, ys)
+            stats = [("Samples", str(int(env.size)))]
+            if env.size:
+                stats.append(("Peak envelope", _fmt(float(np.max(env)))))
+                stats.append(("Mean envelope", _fmt(float(np.mean(env)))))
+            return _Result(
+                x=x_out,
+                y=env,
+                x_name=source.x_name,
+                y_name=f"{y_name} envelope",
+                suffix="envelope",
+                plot_label="envelope",
+                overlay=overlay_y,
+                overlay_label="signal",
+                # x may have been resampled onto a uniform grid.
+                x_changed=True,
+                # A derived analysis curve, not a correction of the signal it traces.
+                allow_replace=False,
+                stats=stats,
+            )
+
+        if kind == "rolling":
+            _, roll_stat, window, center = params
+            xs, ys = _sorted_by_x(x_raw, y_raw)
+            out = mathops.rolling_stat(ys, window, stat=roll_stat, center=center)
+            valid = np.isfinite(out)
+            n_valid = int(np.count_nonzero(valid))
+            stats = [
+                ("Samples", str(int(out.size))),
+                ("Full-window samples", str(n_valid)),
+            ]
+            if n_valid:
+                stats.append((f"Mean rolling {roll_stat}", _fmt(float(np.mean(out[valid])))))
+            return _Result(
+                x=xs,
+                y=out,
+                x_name=source.x_name,
+                y_name=f"{y_name} rolling {roll_stat}",
+                suffix=f"rolling_{roll_stat}",
+                plot_label=f"rolling {roll_stat} (window={window})",
+                overlay=ys,
+                overlay_label="signal",
+                stats=stats,
+            )
+
+        if kind == "autocorr":
+            _, corr_mode, cross_col, maxlag_frac = params
+            xa = np.asarray(x_raw, dtype=np.float64)
+            ya = np.asarray(y_raw, dtype=np.float64)
+            if xa.size >= 2 and not bool(np.all(np.diff(xa) >= 0.0)):
+                order = np.argsort(xa, kind="stable")
+            else:
+                order = np.arange(xa.size)
+            xs = xa[order]
+            ys = ya[order]
             n = int(xs.size)
             max_lag = max(1, int(maxlag_frac * (n - 1))) if n > 1 else 0
-            lags, acf = mathops.autocorrelation(ys, max_lag=max_lag)
             dx = float(np.median(np.diff(xs))) if n > 1 else 1.0
             if dx <= 0.0:
                 dx = 1.0
-            lag_x = lags * dx
 
-            # The dominant period is the first ACF peak past lag 0; its harmonics follow.
-            # A modest prominence floor keeps noise ripple from being called a period.
-            peak_x, peak_y, _props = mathops.find_peaks(lag_x, acf, prominence=0.1)
-            stats = [("Lags computed", str(int(lags.size)))]
-            markers: Optional[Tuple[np.ndarray, np.ndarray]] = None
-            if peak_x.size:
-                markers = (peak_x, peak_y)
-                stats.append(("Dominant period", _fmt(float(peak_x[0]))))
-                stats.append(("Correlation at period", _fmt(float(peak_y[0]))))
+            is_cross = corr_mode == "cross" and bool(cross_col) and source.dataset is not None
+            if is_cross:
+                # Same dataset, same row order as x_raw/y_raw -- the *same* permutation
+                # keeps the two columns paired sample-for-sample after sorting.
+                cross_raw = np.asarray(source.dataset.get(cross_col), dtype=np.float64)
+                cross_sorted = cross_raw[order] if cross_raw.size == xa.size else cross_raw
+                lags, corr = mathops.cross_correlation(ys, cross_sorted, max_lag=max_lag)
+                lag_x = lags * dx
+                stats = [("Lags computed", str(int(lags.size)))]
+                markers: Optional[Tuple[np.ndarray, np.ndarray]] = None
+                if corr.size:
+                    # A delay can lead or lag, unlike a repeating period: report whichever
+                    # lag correlates strongest in either direction, not the first peak.
+                    extreme = int(np.argmax(np.abs(corr)))
+                    markers = (np.array([lag_x[extreme]]), np.array([corr[extreme]]))
+                    stats.append(("Peak lag", _fmt(float(lag_x[extreme]))))
+                    stats.append(("Peak correlation", _fmt(float(corr[extreme]))))
+                y_name_result = f"{source.y_name} x {cross_col}"
+                plot_label = f"cross-correlation with {cross_col}"
+                suffix = "cross-correlation"
             else:
-                stats.append(("Dominant period", "no clear period"))
+                lags, corr = mathops.autocorrelation(ys, max_lag=max_lag)
+                lag_x = lags * dx
+                # The dominant period is the first ACF peak past lag 0; a modest
+                # prominence floor keeps noise ripple from being called a period.
+                peak_x, peak_y, _props = mathops.find_peaks(lag_x, corr, prominence=0.1)
+                stats = [("Lags computed", str(int(lags.size)))]
+                markers = None
+                if peak_x.size:
+                    markers = (peak_x, peak_y)
+                    stats.append(("Dominant period", _fmt(float(peak_x[0]))))
+                    stats.append(("Correlation at period", _fmt(float(peak_y[0]))))
+                else:
+                    stats.append(("Dominant period", "no clear period"))
+                y_name_result = "autocorrelation"
+                plot_label = "autocorrelation"
+                suffix = "autocorrelation"
+
             return _Result(
                 x=lag_x,
-                y=acf,
+                y=corr,
                 x_name="lag",
-                y_name="autocorrelation",
-                suffix="autocorrelation",
-                plot_label="autocorrelation",
+                y_name=y_name_result,
+                suffix=suffix,
+                plot_label=plot_label,
                 overlay=None,
                 markers=markers,
                 x_changed=True,
-                # An ACF lives in lag space, not over the signal's own x.
+                # An ACF/XCF lives in lag space, not over the signal's own x.
                 allow_replace=False,
                 stats=stats,
             )
 
         if kind == "stats":
+            _, show_more, show_ci, ci_level = params
             xa = np.asarray(x_raw, dtype=np.float64)
             ya = np.asarray(y_raw, dtype=np.float64)
-            summary = mathops.describe(y_raw)
+            summary = mathops.describe_extended(y_raw) if show_more else mathops.describe(y_raw)
+            rows = _DESCRIBE_ROWS + _DESCRIBE_EXTENDED_ROWS if show_more else _DESCRIBE_ROWS
+            int_keys = {"n", "nan_count", "outlier_count"}
             stats = [
-                (label, _fmt(summary[key]) if key != "n" else str(int(summary[key])))
-                for key, label in _DESCRIBE_ROWS
+                (label, str(int(summary[key])) if key in int_keys else _fmt(summary[key]))
+                for key, label in rows
             ]
             stats.insert(1, ("Total samples", str(int(ya.size))))
+            # No natural (x, y) curve exists for a summary -- one row, one column per
+            # statistic, is what New dataset commits instead (point 6: always a way to
+            # turn an analysis into data, even when there is nothing to plot).
+            table: List[Tuple[str, np.ndarray]] = [
+                (label, np.array([float(summary[key])], dtype=np.float64)) for key, label in rows
+            ]
+            table.insert(1, ("Total samples", np.array([float(ya.size)], dtype=np.float64)))
+            if show_ci:
+                ci = mathops.confidence_interval_mean(ya, level=ci_level)
+                pct = f"{ci_level * 100:.0f}%"
+                stats.append((f"{pct} CI for mean", f"[{_fmt(ci['lower'])}, {_fmt(ci['upper'])}]"))
+                table.append(("CI lower (mean)", np.array([ci["lower"]], dtype=np.float64)))
+                table.append(("CI upper (mean)", np.array([ci["upper"]], dtype=np.float64)))
             return _Result(
                 x=xa,
                 y=ya,
                 x_name=source.x_name,
                 y_name=source.y_name,
-                suffix="",
+                suffix="stats",
                 plot_label=source.label,
                 overlay=None,
-                allow_apply=False,
                 allow_replace=False,
+                apply_modes=("new_dataset",),
+                stats=stats,
+                table=table,
+            )
+
+        if kind == "correlate":
+            _, show_ci, ci_level = params
+            xs, ys = _sorted_by_x(x_raw, y_raw)
+            corr = mathops.correlate(xs, ys)
+            fit_line = corr["slope"] * xs + corr["intercept"]
+            stats = [
+                ("n", str(int(corr["n"]))),
+                ("Pearson r", _fmt(corr["pearson_r"])),
+                ("Pearson p-value", _fmt(corr["pearson_p"])),
+                ("Spearman rho", _fmt(corr["spearman_rho"])),
+                ("Spearman p-value", _fmt(corr["spearman_p"])),
+                ("Covariance", _fmt(corr["covariance"])),
+                ("R squared (linear)", _fmt(corr["r_squared"])),
+                ("Slope", _fmt(corr["slope"])),
+                ("Intercept", _fmt(corr["intercept"])),
+            ]
+            if show_ci:
+                ci = mathops.confidence_interval_correlation(xs, ys, level=ci_level)
+                pct = f"{ci_level * 100:.0f}%"
+                stats.append((f"{pct} CI for Pearson r", f"[{_fmt(ci['lower'])}, {_fmt(ci['upper'])}]"))
+            return _Result(
+                x=xs,
+                y=ys,
+                x_name=source.x_name,
+                y_name=source.y_name,
+                suffix="correlation",
+                plot_label=source.label,
+                overlay=fit_line,
+                overlay_label="linear fit",
+                allow_replace=False,
+                stats=stats,
+            )
+
+        if kind == "compare":
+            _, compare_col, compare_method, show_ci, ci_level = params
+            if not compare_col or source.dataset is None:
+                raise ValueError(
+                    "Compare needs a second column from a dataset source (a plotted "
+                    "layer has no table, and no column has been picked yet)."
+                )
+            a = np.asarray(y_raw, dtype=np.float64)
+            b = np.asarray(source.dataset.get(compare_col), dtype=np.float64)
+            outcome = mathops.two_sample_test(a, b, method=compare_method)
+
+            a_label, b_label = source.y_name, compare_col
+            stats = [
+                (f"n ({a_label})", str(int(outcome["n_a"]))),
+                (f"n ({b_label})", str(int(outcome["n_b"]))),
+                (f"Mean ({a_label})", _fmt(outcome["mean_a"])),
+                (f"Mean ({b_label})", _fmt(outcome["mean_b"])),
+                (f"Std ({a_label})", _fmt(outcome["std_a"])),
+                (f"Std ({b_label})", _fmt(outcome["std_b"])),
+                ("Statistic", _fmt(outcome["statistic"])),
+                ("p-value", _fmt(outcome["p_value"])),
+            ]
+            # Always Welch's CI for the mean gap, independent of the hypothesis-test
+            # method picked above: mannwhitney/ks test the full distribution, not the
+            # mean, so there is no matching closed-form interval for them to switch to.
+            diff_ci = mathops.confidence_interval_difference(a, b, level=ci_level) if show_ci else None
+            if diff_ci is not None:
+                pct = f"{ci_level * 100:.0f}%"
+                stats.append(
+                    (
+                        f"{pct} CI for mean diff ({a_label} - {b_label})",
+                        f"[{_fmt(diff_ci['lower'])}, {_fmt(diff_ci['upper'])}]",
+                    )
+                )
+
+            # No natural (x, y) curve exists for two independent samples -- overlay
+            # each sample's own histogram (density, shared bin edges so the two share
+            # one x axis) so the comparison is something to actually look at, not just
+            # a table of numbers.
+            n_bins = 30
+            finite_a = a[np.isfinite(a)]
+            finite_b = b[np.isfinite(b)]
+            lo = float(min(np.min(finite_a), np.min(finite_b)))
+            hi = float(max(np.max(finite_a), np.max(finite_b)))
+            if hi <= lo:
+                hi = lo + 1.0
+            edges = np.linspace(lo, hi, n_bins + 1)
+            heights_a, _e = np.histogram(finite_a, bins=edges, density=True)
+            heights_b, _e = np.histogram(finite_b, bins=edges, density=True)
+            sil_x, sil_a = _histogram_silhouette(edges, heights_a)
+            _sil_x2, sil_b = _histogram_silhouette(edges, heights_b)
+
+            # Same reasoning as Stats: two independent samples have no (x, y) curve to
+            # commit, but the test's own numbers -- means, spread, the statistic, the
+            # p-value -- are exactly what New dataset should turn into one row.
+            table: List[Tuple[str, np.ndarray]] = [
+                (f"n ({a_label})", np.array([float(outcome["n_a"])], dtype=np.float64)),
+                (f"n ({b_label})", np.array([float(outcome["n_b"])], dtype=np.float64)),
+                (f"Mean ({a_label})", np.array([float(outcome["mean_a"])], dtype=np.float64)),
+                (f"Mean ({b_label})", np.array([float(outcome["mean_b"])], dtype=np.float64)),
+                (f"Std ({a_label})", np.array([float(outcome["std_a"])], dtype=np.float64)),
+                (f"Std ({b_label})", np.array([float(outcome["std_b"])], dtype=np.float64)),
+                ("Statistic", np.array([float(outcome["statistic"])], dtype=np.float64)),
+                ("p-value", np.array([float(outcome["p_value"])], dtype=np.float64)),
+            ]
+            if diff_ci is not None:
+                table.append(("CI lower (mean diff)", np.array([diff_ci["lower"]], dtype=np.float64)))
+                table.append(("CI upper (mean diff)", np.array([diff_ci["upper"]], dtype=np.float64)))
+            return _Result(
+                x=sil_x,
+                y=sil_a,
+                x_name="value",
+                y_name=f"{a_label} density",
+                suffix="comparison",
+                plot_label=a_label,
+                overlay=sil_b,
+                overlay_label=b_label,
+                x_changed=True,
+                allow_replace=False,
+                apply_modes=("new_dataset",),
+                stats=stats,
+                table=table,
+            )
+
+        if kind == "cluster":
+            _, cluster_method, k, extra = params
+            xa = np.asarray(x_raw, dtype=np.float64)
+            ya = np.asarray(y_raw, dtype=np.float64)
+            if cluster_method == "hierarchical":
+                labels, centroid_x, centroid_y = mathops2d.hierarchical_cluster(
+                    xa, ya, k, method=extra
+                )
+                method_label = f"hierarchical ({extra})"
+            else:
+                labels, centroid_x, centroid_y = mathops2d.kmeans_cluster(xa, ya, k, seed=extra)
+                method_label = "k-means"
+            n_clusters = int(centroid_x.size)
+            stats = [("Method", method_label), ("Clusters found", str(n_clusters))]
+            unclustered = int(np.count_nonzero(labels < 0.0))
+            if unclustered:
+                stats.append(("Unclustered (non-finite) points", str(unclustered)))
+            for i in range(n_clusters):
+                stats.append((f"Cluster {i} size", str(int(np.count_nonzero(labels == float(i))))))
+            return _Result(
+                x=xa,
+                y=ya,
+                x_name=source.x_name,
+                y_name=source.y_name,
+                suffix="cluster",
+                plot_label=source.label,
+                overlay=None,
+                allow_replace=False,
+                stats=stats,
+                color_values=labels,
+                markers=(centroid_x, centroid_y),
+                table=[(source.x_name, xa), (source.y_name, ya), ("cluster", labels)],
+            )
+
+        if kind == "density2d":
+            _, mode, bins, grid, custom_bw, bw_factor = params
+            xa = np.asarray(x_raw, dtype=np.float64)
+            ya = np.asarray(y_raw, dtype=np.float64)
+            if mode == "kde":
+                bw_method = float(bw_factor) if custom_bw else None
+                gx, gy, gz = mathops2d.density2d(xa, ya, mode="kde", grid=grid, bw_method=bw_method)
+            else:
+                gx, gy, gz = mathops2d.density2d(xa, ya, mode="histogram", bins=bins)
+            n_finite = int(np.count_nonzero(np.isfinite(xa) & np.isfinite(ya)))
+            peak = float(np.max(gz)) if gz.size else 0.0
+            stats = [
+                ("Mode", mode),
+                ("Points", str(n_finite)),
+                ("Grid cells", f"{gz.shape[0]} x {gz.shape[1]}"),
+                ("Peak density" if mode == "kde" else "Peak count", _fmt(peak)),
+            ]
+            return _Result(
+                x=xa,
+                y=ya,
+                x_name=source.x_name,
+                y_name=source.y_name,
+                suffix="density",
+                plot_label=source.label,
+                overlay=None,
+                allow_replace=False,
+                stats=stats,
+                grid_x=gx,
+                grid_y=gy,
+                grid_z=gz,
+            )
+
+        if kind == "spatial":
+            xa = np.asarray(x_raw, dtype=np.float64)
+            ya = np.asarray(y_raw, dtype=np.float64)
+            spatial, hull_x, hull_y = mathops2d.spatial_stats(xa, ya)
+            stats = [
+                ("Points", str(int(spatial["n"]))),
+                ("Bounding box width", _fmt(spatial["bbox_width"])),
+                ("Bounding box height", _fmt(spatial["bbox_height"])),
+            ]
+            if "mean_nn_distance" in spatial:
+                stats.append(("Mean nearest-neighbor distance", _fmt(spatial["mean_nn_distance"])))
+                stats.append(("Median nearest-neighbor distance", _fmt(spatial["median_nn_distance"])))
+                stats.append(("Min nearest-neighbor distance", _fmt(spatial["min_nn_distance"])))
+                stats.append(("Max nearest-neighbor distance", _fmt(spatial["max_nn_distance"])))
+            table: Optional[List[Tuple[str, np.ndarray]]] = None
+            if "hull_area" in spatial:
+                stats.append(("Convex hull area", _fmt(spatial["hull_area"])))
+                stats.append(("Convex hull perimeter", _fmt(spatial["hull_perimeter"])))
+                stats.append(("Convex hull vertices", str(int(spatial["hull_vertex_count"]))))
+                table = [("hull_x", hull_x), ("hull_y", hull_y)]
+            return _Result(
+                x=xa,
+                y=ya,
+                x_name=source.x_name,
+                y_name=source.y_name,
+                suffix="spatial",
+                plot_label=source.label,
+                overlay=None,
+                allow_replace=False,
+                force_scatter=True,
+                markers=(hull_x, hull_y) if hull_x is not None else None,
+                table=table,
                 stats=stats,
             )
 
@@ -2038,9 +3262,118 @@ class MathLabPanel(Panel):
 
             raise ValueError(f"unknown dynamics analysis {mode!r}")
 
+        if kind == "pca":
+            _, columns, n_components, scale = params
+            if source.dataset is None:
+                raise ValueError("PCA needs a dataset source (a plotted layer has no table).")
+            if len(columns) < 2:
+                raise ValueError("PCA needs at least 2 columns selected.")
+            arrays = [source.dataset.get(name) for name in columns]
+            out = mathopsnd.pca(arrays, n_components=n_components, scale=scale)
+            scores = out["scores"]
+            explained = out["explained_variance_ratio"]
+            stats = [
+                ("Method", "PCA (SVD)"),
+                ("Columns used", ", ".join(columns)),
+                ("Rows used", str(int(out["n_samples"]))),
+                ("Scale", scale),
+            ]
+            for i, ratio in enumerate(explained, start=1):
+                stats.append((f"PC{i} explained variance", f"{float(ratio) * 100:.1f}%"))
+            stats.append(
+                ("Cumulative explained variance", f"{float(np.sum(explained)) * 100:.1f}%")
+            )
+            table = [(f"PC{i + 1}", scores[:, i]) for i in range(scores.shape[1])]
+            return _Result(
+                x=scores[:, 0],
+                y=scores[:, 1],
+                x_name="PC1",
+                y_name="PC2",
+                suffix="pca",
+                plot_label=f"PCA ({', '.join(columns)})",
+                overlay=None,
+                allow_replace=False,
+                apply_modes=("new_layer", "new_dataset"),
+                force_scatter=True,
+                table=table,
+                stats=stats,
+            )
+
+        if kind == "umap":
+            _, columns, n_components, n_neighbors, min_dist, scale, seed = params
+            if source.dataset is None:
+                raise ValueError("UMAP needs a dataset source (a plotted layer has no table).")
+            if len(columns) < 2:
+                raise ValueError("UMAP needs at least 2 columns selected.")
+            arrays = [source.dataset.get(name) for name in columns]
+            out = mathopsnd.umap_embed(
+                arrays,
+                n_components=n_components,
+                n_neighbors=n_neighbors,
+                min_dist=min_dist,
+                scale=scale,
+                seed=seed,
+            )
+            emb = out["embedding"]
+            stats = [
+                ("Method", "UMAP"),
+                ("Columns used", ", ".join(columns)),
+                ("Rows used", str(int(out["n_samples"]))),
+                ("Neighbors used", str(int(out["n_neighbors_used"]))),
+                ("Min distance", _fmt(min_dist)),
+                ("Scale", scale),
+                ("Seed", str(int(seed))),
+            ]
+            table = [(f"UMAP{i + 1}", emb[:, i]) for i in range(emb.shape[1])]
+            return _Result(
+                x=emb[:, 0],
+                y=emb[:, 1],
+                x_name="UMAP1",
+                y_name="UMAP2",
+                suffix="umap",
+                plot_label=f"UMAP ({', '.join(columns)})",
+                overlay=None,
+                allow_replace=False,
+                apply_modes=("new_layer", "new_dataset"),
+                force_scatter=True,
+                table=table,
+                stats=stats,
+            )
+
         raise ValueError(f"unknown operation {kind!r}")
 
     # -- preview -------------------------------------------------------------------
+
+    def _preview_style(self) -> Tuple[Any, Any, Tuple[Any, ...]]:
+        """(background, grid, palette) read from the live plot -- not the ImGui theme.
+
+        The preview used to borrow generic chrome colors from ``theme.py``, which look
+        nothing like the actual figure. This reads ground truth off ``plot.options``
+        (always correct, however the current look was reached) for background/grid, and
+        the current :class:`~glplot.gui.styles.PlotStyle`'s palette (keyed by
+        ``plot._style_key``, which :func:`styles.apply_style` now keeps in sync for both
+        the ``gplt.plot_style()`` API and a GUI preset click) for series colors.
+
+        Every lookup is defensive: headless tests and stub plots may not carry
+        ``.options``/``.visual`` at all, and this must never raise from a draw callback.
+        """
+        plot = self.plot
+        options = getattr(plot, "options", None)
+        visual = getattr(options, "visual", None)
+        background = tuple(getattr(visual, "background_color", (0.0, 0.0, 0.0)) or (0.0, 0.0, 0.0))
+
+        grid_raw = getattr(options, "axis_grid_color", None)
+        if grid_raw is None or tuple(grid_raw) == styles.AUTO_GRID_COLOR:
+            grid = styles.auto_grid_color(background)
+        else:
+            grid = tuple(grid_raw)
+
+        style_key = str(getattr(plot, "_style_key", "") or "") or styles.DEFAULT_STYLE_KEY
+        try:
+            palette = styles.get_style(style_key).palette
+        except KeyError:
+            palette = styles.get_style(styles.DEFAULT_STYLE_KEY).palette
+        return background, grid, palette
 
     def _draw_preview(
         self, source: _Source, result: Optional[_Result], error: Optional[str]
@@ -2048,6 +3381,11 @@ class MathLabPanel(Panel):
         """The live overlay: source and result on one set of axes ("sobreponer")."""
         if error:
             widgets.error_box(error)
+
+        background, grid, palette = self._preview_style()
+        line_color = palette[0 % len(palette)]
+        overlay_color = palette[1 % len(palette)]
+
         if result is None:
             widgets.mini_plot(
                 "preview",
@@ -2056,6 +3394,8 @@ class MathLabPanel(Panel):
                 height=_PREVIEW_HEIGHT,
                 label=source.label,
                 color=theme.get_color("muted"),
+                background_color=background,
+                grid_color=grid,
             )
             return
 
@@ -2069,6 +3409,44 @@ class MathLabPanel(Panel):
                 "or to your data until you press Apply at the bottom of the panel."
             )
 
+        if result.color_values is not None or result.force_scatter:
+            # An unordered point cloud (Cluster, coloured by category; Spatial, plain),
+            # not a signal: a scatter, not a connected line -- mini_plot's polyline
+            # would draw meaningless zig-zags between points with no natural x order.
+            widgets.mini_scatter(
+                "preview",
+                result.x,
+                result.y,
+                point_colors=result.color_values,
+                palette=palette,
+                color=None if result.color_values is not None else line_color,
+                markers=result.markers,
+                marker_color=theme.get_color("warn"),
+                height=_PREVIEW_HEIGHT,
+                label=result.plot_label,
+                background_color=background,
+                grid_color=grid,
+            )
+            if result.color_values is not None:
+                self._draw_cluster_legend(result, palette)
+            return
+
+        if result.grid_z is not None:
+            # A density grid (Density 2D): filled cells, not a connected line or a
+            # scatter -- mini_heatmap is the one widget that draws a 2-D grid.
+            widgets.mini_heatmap(
+                "preview",
+                result.grid_z,
+                result.grid_x,
+                result.grid_y,
+                height=_PREVIEW_HEIGHT,
+                background_color=background,
+                grid_color=grid,
+                overlay_points=(result.x, result.y),
+                label=result.plot_label,
+            )
+            return
+
         # base_x/base_y override the drawn line (Peaks shows the signal, not its result).
         line_y = result.base_y if result.base_y is not None else result.y
         line_x = result.base_x if result.base_x is not None else result.x
@@ -2081,26 +3459,47 @@ class MathLabPanel(Panel):
             marker_color=theme.get_color("warn"),
             height=_PREVIEW_HEIGHT,
             label=result.plot_label,
-            color=theme.get_color("accent"),
-            overlay_color=theme.get_color("warn"),
+            color=line_color,
+            overlay_color=overlay_color,
+            background_color=background,
+            grid_color=grid,
+            band=result.band,
+            band_color=overlay_color,
         )
-        self._draw_legend(result)
+        self._draw_legend(result, line_color, overlay_color)
 
-    def _draw_legend(self, result: _Result) -> None:
-        """A colour key for the preview series. mini_plot draws the overlay/markers warn."""
-        imgui.text_colored(theme.get_color("accent"), "--")
+    def _draw_legend(
+        self, result: _Result, line_color: Any = None, overlay_color: Any = None
+    ) -> None:
+        """A colour key for the preview series, matching the colors mini_plot just drew."""
+        imgui.text_colored(line_color or theme.get_color("accent"), "--")
         imgui.same_line()
         imgui.text(result.plot_label)
         if result.overlay is not None:
             imgui.same_line()
-            imgui.text_colored(theme.get_color("warn"), "--")
+            imgui.text_colored(overlay_color or theme.get_color("warn"), "--")
             imgui.same_line()
             imgui.text(result.overlay_label)
         if result.markers is not None:
             imgui.same_line()
             imgui.text_colored(theme.get_color("warn"), "o")
             imgui.same_line()
-            imgui.text(f"peaks ({int(np.asarray(result.markers[0]).size)})")
+            imgui.text(f"{result.marker_label} ({int(np.asarray(result.markers[0]).size)})")
+
+    def _draw_cluster_legend(self, result: _Result, palette: Tuple[Any, ...]) -> None:
+        """A colour key for the cluster scatter: one swatch and point count per cluster."""
+        labels = np.asarray(result.color_values)
+        unique = sorted({int(v) for v in labels.tolist() if v >= 0.0})
+        for idx in unique:
+            color = palette[idx % len(palette)] if palette else theme.get_color("accent")
+            imgui.text_colored(color, "o")
+            imgui.same_line()
+            count = int(np.count_nonzero(labels == float(idx)))
+            imgui.text(f"cluster {idx} ({count} pts)")
+        if result.markers is not None and np.asarray(result.markers[0]).size:
+            imgui.text_colored(theme.get_color("warn"), "o")
+            imgui.same_line()
+            imgui.text("centroids")
 
     # -- report --------------------------------------------------------------------
 
@@ -2114,6 +3513,53 @@ class MathLabPanel(Panel):
         lines = [f"# {result.plot_label}\t(source: {source.label})"]
         lines.extend(f"{label}\t{value}" for label, value in result.stats)
         return "\n".join(lines)
+
+    def _draw_export_row(self, result: _Result, key: str) -> None:
+        """A path field + an export button, writing this tab's result to CSV.
+
+        Same convention as the Data Editor's Import/Export section (``clipboard.
+        format_table`` + a direct synchronous write) -- there is no native file dialog
+        anywhere in this GUI, so a text field is the established, not the improvised,
+        answer. Not a :class:`Command`: writing a file touches no scene state and needs
+        no undo entry.
+        """
+        imgui.set_next_item_width(-70.0)
+        _c, self._csv_path = imgui.input_text("##mathlab_csv", self._csv_path)
+        imgui.same_line()
+        if icons.icon_button("##mathlab_export", "download", tooltip="Export result as CSV"):
+            self._export_result_csv(result)
+            self._exported_frames = 90
+            self._exported_key = key
+        imgui.same_line()
+        widgets.help_marker(
+            "Write this operation's result to the CSV file at the path above -- the full "
+            "table for Peaks/Histogram-like operations, otherwise the (x, y) curve shown "
+            "in the preview."
+        )
+        if self._exported_key == key and self._exported_frames > 0:
+            self._exported_frames -= 1
+            imgui.same_line()
+            imgui.text_disabled("Exported")
+
+    def _export_result_csv(self, result: _Result) -> None:
+        """Write ``result`` (its table, or its (x, y) pair) to ``self._csv_path``."""
+        if result.table is not None:
+            headers = [name for name, _ in result.table]
+            columns = [np.asarray(values, dtype=np.float64) for _, values in result.table]
+        else:
+            x_name = result.x_name
+            y_name = result.y_name if result.y_name != x_name else f"{result.y_name} (2)"
+            headers = [x_name, y_name]
+            columns = [np.asarray(result.x, dtype=np.float64), np.asarray(result.y, dtype=np.float64)]
+
+        path = self._csv_path.strip()
+        try:
+            data = np.column_stack(columns)
+            text = clipboard.format_table(headers, data, delimiter=",")
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(text)
+        except (OSError, ValueError) as exc:
+            self._notice = f"Could not write {path!r}: {exc}"
 
     def _draw_report_header(self, source: _Source, result: _Result, key: str) -> None:
         """A "Copy report" button above the stat rows, with a transient confirmation."""
@@ -2156,6 +3602,17 @@ class MathLabPanel(Panel):
         """This tab's apply mode. Defaults to "New layer", the non-destructive choice."""
         return self._apply_modes.get(key, "new_layer")
 
+    def _effective_apply_mode(self, key: str, result: _Result) -> str:
+        """``_apply_mode_for(key)``, clamped to what ``result.apply_modes`` allows.
+
+        A stored preference from another tab (or from before this result restricted its
+        modes) can name a mode ``result`` does not offer -- fall back to the first
+        allowed one rather than showing radios with none selected.
+        """
+        allowed = result.apply_modes or tuple(candidate for candidate, _label in _APPLY_MODES)
+        mode = self._apply_mode_for(key)
+        return mode if mode in allowed else allowed[0]
+
     def _apply_name_for(self, key: str) -> str:
         """This tab's user-typed output name ("" means "use the default")."""
         return self._apply_names.get(key, "")
@@ -2167,13 +3624,18 @@ class MathLabPanel(Panel):
         operation, not to the panel.
         """
         reason = self._replace_reason(source, result)
-        mode = self._apply_mode_for(key)
+        mode = self._effective_apply_mode(key, result)
+        offered = result.apply_modes or tuple(candidate for candidate, _label in _APPLY_MODES)
 
         imgui.text("Apply as")
         imgui.same_line()
-        for index, (candidate, label) in enumerate(_APPLY_MODES):
-            if index:
+        first = True
+        for candidate, label in _APPLY_MODES:
+            if candidate not in offered:
+                continue
+            if not first:
                 imgui.same_line()
+            first = False
             if imgui.radio_button(label, mode == candidate):
                 self._apply_modes[key] = candidate
                 mode = candidate
@@ -2183,6 +3645,12 @@ class MathLabPanel(Panel):
             if candidate == "add_column" and source.dataset is None:
                 imgui.same_line()
                 widgets.help_marker("Unavailable: a plotted layer has no table to add a column to.")
+        if len(offered) < len(_APPLY_MODES):
+            imgui.same_line()
+            widgets.help_marker(
+                "This result has no natural (x, y) curve or matching-length column, so "
+                "only the modes that make sense for it are offered."
+            )
 
         imgui.push_item_width(-140.0)
         try:
@@ -2201,6 +3669,16 @@ class MathLabPanel(Panel):
                 widgets.help_marker(
                     f"Leave empty for the default: {self._default_name(source, result)!r}"
                 )
+            if mode == "add_column" and source.dataset is not None:
+                n_rows = source.dataset.n_rows()
+                n_values = int(np.asarray(result.y).size)
+                if n_rows and n_values != n_rows:
+                    verb = "truncated to" if n_values > n_rows else "padded with NaN to"
+                    imgui.text_colored(
+                        f"This tab's {n_values} points will be {verb} the dataset's "
+                        f"{n_rows} rows -- the Samples count above is not preserved.",
+                        1.0, 0.7, 0.2, 1.0,
+                    )
         finally:
             imgui.pop_item_width()
 
@@ -2249,7 +3727,7 @@ class MathLabPanel(Panel):
 
     def _submit_apply(self, source: _Source, result: _Result, key: str) -> None:
         """Build the Command for this tab's apply mode and queue it."""
-        mode = self._apply_mode_for(key)
+        mode = self._effective_apply_mode(key, result)
         if mode == "new_layer":
             cmd = self._command_new_layer(source, result, key)
         elif mode == "new_dataset":
@@ -2277,11 +3755,21 @@ class MathLabPanel(Panel):
         # it applies must be the ones the preview was showing.
         options = dict(self._layer_opts)
         label = self._output_name(source, result, key)
+        # A cluster (or any operation carrying per-point category labels) closes the loop
+        # with GLPlot's own data-driven color encoding: the new layer's points are
+        # coloured by cluster from the moment they exist, not left for a second trip
+        # through the encodings picker.
+        color_values = (
+            np.array(result.color_values, dtype=np.float64)
+            if result.color_values is not None
+            else None
+        )
+        color_cmap = result.color_cmap
         holder: Dict[str, Any] = {}
 
         def do() -> None:
             holder["layer"] = layerops.add_xy_layer(
-                plot, x, y, kind=kind, label=label, options=options
+                plot, x, y, kind=kind, label=label, options=options, c=color_values, cmap=color_cmap
             )
 
         def undo() -> None:
@@ -2337,7 +3825,10 @@ class MathLabPanel(Panel):
             return None
 
         name = self._output_name(source, result, key)
-        values = np.asarray(result.y, dtype=np.float64)
+        # A cluster result's payload is the label, not y -- add_column writes the category
+        # a user would actually want a new column for.
+        source_values = result.color_values if result.color_values is not None else result.y
+        values = np.asarray(source_values, dtype=np.float64)
         n = dataset.n_rows()
         if n and values.size != n:
             fitted = np.full(n, np.nan, dtype=np.float64)
