@@ -8,6 +8,7 @@ explicit fallback test per optional scipy accelerator).
 
 from __future__ import annotations
 
+import math
 import sys
 
 import numpy as np
@@ -285,8 +286,8 @@ class TestDensity2dKde:
     def test_kde_works_again_once_scipy_is_importable(self):
         """The monkeypatched module above must not leak into the rest of the suite."""
         assert mathops2d.kde2d_available() is True
-        x = np.linspace(0.0, 1.0, 50)
-        y = np.linspace(0.0, 1.0, 50)
+        rng = np.random.default_rng(8)
+        x, y = rng.normal(0, 1, 50), rng.normal(0, 1, 50)
         _xe, _ye, density = mathops2d.density2d(x, y, mode="kde", grid=10)
         assert density.shape == (10, 10)
 
@@ -480,3 +481,68 @@ class TestSpatialStats:
         assert mathops2d.spatial_available() is True
         stats, _hx, _hy = mathops2d.spatial_stats([0.0, 1.0, 2.0], [0.0, 1.0, 0.0])
         assert stats["n"] == 3.0
+
+
+class TestHeldOutClusterScoring:
+    """nearest_centroid/cluster_inertia/silhouette_score -- Phase 1's held-out scoring
+    tools for the Cluster tab's train/val/test split."""
+
+    def test_nearest_centroid_assigns_the_closest_one(self):
+        cx = np.array([0.0, 10.0])
+        cy = np.array([0.0, 10.0])
+        x = np.array([0.5, 9.0, -1.0])
+        y = np.array([0.5, 11.0, 0.0])
+        labels = mathops2d.nearest_centroid(x, y, cx, cy)
+        np.testing.assert_array_equal(labels, [0.0, 1.0, 0.0])
+
+    def test_nearest_centroid_marks_nonfinite_rows_as_negative_one(self):
+        cx = np.array([0.0, 10.0])
+        cy = np.array([0.0, 10.0])
+        x = np.array([0.0, np.nan, 10.0])
+        y = np.array([0.0, 1.0, np.inf])
+        labels = mathops2d.nearest_centroid(x, y, cx, cy)
+        assert labels[0] == 0.0
+        assert labels[1] == -1.0
+        assert labels[2] == -1.0
+
+    def test_cluster_inertia_matches_a_manual_sum_of_squared_distances(self):
+        x = np.array([0.0, 1.0, 10.0, 11.0])
+        y = np.array([0.0, 1.0, 10.0, 9.0])
+        cx = np.array([0.5, 10.0])
+        cy = np.array([0.5, 9.5])
+        labels = np.array([0.0, 0.0, 1.0, 1.0])
+        expected = (
+            (x[0] - cx[0]) ** 2
+            + (y[0] - cy[0]) ** 2
+            + (x[1] - cx[0]) ** 2
+            + (y[1] - cy[0]) ** 2
+            + (x[2] - cx[1]) ** 2
+            + (y[2] - cy[1]) ** 2
+            + (x[3] - cx[1]) ** 2
+            + (y[3] - cy[1]) ** 2
+        )
+        got = mathops2d.cluster_inertia(x, y, cx, cy, labels)
+        assert got == pytest.approx(float(expected))
+
+    def test_silhouette_is_high_for_well_separated_clusters(self):
+        x, y, truth = _blobs([(0.0, 0.0), (50.0, 50.0)], spread=0.2, n_per=60, seed=20)
+        score = mathops2d.silhouette_score(x, y, truth.astype(np.float64))
+        assert score == pytest.approx(1.0, abs=0.05)
+
+    def test_silhouette_is_nan_with_a_single_effective_cluster(self):
+        x = np.array([0.0, 1.0, 2.0, 3.0])
+        y = np.array([0.0, 1.0, 2.0, 3.0])
+        # Every point in cluster 0 except one lone point in cluster 1: only one cluster
+        # has >= 2 members, so the metric is undefined.
+        labels = np.array([0.0, 0.0, 0.0, 1.0])
+        assert math.isnan(mathops2d.silhouette_score(x, y, labels))
+
+        # All-one-cluster: still just a single valid cluster.
+        labels_all_one = np.zeros(4)
+        assert math.isnan(mathops2d.silhouette_score(x, y, labels_all_one))
+
+    def test_nearest_centroid_reproduces_kmeans_clusters_own_training_assignment(self):
+        x, y, _truth = _blobs([(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)], seed=21)
+        labels, cx, cy = mathops2d.kmeans_cluster(x, y, 3, seed=21)
+        recomputed = mathops2d.nearest_centroid(x, y, cx, cy)
+        np.testing.assert_array_equal(recomputed, labels)

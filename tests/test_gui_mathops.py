@@ -3098,7 +3098,9 @@ class TestFitModelRobust:
         x = np.linspace(-5.0, 5.0, 200)
         y = _noisy("linear", [3.0, 2.0], x, 0.05, seed=44)
         plain_params, _c1, _f1, _n1 = mathops.fit_model(x, y, "linear")
-        robust_linear_params, _c2, _f2, _n2 = mathops.fit_model_robust(x, y, "linear", loss="linear")
+        robust_linear_params, _c2, _f2, _n2 = mathops.fit_model_robust(
+            x, y, "linear", loss="linear"
+        )
         assert np.allclose(plain_params, robust_linear_params, atol=1e-6)
 
     def test_respects_bounds(self):
@@ -3325,8 +3327,6 @@ class TestConfidenceIntervalCorrelation:
         assert res["lower"] < res["r"] < res["upper"]
 
     def test_more_samples_narrows_the_interval_at_the_same_r(self):
-        rng = np.random.default_rng(72)
-
         def sample(n, seed):
             rng2 = np.random.default_rng(seed)
             x = rng2.normal(0.0, 1.0, n)
@@ -3437,9 +3437,7 @@ class TestConfidenceIntervalDifference:
 
     def test_unknown_method_raises(self):
         with pytest.raises(ValueError, match="unknown method"):
-            mathops.confidence_interval_difference(
-                [1.0, 2.0], [1.0, 2.0], method="mannwhitney"
-            )
+            mathops.confidence_interval_difference([1.0, 2.0], [1.0, 2.0], method="mannwhitney")
 
     def test_level_out_of_range_raises(self):
         with pytest.raises(ValueError, match="level"):
@@ -3494,7 +3492,7 @@ class TestCrossCorrelation:
         a = rng.normal(0.0, 1.0, 500)
         delay = 17
         b = np.zeros_like(a)
-        b[delay:] = a[: -delay]
+        b[delay:] = a[:-delay]
         lags, xcf = mathops.cross_correlation(a, b, max_lag=50)
         peak_lag = float(lags[np.argmax(xcf)])
         assert peak_lag == pytest.approx(delay)
@@ -3506,7 +3504,7 @@ class TestCrossCorrelation:
         a = rng.normal(0.0, 1.0, 500)
         lead = 17
         b = np.zeros_like(a)
-        b[: -lead] = a[lead:]
+        b[:-lead] = a[lead:]
         lags, xcf = mathops.cross_correlation(a, b, max_lag=50)
         peak_lag = float(lags[np.argmax(xcf)])
         assert peak_lag == pytest.approx(-lead)

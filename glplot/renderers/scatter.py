@@ -86,6 +86,7 @@ class ScatterRenderer:
         self.u_size = -1
         self.u_alpha = -1
         self.u_offset = -1
+        self.u_window = -1
 
         # Accumulation uniforms
         self.accum_prog = 0
@@ -93,6 +94,7 @@ class ScatterRenderer:
         self.u_accum_size = -1
         self.u_accum_alpha = -1
         self.u_accum_offset = -1
+        self.u_accum_window = -1
 
         # Textured-quad program (imshow layers)
         self.image_prog = 0
@@ -107,6 +109,7 @@ class ScatterRenderer:
         self.u_size = glGetUniformLocation(self.prog, "u_size")
         self.u_alpha = glGetUniformLocation(self.prog, "u_alpha")
         self.u_offset = glGetUniformLocation(self.prog, "u_layer_offset")
+        self.u_window = glGetUniformLocation(self.prog, "u_window")
         self.u_point_size_px = glGetUniformLocation(self.prog, "u_point_size_px")
         # The per-marker ring (style.point_outline_*), inside the sprite.
         self.u_point_outline_enabled = glGetUniformLocation(self.prog, "u_point_outline_enabled")
@@ -132,6 +135,7 @@ class ScatterRenderer:
         self.u_accum_size = glGetUniformLocation(self.accum_prog, "u_size")
         self.u_accum_alpha = glGetUniformLocation(self.accum_prog, "u_alpha")
         self.u_accum_offset = glGetUniformLocation(self.accum_prog, "u_layer_offset")
+        self.u_accum_window = glGetUniformLocation(self.accum_prog, "u_window")
 
     def _create_buffers(self, layer: ScatterLayer) -> GLScatterBuffers:
         """Create and initialize GPU buffers for a scatter layer."""
@@ -323,6 +327,7 @@ class ScatterRenderer:
         glEnable(GL_PROGRAM_POINT_SIZE)
 
         glUniformMatrix4fv(self.u_mvp, 1, GL_TRUE, ctx.mvp)
+        glUniform4f(self.u_window, *ctx.window_world)
 
         # Style Resolution: Base * Multipliers
         overrides = self.options.visual.overrides
@@ -632,6 +637,7 @@ class ScatterRenderer:
         glEnable(GL_PROGRAM_POINT_SIZE)
 
         glUniformMatrix4fv(self.u_accum_mvp, 1, GL_TRUE, ctx.mvp)
+        glUniform4f(self.u_accum_window, *ctx.window_world)
 
         overrides = self.options.visual.overrides
         # Use a slightly smaller size for density to prevent over-blurring

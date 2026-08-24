@@ -227,7 +227,9 @@ class TestMiniPlotBand:
         y = np.sin(x)
         custom_band_color = (0.3, 0.6, 0.9)
         _in_window(
-            lambda: widgets.mini_plot("p", y, x=x, band=(y - 0.3, y + 0.3), band_color=custom_band_color)
+            lambda: widgets.mini_plot(
+                "p", y, x=x, band=(y - 0.3, y + 0.3), band_color=custom_band_color
+            )
         )
 
         packed_colors = {color for color, _scale in calls}
@@ -409,3 +411,128 @@ class TestMiniHeatmapSmoke:
         n = widgets.MAX_PLOT_POINTS * 2
         pts = (rng.uniform(0, 1, n), rng.uniform(0, 1, n))
         _in_window(lambda: widgets.mini_heatmap("h", counts, xe, ye, overlay_points=pts))
+
+
+class TestSpinner:
+    """spinner(): the indeterminate busy indicator background jobs show while pending."""
+
+    def test_draws_without_raising(self, imgui_context):
+        _in_window(lambda: widgets.spinner("##sp"))
+
+    def test_custom_radius_and_thickness(self, imgui_context):
+        _in_window(lambda: widgets.spinner("##sp2", radius=12.0, thickness=4.0))
+
+    def test_falls_back_to_text_without_imspinner(self, imgui_context, monkeypatch):
+        """imspinner is an optional companion of imgui_bundle -- degrade, don't crash,
+        matching every other optional-dependency widget in this module."""
+        monkeypatch.setattr(widgets, "IMSPINNER_AVAILABLE", False)
+        _in_window(lambda: widgets.spinner("##sp3"))
+
+    def test_noop_without_imgui(self, monkeypatch):
+        monkeypatch.setattr(widgets, "IMGUI_AVAILABLE", False)
+        widgets.spinner("##sp4")  # must not raise even with no active imgui context
+
+
+class TestBusyRow:
+    """busy_row(): "<spinner> label... Ns   [Cancel]" for a pending background job."""
+
+    def test_draws_without_raising(self, imgui_context):
+        _in_window(lambda: widgets.busy_row("Computing", 1.5, id_str="job1"))
+
+    def test_returns_false_when_cancel_not_clicked(self, imgui_context):
+        result = {}
+        _in_window(lambda: result.update(clicked=widgets.busy_row("Computing", 0.5, id_str="job2")))
+        assert result["clicked"] is False
+
+    def test_cancel_button_click_is_reported(self, imgui_context, monkeypatch):
+        real_button = imgui.button
+
+        def spy_button(label, *a, **k):
+            if label.startswith("Cancel##"):
+                return True
+            return real_button(label, *a, **k)
+
+        monkeypatch.setattr(imgui, "button", spy_button)
+        result = {}
+        _in_window(lambda: result.update(clicked=widgets.busy_row("Computing", 0.5, id_str="job3")))
+        assert result["clicked"] is True
+
+    def test_not_cancellable_draws_no_button_and_returns_false(self, imgui_context, monkeypatch):
+        real_button = imgui.button
+        calls = []
+
+        def spy_button(label, *a, **k):
+            calls.append(label)
+            return real_button(label, *a, **k)
+
+        monkeypatch.setattr(imgui, "button", spy_button)
+        result = {}
+        _in_window(
+            lambda: result.update(
+                clicked=widgets.busy_row("Computing", 0.5, id_str="job4", cancellable=False)
+            )
+        )
+        assert result["clicked"] is False
+        assert not any(c.startswith("Cancel##") for c in calls)
+
+    def test_noop_without_imgui(self, monkeypatch):
+        monkeypatch.setattr(widgets, "IMGUI_AVAILABLE", False)
+        assert widgets.busy_row("Computing", 1.0, id_str="job5") is False
+
+
+class TestDrawToasts:
+    """draw_toasts(): the global notification stack, sourced from notifications.py."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self):
+        from glplot.gui import notifications
+
+        notifications.clear()
+        yield
+        notifications.clear()
+
+    def test_empty_registry_draws_nothing_and_does_not_raise(self, imgui_context):
+        _in_window(widgets.draw_toasts)
+
+    def test_draws_without_raising_for_each_kind(self, imgui_context):
+        from glplot.gui import notifications
+
+        notifications.push("info message", kind="info")
+        notifications.push("it worked", kind="success")
+        notifications.push("it failed", kind="error")
+        _in_window(widgets.draw_toasts)
+
+    def test_close_button_dismisses_its_toast(self, imgui_context, monkeypatch):
+        from glplot.gui import notifications
+
+        toast_id = notifications.push("dismiss me")
+        assert toast_id  # the id itself is not asserted on further, just needs to exist
+
+        # icons.icon_button is looked up via a lazy `from . import icons` inside
+        # draw_toasts -- patch it on the real module object, the only way the lazy
+        # import inside draw_toasts will see the replacement.
+        from glplot.gui import icons
+
+        monkeypatch.setattr(icons, "icon_button", lambda *a, **k: True)
+        _in_window(widgets.draw_toasts)
+        assert notifications.active() == []
+
+    def test_long_message_does_not_raise(self, imgui_context):
+        from glplot.gui import notifications
+
+        notifications.push("x" * 500)
+        _in_window(widgets.draw_toasts)
+
+    def test_many_toasts_stack_without_raising(self, imgui_context):
+        from glplot.gui import notifications
+
+        for i in range(10):
+            notifications.push(f"toast {i}")
+        _in_window(widgets.draw_toasts)
+
+    def test_noop_without_imgui(self, monkeypatch):
+        from glplot.gui import notifications
+
+        notifications.push("x")
+        monkeypatch.setattr(widgets, "IMGUI_AVAILABLE", False)
+        widgets.draw_toasts()  # must not raise even with no active imgui context

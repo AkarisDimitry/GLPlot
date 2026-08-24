@@ -33,7 +33,7 @@ layer. Three reasons this beats views, beyond the dtype being unrepresentable:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -435,16 +435,30 @@ class DataSet:
                 usable[column.name] = column.values
         return usable
 
-    def eval_expression(self, expr: str) -> np.ndarray:
+    def eval_expression(
+        self, expr: str, *, variables: Optional[Mapping[str, Any]] = None
+    ) -> np.ndarray:
         """Evaluate ``expr`` with the columns bound as names -> float64 of ``n_rows``.
 
-        The one primitive behind both "transform a column" (``y * 2``) and "filter rows"
-        (``(y > 0) & (x < 10)``): ``expressions.evaluate`` is the hardened, AST-allowlisted
-        evaluator, and the columns are simply its ``variables``.
+        The one primitive behind "transform a column" (``y * 2``), "filter rows"
+        (``(y > 0) & (x < 10)``) and a parametrized transform (``a * y + b``, ``a``/
+        ``b`` from Data Editor's Transform-section sliders): ``expressions.evaluate``
+        is the hardened, AST-allowlisted evaluator, and the columns -- plus, now,
+        ``variables`` -- are simply its ``variables``.
 
         Not ``expressions.evaluate_1d``: that binds the name ``x`` to a domain it is
         handed, which would either shadow a real ``x`` column or invent one for a table
-        that has none. Here every name comes from the table, and nothing else exists.
+        that has none. Here every name comes from the table (and ``variables``), and
+        nothing else exists.
+
+        Args:
+            expr: The expression text.
+            variables: Extra name -> value bindings on top of the table's own columns
+                (e.g. a slider's current parameter values). A column always wins on a
+                name collision -- real data over a stale/same-named parameter -- though
+                in practice a caller should exclude existing column names when deciding
+                what counts as a free parameter in the first place (see
+                :func:`~glplot.gui.expressions.free_variables`'s ``exclude``).
 
         A scalar result broadcasts to ``n_rows`` (``0`` is a legal transform); booleans
         become 0.0/1.0. Raises :class:`~glplot.gui.expressions.ExpressionError` -- and
@@ -453,7 +467,9 @@ class DataSet:
         from .expressions import ExpressionError, evaluate
 
         n_rows = self.n_rows()
-        result = evaluate(expr, self.bindable_columns())
+        bindings: Dict[str, Any] = dict(variables) if variables else {}
+        bindings.update(self.bindable_columns())
+        result = evaluate(expr, bindings)
 
         try:
             arr = np.asarray(result)
@@ -513,12 +529,24 @@ class DataSet:
             raise
         return np.nan_to_num(values, nan=0.0, posinf=1.0, neginf=1.0) != 0.0
 
-    def transform_column(self, name: str, expr: str, *, target: Optional[str] = None) -> Column:
+    def transform_column(
+        self,
+        name: str,
+        expr: str,
+        *,
+        target: Optional[str] = None,
+        variables: Optional[Mapping[str, Any]] = None,
+    ) -> Column:
         """Write ``expr`` over the columns into a column, and return it.
 
         ``target=None`` overwrites ``name`` in place; otherwise a column named ``target``
         is appended (or overwritten if it already exists, which is what makes re-running
         a transform idempotent instead of piling up ``z (2)``, ``z (3)``...).
+
+        ``variables`` passes through to :meth:`eval_expression` unchanged -- a
+        parametrized transform's current slider values, baked in at the moment this is
+        called (this is the "Apply" of Data Editor's Transform-section sliders; it does
+        not keep the column live-linked to them afterward).
 
         The result is computed **before** anything is written, so an expression that
         raises leaves the table exactly as it was -- there is no half-applied transform.
@@ -527,7 +555,7 @@ class DataSet:
         if source is None:
             raise ValueError(f"Column {name!r} not found in dataset {self.name!r}.")
 
-        values = self.eval_expression(expr)
+        values = self.eval_expression(expr, variables=variables)
 
         if target is None or target == name:
             source.values = values

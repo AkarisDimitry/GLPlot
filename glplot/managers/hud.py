@@ -216,6 +216,14 @@ class HudManager:
                 self._draw_render_panel()
             self._draw_layer_inspector()
 
+        # Drawn last and unconditionally (whichever branch above ran): imgui's own
+        # draw list composites in call order, so a toast raised by any panel -- or by
+        # background work started while that panel wasn't even open -- always ends up
+        # on top, regardless of which panel (if any) currently has focus.
+        from ..gui import widgets as _widgets
+
+        _widgets.draw_toasts()
+
     def _draw_main_menu(self) -> None:
         if imgui.begin_main_menu_bar():
             if imgui.begin_menu("View"):

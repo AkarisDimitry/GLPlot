@@ -642,23 +642,23 @@ class ScenePanel(Panel):
         many = len(targets) > 1
         suffix = f" ({len(targets)} layers)" if many else ""
 
-        if imgui.menu_item("Rename", None, False, not many)[0]:
+        if imgui.menu_item("Rename", "", False, not many)[0]:
             self._begin_rename(layer)
-        if imgui.menu_item(f"Duplicate{suffix}")[0]:
+        if imgui.menu_item(f"Duplicate{suffix}", "", False)[0]:
             self._duplicate_layers(targets)
 
         self._draw_type_menu(layer, many)
 
         soloed = self._solo_id == layer.layer_id
-        if imgui.menu_item("Exit isolate" if soloed else "Isolate", None, soloed, not many)[0]:
+        if imgui.menu_item("Exit isolate" if soloed else "Isolate", "", soloed, not many)[0]:
             self._toggle_solo(layer)
 
         visible = bool(layer.style.visible)
-        if imgui.menu_item(f"{'Hide' if visible else 'Show'}{suffix}")[0]:
+        if imgui.menu_item(f"{'Hide' if visible else 'Show'}{suffix}", "", False)[0]:
             self._set_visible_many(targets, not visible)
 
         imgui.separator()
-        if imgui.menu_item(f"Delete{suffix}")[0]:
+        if imgui.menu_item(f"Delete{suffix}", "", False)[0]:
             self._delete_layers(targets)
         imgui.end_popup()
 
@@ -677,7 +677,7 @@ class ScenePanel(Panel):
                 )
             return
         for option in kinds:
-            if imgui.menu_item(option, None, option == kind)[0] and option != kind:
+            if imgui.menu_item(option, "", option == kind)[0] and option != kind:
                 self._change_kind(layer, option)
         imgui.end_menu()
 

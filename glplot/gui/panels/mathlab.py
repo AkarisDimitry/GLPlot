@@ -23,6 +23,23 @@ leaves all of those invariant will not invalidate the preview. The Recompute but
 the source header exists precisely for that case, and Apply always commits the array the
 preview last showed, so what you see is what you get either way.
 
+Background compute
+-------------------
+Memoisation alone does not save a computation that is genuinely slow the FIRST time
+(UMAP, hierarchical clustering, a robust/deconvolution fit, a distribution fit on a
+large sample) -- that call still has to run once, and CONTRACT 1.10's 16ms budget has
+no slack for it. Against a real, live plot (not the headless test harness --
+see :meth:`_async_enabled`), :meth:`_cached_result` therefore runs ``_compute`` on a
+:class:`~glplot.gui.background.BackgroundJob` (a daemon thread; see that module for
+why a thread and not the ``utils/mpl_process.py`` subprocess pattern) instead of
+inline, so a slow operation never blocks a frame. While a job is in flight the tab
+shows a spinner and elapsed time instead of its usual preview (:meth:`_draw_pending_row`),
+with a Cancel button; multiple tabs may have independent jobs running concurrently,
+since switching tabs must not abandon one the user is still waiting on. A job that
+finishes while its tab is not the one on screen still raises a toast
+(``glplot.gui.notifications``) once it has run long enough to matter, so leaving a
+slow tab to go do something else does not mean missing the result.
+
 Ordering
 --------
 ``integrate``/``derivative``/``resample`` return their results in ascending-x order
@@ -39,6 +56,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -53,12 +71,15 @@ from glplot.gui import (
     mathops,
     mathops2d,
     mathopsnd,
+    notifications,
     styles,
     theme,
     widgets,
 )
+from glplot.gui.background import BackgroundJob
 from glplot.gui.datasets import Column, DataSet
 from glplot.gui.history import Command, snapshot
+from glplot.gui.models import TrainedModel
 from glplot.gui.panels.base import Panel
 
 try:
@@ -82,9 +103,32 @@ _PREVIEW_HEIGHT = 150.0
 # the panel's own scrollbar takes over.
 _MIN_BODY_HEIGHT = 80.0
 
+# Width of the trained-model rail (Phase 3) and the height of each row's compact
+# thumbnail. The thumbnail is deliberately smaller than _PREVIEW_HEIGHT: it is a
+# list-row glance, not the main preview.
+_RAIL_WIDTH = 200.0
+_RAIL_THUMB_HEIGHT = 70.0
+
+# The narrowest the main content column may be squeezed to before a side-by-side rail
+# stops being worth it. Below this, _draw_source's category/operation tab bars start
+# scrolling and controls like the Fit tab's Degree field get clipped to invisibility --
+# verified against a live-window screenshot at the panel's real default width (roughly
+# 450px before the rail exists at all), which is itself below _RAIL_WIDTH + this floor.
+# See draw(): under the floor, the rail draws as a full-width section BELOW the body
+# instead of a side column, so the body never loses width it had before the rail existed.
+_RAIL_MIN_LEFT_WIDTH = 420.0
+
 # Samples taken by _fingerprint. Small enough to be free at 1e6 rows, large enough that a
 # realistic edit moves the sum.
 _FINGERPRINT_SAMPLES = 64
+
+#: Sentinel offered alongside a dataset's real column names in the X/Y source pickers:
+#: maps the axis to the dataset's row number (``0..N-1``) rather than any column, for
+#: tables with no natural "against what" axis (a bare 2-column x,y series with no time
+#: or index column). Mirrors ``data_editor.DataEditorPanel._INDEX_OPTION`` -- same
+#: concept, same bracketed-sentinel spelling, kept as its own constant here rather than
+#: importing the other module's private class attribute across panels.
+_INDEX_OPTION = "(index)"
 
 # Geometry attributes a layer may expose, and the default name of each of its columns.
 # Order matters: ``ab`` is probed before ``pts`` for the same reason datasets.py does it,
@@ -218,10 +262,30 @@ _TAB_BY_KEY: Dict[str, Tuple[str, str]] = {key: (title, method) for key, title, 
 #: category before selecting the operation.
 _CATEGORY_OF: Dict[str, str] = {key: title for title, keys in _CATEGORIES for key in keys}
 
+#: Tabs whose computation is a "trainable" technique -- one that fits/projects/embeds
+#: against however many rows the source has, rather than a pointwise transform whose
+#: cost scales the same way regardless. These are the tabs :meth:`MathLabPanel._sampling_controls`
+#: applies to: the ones where sub-sampling the input before the technique runs is a
+#: meaningful lever (a slow UMAP or hierarchical clustering) rather than a no-op.
+_TRAINABLE_TABS = frozenset({"fit", "cluster", "pca", "umap"})
+
 # Every operation must live in exactly one category, or a tab would be unreachable (in no
 # category) or drawn twice (in two). Cheap to check once at import; a loud failure here
 # beats a silently missing tab.
 assert set(_CATEGORY_OF) == {key for key, _t, _m in _TABS}, "every tab needs one category"
+
+#: How long a tab's params must sit unchanged before a background compute REPLACING an
+#: already-running one is (re)dispatched. Only applies to supersession (see
+#: _cached_result_async): the very first computation on a tab always starts immediately,
+#: so this never adds latency to the common "open a tab, see a result" case -- it exists
+#: purely to stop a continuous slider drag from piling up abandoned slow jobs (UMAP,
+#: hierarchical clustering, ...) that can never be hard-cancelled (see background.py).
+_ASYNC_DEBOUNCE_SECONDS = 0.15
+
+#: A completed/failed background job only raises a toast if it ran at least this long --
+#: below it, the inline result/error the tab already shows is plenty; a toast for every
+#: sub-second computation would be noise, not a notification.
+_ASYNC_NOTIFY_THRESHOLD_SECONDS = 1.5
 assert sum(len(keys) for _t, keys in _CATEGORIES) == len(_TABS), "a tab is double-categorised"
 
 _DESCRIBE_ROWS: Tuple[Tuple[str, str], ...] = (
@@ -337,6 +401,174 @@ def _fingerprint(*arrays: Optional[np.ndarray]) -> Tuple[Any, ...]:
         parts.append(float(a[0]))
         parts.append(float(a[-1]))
     return tuple(parts)
+
+
+def _subsample_indices(n: int, max_rows: int, *, seed: int) -> Optional[np.ndarray]:
+    """Ascending-sorted indices sub-sampling ``n`` rows down to at most ``max_rows``.
+
+    None means "use everything, no-op": either ``n`` is already within the cap, or
+    ``max_rows`` is non-positive (no cap requested at all). Otherwise ``max_rows``
+    indices are drawn uniformly at random without replacement and returned in
+    ascending order, so a caller that subsets a *sorted-by-x* array with the result
+    does not scramble it back out of order.
+
+    Uses its own ``Generator`` seeded by ``seed`` rather than numpy's global random
+    state: the Noise tab already reaches for a seeded draw the same way, and this must
+    not disturb it (or be disturbed by it) just because both happened to run this frame.
+    """
+    if max_rows <= 0 or n <= max_rows:
+        return None
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(n, size=max_rows, replace=False)
+    idx.sort()
+    return idx
+
+
+def _split_indices(
+    n: int, val_frac: float, test_frac: float, *, seed: int
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A random (seeded) partition of ``range(n)`` into ``(train_idx, val_idx, test_idx)``.
+
+    ``len(val_idx)`` is ``round(n * val_frac)`` and ``len(test_idx)`` is
+    ``round(n * test_frac)`` (each clamped so neither exceeds what remains); every
+    other index goes to train. ``val_frac + test_frac`` is clamped to at most 0.9
+    (scaling both down proportionally if it would exceed that) so train never goes
+    empty on a reasonable input -- a split that starves the very partition the model
+    is fit on would defeat the point of having one.
+
+    Returns:
+        Three disjoint, ascending-sorted, together-exhaustive index arrays.
+    """
+    vf = max(0.0, float(val_frac))
+    tf = max(0.0, float(test_frac))
+    total = vf + tf
+    if total > 0.9:
+        scale = 0.9 / total
+        vf *= scale
+        tf *= scale
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(int(n))
+    n_val = min(int(round(n * vf)), perm.size)
+    n_test = min(int(round(n * tf)), perm.size - n_val)
+
+    val_idx = np.sort(perm[:n_val])
+    test_idx = np.sort(perm[n_val : n_val + n_test])
+    train_idx = np.sort(perm[n_val + n_test :])
+    return train_idx, val_idx, test_idx
+
+
+def _held_out_fit_stats(
+    fn: Callable[..., Any],
+    fit_params: np.ndarray,
+    xa: np.ndarray,
+    ya: np.ndarray,
+    train_idx: np.ndarray,
+    val_idx: np.ndarray,
+    test_idx: np.ndarray,
+    n_params: int,
+) -> List[Tuple[str, str]]:
+    """ "Train"/"Val"/"Test" R squared + RMSE stat rows for the Fit tab's split.
+
+    Shared by the polynomial and nonlinear branches of ``_compute``'s "fit" kind, so
+    both report a split in exactly the same shape. Reuses ``mathops.fit_statistics``
+    (the nonlinear branch's own goodness-of-fit helper already) uniformly, evaluating
+    ``fn(x, *fit_params)`` at each split's own x. A split with fewer than 2 points
+    reports the metric as unavailable text -- R squared and RMSE need at least 2 points
+    to mean anything, and a silent nan reads as "computed and undefined" rather than
+    "there was nothing to compute this on".
+    """
+    rows: List[Tuple[str, str]] = []
+    for label, idx in (("Train", train_idx), ("Val", val_idx), ("Test", test_idx)):
+        if idx.size < 2:
+            rows.append((f"{label} R squared", "not enough held-out points"))
+            rows.append((f"{label} RMSE", "not enough held-out points"))
+            continue
+        xv, yv = xa[idx], ya[idx]
+        with np.errstate(all="ignore"):
+            yv_fit = np.asarray(fn(xv, *fit_params), dtype=np.float64)
+        summary = mathops.fit_statistics(yv, yv_fit, n_params)
+        rows.append((f"{label} R squared", _fmt(summary["r_squared"])))
+        rows.append((f"{label} RMSE", _fmt(summary["rmse"])))
+    return rows
+
+
+def _split_metrics(
+    stats: List[Tuple[str, str]],
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """Bucket a trainable tab's ``result.stats`` rows into ``(train, val, test)``.
+
+    Every split-aware branch of ``_compute`` (see ``_held_out_fit_stats`` and the
+    Cluster/PCA/UMAP split blocks) labels a held-out row with a "Train "/"Val "/"Test "
+    prefix -- this is the one place that convention is read back, not just written. The
+    prefix is stripped in the bucketed label (redundant once the row is already sorted
+    into its own bucket). Rows with no such prefix -- the common, split-off case -- all
+    describe the one model that was fit, so they go to ``train``.
+    """
+    train: List[Tuple[str, str]] = []
+    val: List[Tuple[str, str]] = []
+    test: List[Tuple[str, str]] = []
+    for label, value in stats:
+        if label.startswith("Train "):
+            train.append((label[len("Train ") :], value))
+        elif label.startswith("Val "):
+            val.append((label[len("Val ") :], value))
+        elif label.startswith("Test "):
+            test.append((label[len("Test ") :], value))
+        else:
+            train.append((label, value))
+    return train, val, test
+
+
+def _finite_column_matrix(arrays: List[Any]) -> np.ndarray:
+    """Stack equal-length 1-D ``arrays`` into a float64 matrix, keeping finite rows only.
+
+    A tiny local mirror of ``mathopsnd._as_matrix`` + its finite-row filter (that
+    helper is private to ``mathopsnd``, and this is the one call site -- the PCA
+    branch's inline reconstruction-error computation -- that needs exactly this and
+    nothing more).
+    """
+    m = np.column_stack([np.asarray(a, dtype=np.float64).ravel() for a in arrays])
+    good = np.all(np.isfinite(m), axis=1)
+    return m[good]
+
+
+def _elbow_sweep(
+    xa: np.ndarray, ya: np.ndarray, *, seed: int, max_k: int = 10
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """k-means inertia and silhouette at every ``k`` from 2 to ``min(max_k, n - 1)``.
+
+    ``n`` is ``xa.size``. Pure and side-effect free -- run on a :class:`BackgroundJob`
+    thread by :meth:`MathLabPanel._draw_elbow_section`, never called from the main
+    thread against live data (that is exactly what the k-fold-more-expensive cost this
+    diagnostic exists for makes a bad idea).
+
+    Returns:
+        ``(k_values, inertias, silhouettes)``, all the same length -- possibly empty
+        (all three ``size == 0``) when there are fewer than 3 points, i.e. not even
+        ``k=2`` has a meaningful held-out silhouette (``k=2`` on 2 points assigns one
+        point per cluster, which ``silhouette_score`` reports as ``nan`` for lack of a
+        same-cluster neighbour; 3 points is the smallest input that can produce a real
+        number at ``k=2``).
+    """
+    n = int(np.asarray(xa).size)
+    k_max = min(int(max_k), n - 1)
+    if k_max < 2:
+        empty = np.empty(0, dtype=np.float64)
+        return empty, empty, empty
+    k_values: List[float] = []
+    inertias: List[float] = []
+    silhouettes: List[float] = []
+    for k in range(2, k_max + 1):
+        labels, cx, cy = mathops2d.kmeans_cluster(xa, ya, k, seed=seed)
+        inertias.append(mathops2d.cluster_inertia(xa, ya, cx, cy, labels))
+        silhouettes.append(mathops2d.silhouette_score(xa, ya, labels))
+        k_values.append(float(k))
+    return (
+        np.asarray(k_values, dtype=np.float64),
+        np.asarray(inertias, dtype=np.float64),
+        np.asarray(silhouettes, dtype=np.float64),
+    )
 
 
 def _fit_state_key(model: str, spec: mathops.FitModel) -> str:
@@ -487,6 +719,66 @@ class _Result:
     #: statistics -- restricts this to ``("new_dataset",)`` rather than disabling Apply
     #: outright, so its numbers are still one click from becoming data.
     apply_modes: Optional[Tuple[str, ...]] = None
+    #: The raw fitted state of a "trainable" technique (see ``_TRAINABLE_TABS``), for
+    #: held-out scoring now and Save-as-model/transfer/diagnostics in a later phase.
+    #: None for every tab except fit/cluster/pca/umap, which populate it in ``_compute``
+    #: with a technique-specific dict:
+    #:   Fit: {"popt": ndarray, "pcov": ndarray, "model_key": str, "expr": str,
+    #:         "n_peaks": int}
+    #:   Cluster: {"method": "kmeans" | "hierarchical", "centroid_x": ndarray,
+    #:             "centroid_y": ndarray}
+    #:   PCA: {"mean_": ndarray, "components_": ndarray, "scale_stats_": dict,
+    #:         "scale": str, "columns": Tuple[str, ...]}
+    #:   UMAP: {"reducer": Any, "scale_stats_": dict, "scale": str,
+    #:          "columns": Tuple[str, ...]}
+    #: When a train/val/test split is on (``training.split``), this reflects the model
+    #: fit on the TRAIN partition only, not the full (sub-sampled) working set -- a
+    #: later phase reading this to save/transfer the model must get the model that was
+    #: actually validated, not one that saw the held-out rows during fitting.
+    model_state: Optional[Dict[str, Any]] = None
+    #: A generic carrier for a SEPARATE small diagnostic mini-plot (Phase 5), drawn
+    #: alongside the main preview/stats rather than through ``_draw_result_preview``'s
+    #: own x/y/color_values/grid_z dispatch -- a diagnostic's shape has nothing in
+    #: common with any of those. None for every tab except fit/pca, which populate it
+    #: in ``_compute`` with a technique-specific dict:
+    #:   Fit: {"kind": "residuals", "x": ndarray, "y": ndarray} -- actual minus fitted
+    #:        (``ya - evaluated``), evaluated fresh via the fitted popt at ``xa``/``ya``
+    #:        (the post-subsample source, NOT ``xa_fit``/``ya_fit`` -- a split still
+    #:        scores every row -- and independent of whether the main result used an
+    #:        output grid).
+    #:   PCA: {"kind": "scree", "ratios": ndarray, "chosen": int} -- the FULL explained-
+    #:        variance spectrum (every singular value up to
+    #:        ``min(n_samples, n_features)``, not just the ``n_components`` kept) and
+    #:        the component count actually requested, for marking on the plot.
+    #: Cluster's k-sweep (elbow/silhouette) and UMAP's "color by column" are both
+    #: presentation-only features driven from their own dedicated state instead (see
+    #: ``_elbow_jobs``/``_umap_color_column``) -- neither is a property of one
+    #: particular ``_compute()`` call the way these two are, so neither belongs here.
+    diagnostic: Optional[Dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class _SamplingParams:
+    """Sub-sampling + train/val/test split controls for a 'trainable' tab (fit/cluster/pca/umap).
+    Bundled into one object (not several trailing scalars) so a later phase adding split fields
+    never changes the ARITY of the params tuple _compute()'s branches unpack -- only this object's
+    own shape, which every existing direct _compute(source, (...)) test call passes as one value."""
+
+    subsample: bool = False
+    max_rows: int = 5000
+    subsample_seed: int = 0
+    # Inert in this phase; a later phase wires these into _compute. Present now so the params-tuple
+    # arity for every trainable tab only changes ONCE across both phases.
+    split: bool = False
+    val_frac: float = 0.15
+    test_frac: float = 0.15
+    split_seed: int = 0
+
+
+#: The no-op default: no sub-sampling, no split. Every early-return/error path in the
+#: 4 trainable tabs' body methods passes this for their params tuple's trailing slot,
+#: since no real source data exists yet at that point to sample from.
+_NO_SAMPLING = _SamplingParams()
 
 
 # ----------------------------------------------------------------------------------
@@ -629,6 +921,16 @@ class MathLabPanel(Panel):
         self._cluster_seed = 0
         self._cluster_linkage = "ward"
 
+        # Cluster tab elbow/silhouette diagnostic (Phase 5, kmeans only -- see
+        # _draw_elbow_section). An independent BackgroundJob flow, deliberately NOT
+        # routed through _cached_result_async/_async_jobs above: a k-sweep is several
+        # fits, not one _Result, and must never auto-run just because the tab's own
+        # params look stable (see _draw_elbow_section's own docstring). Keyed by tab
+        # key for the same reason every other per-tab dict here is, even though only
+        # one trainable tab can be "cluster" at a time.
+        self._elbow_jobs: Dict[str, BackgroundJob] = {}
+        self._elbow_results: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
         # Density 2D tab (Multivariate).
         self._density_mode = "histogram"
         self._density_bins = 40
@@ -650,6 +952,10 @@ class MathLabPanel(Panel):
         self._umap_min_dist = 0.1
         self._umap_scale = "zscore"
         self._umap_seed = 0
+        #: "Color by" column pick for the UMAP preview (Phase 5), per tab key -- "" is
+        #: the default "(none)"/uncolored state. Presentation only: never read by
+        #: _compute, never part of model_state/Save-as-model. See _draw_umap_preview.
+        self._umap_color_column: Dict[str, str] = {}
 
         self._fit_model = "polynomial"
         self._fit_degree = 3
@@ -677,6 +983,21 @@ class MathLabPanel(Panel):
         self._fit_output_grid = False
         self._fit_output_points = 200
 
+        # -- sampling (fit/cluster/pca/umap only; see _sampling_controls/_TRAINABLE_TABS) --
+        # Per-tab dicts, same idiom as _apply_modes/_apply_names below: Fit's "Sub-sample"
+        # state is about the fit, carrying it onto Cluster (a single panel-global flag
+        # would) makes an unrelated tab silently start dropping rows.
+        self._sampling_enabled: Dict[str, bool] = {}
+        self._sampling_max_rows: Dict[str, int] = {}
+        self._sampling_seed: Dict[str, int] = {}
+        #: Train/val/test split, same per-tab-dict idiom -- drawn inside the "Sampling"
+        #: section by _sampling_controls, independent of the "Sub-sample" checkbox above
+        #: (a split is meaningful whether or not the source was also sub-sampled first).
+        self._split_enabled: Dict[str, bool] = {}
+        self._split_val_frac: Dict[str, float] = {}
+        self._split_test_frac: Dict[str, float] = {}
+        self._split_seed: Dict[str, int] = {}
+
         # -- apply --
         # Per-tab, keyed by the _TABS key. A name typed on Smooth is about the smoothed
         # curve; carrying it onto Fit (as a single panel-global field did) silently
@@ -684,6 +1005,10 @@ class MathLabPanel(Panel):
         # Smooth and rarely on FFT.
         self._apply_modes: Dict[str, str] = {}
         self._apply_names: Dict[str, str] = {}
+        #: "Save as model" name field, per trainable tab (see ``_TRAINABLE_TABS``) --
+        #: same per-tab-dict idiom as ``_apply_names``, so a name typed on Fit never
+        #: leaks onto Cluster.
+        self._model_names: Dict[str, str] = {}
         self._layer_kind = "line"
         #: The selected kind's parameters, re-defaulted when the kind changes: a bar's
         #: width means nothing to a histogram, which never declared that option.
@@ -699,6 +1024,28 @@ class MathLabPanel(Panel):
         self._cache_key: Optional[Tuple[Any, ...]] = None
         self._cache_result: Optional[_Result] = None
         self._cache_error: Optional[str] = None
+
+        # -- background compute (see _cached_result_async) -- every dict below is keyed
+        # by tab key ("fit", "umap", ...), so multiple tabs' computations can be running
+        # concurrently and surviving a tab switch, independent of each other.
+        #: In-flight or settled-but-not-yet-collected job per tab.
+        self._async_jobs: Dict[str, BackgroundJob] = {}
+        #: The cache-key tuple each entry of _async_jobs was started for.
+        self._async_job_keys: Dict[str, Tuple[Any, ...]] = {}
+        #: monotonic() a tab's params last became stable, for the debounce in
+        #: _cached_result_async. Only consulted while superseding an already-running job.
+        self._async_stable_since: Dict[str, float] = {}
+        #: (result, error, cache_key) of the most recently SETTLED computation per tab --
+        #: this, not the single-slot _cache_* trio above, is what survives a tab switch.
+        #: _cache_key/_cache_result/_cache_error still get updated to mirror whichever
+        #: tab was drawn most recently, so every existing Apply/export/report/test code
+        #: path that reads them keeps working unchanged in both sync and async mode.
+        self._async_results: Dict[str, Tuple[Optional[_Result], Optional[str], Tuple[Any, ...]]] = (
+            {}
+        )
+        #: Test-only escape hatch: force async mode on even under the headless harness's
+        #: fake plot (which has no ._is_test_mode to read). See _async_enabled().
+        self._force_async = False
 
         #: Operation key requested by :meth:`show_operation`; consumed by the next frame's
         #: tab bar. A pending value cannot be applied immediately -- the tab bar is only
@@ -726,6 +1073,36 @@ class MathLabPanel(Panel):
         self._advise_key: Optional[Tuple[Any, ...]] = None
         self._advise_cache: List[mathadvise.Recommendation] = []
 
+        # -- trained-model rail (Phase 3) -- closed by default; see draw()'s
+        # rail_visible computation for why it still shows up once a model is saved.
+        self._rail_open: bool = False
+        #: Inline-rename state for a rail row, the scene.py idiom keyed by
+        #: TrainedModel.name rather than an integer id: a model has no other stable
+        #: identity, and ModelStore.add's rename-on-collision guarantees names are
+        #: unique at any instant. The name being edited cannot change out from under
+        #: this key while a rename is in flight -- the mutation is deferred (submit),
+        #: so model.name only actually changes on the next queue drain, after
+        #: _commit_rail_rename has already cleared this state.
+        self._rail_rename_target: Optional[str] = None
+        self._rail_rename_buf: str = ""
+        self._rail_focus_rename: bool = False
+
+        # -- "Apply to..." on a rail row (Phase 4) -- every dict below is keyed by
+        # model.name, the same per-model idiom the rail's own state above uses, so
+        # expanding one model's apply section never disturbs another's in-progress pick.
+        #: Whether this model's "Apply to..." section is expanded.
+        self._apply_model_open: Dict[str, bool] = {}
+        #: The target dataset name picked for this model (independent of the Source
+        #: tab's own ``self._ds_name`` -- this is a TRANSFER target, not the tab's source).
+        self._apply_model_target_ds: Dict[str, str] = {}
+        #: This model's column_map: {role/trained-column-name -> target dataset column}.
+        self._apply_model_columns: Dict[str, Dict[str, str]] = {}
+        #: The typed output name (column name, or new dataset name).
+        self._apply_model_output_name: Dict[str, str] = {}
+        #: "add_column" | "new_dataset" -- only these two modes make sense on a TRANSFER
+        #: target (Replace/New layer only make sense on the dataset a model was trained on).
+        self._apply_model_mode: Dict[str, str] = {}
+
     # -- public API (the workspace's Math actions call this) ------------------------
 
     def show_operation(self, key: str) -> None:
@@ -746,11 +1123,73 @@ class MathLabPanel(Panel):
     # -- lifecycle -----------------------------------------------------------------
 
     def draw(self) -> None:
-        """Panel body. The Workspace owns begin/end."""
+        """Panel body. The Workspace owns begin/end.
+
+        Adds a right-hand rail (Phase 3) listing every saved TrainedModel, but only
+        when there is something to show: ``rail_visible`` is False for anyone who has
+        never opened it AND never saved a model, in which case the body below draws
+        exactly as it did before the rail existed -- no child-region wrapping at all.
+
+        Even when the rail is visible, it only becomes a side COLUMN when the panel is
+        wide enough to spare ``_RAIL_WIDTH`` without squeezing the body below
+        ``_RAIL_MIN_LEFT_WIDTH`` -- a live-window screenshot at the panel's real (much
+        narrower) default size showed a fixed side rail clipping the Fit tab's Degree
+        field to invisibility and forcing the category/operation tab bars into
+        scroll-arrow mode. Below the floor, the rail instead draws as a full-width
+        collapsible section BELOW the body, so the body's own width is never worse than
+        it was before the rail existed, at any panel size.
+        """
         if not IMGUI_AVAILABLE:
             return
 
+        rail_visible = self._rail_open or bool(self.models.models)
+        if not rail_visible:
+            self._draw_body()
+            return
+
+        avail = imgui.get_content_region_avail()
+        # No other panel in this codebase reserves a fixed-width side region; item_spacing.x
+        # (the same gap ImGui already inserts between two same_line() widgets) is the
+        # natural amount to hold back for the same_line() gap below, matching how
+        # dynamics.py/functions.py size a reserved region off the current style.
+        spacing = imgui.get_style().item_spacing.x
+        left_w = avail.x - _RAIL_WIDTH - spacing
+
+        if left_w < _RAIL_MIN_LEFT_WIDTH:
+            self._draw_body()
+            imgui.separator()
+            if widgets.section("Trained models", default_open=True):
+                self._draw_model_rail()
+            return
+
+        # CONTRACT 2.6: end_child is unconditional -- begin_child returning
+        # not-visible still opens a scope that must be closed.
+        left_visible = imgui.begin_child("##mathlab_body", (left_w, 0.0))
+        try:
+            if left_visible:
+                self._draw_body()
+        finally:
+            imgui.end_child()
+
+        imgui.same_line()
+
+        rail_child_visible = imgui.begin_child(
+            "##mathlab_rail", (0.0, 0.0), imgui.ChildFlags_.borders
+        )
+        try:
+            if rail_child_visible:
+                self._draw_model_rail()
+        finally:
+            imgui.end_child()
+
+    def _draw_body(self) -> None:
+        """Everything the panel drew before the model rail (Phase 3) existed.
+
+        Called identically whether or not the rail is visible this frame -- see
+        draw(): only whether this is wrapped in a reserved-width child region differs.
+        """
         self._draw_notice()
+        self._draw_rail_toggle()
         source, source_error = self._draw_source()
         imgui.separator()
 
@@ -760,6 +1199,22 @@ class MathLabPanel(Panel):
 
         self._draw_recommendations(source)
         self._draw_tabs(source)
+
+    def _draw_rail_toggle(self) -> None:
+        """Header toggle for the trained-model rail.
+
+        Always drawn, even with zero saved models: this is what lets a user open the
+        rail for the first time (discoverability) without changing rail_visible's
+        default-closed behaviour for someone who never touches it.
+        """
+        if icons.icon_button(
+            "##toggle_rail",
+            "layers",
+            size=18.0,
+            tooltip="Trained models",
+            active=self._rail_open,
+        ):
+            self._rail_open = not self._rail_open
 
     def _draw_recommendations(self, source: _Source) -> None:
         """A collapsible "Suggested next step" strip, driven by :mod:`mathadvise`.
@@ -879,13 +1334,14 @@ class MathLabPanel(Panel):
 
         # Per-dataset column memory: recall this dataset's own pick rather than whatever
         # the previously selected dataset happened to be showing.
+        options = [_INDEX_OPTION] + list(columns)
         x_col, y_col = self._ds_columns.get(self._ds_name, ("", ""))
-        if x_col not in columns:
+        if x_col not in options:
             x_col = columns[0]
-        if y_col not in columns:
+        if y_col not in options:
             y_col = columns[1] if len(columns) > 1 else columns[0]
-        _cx, x_col = widgets.enum_combo("X column", x_col, columns)
-        _cy, y_col = widgets.enum_combo("Y column", y_col, columns)
+        _cx, x_col = widgets.enum_combo("X column", x_col, options)
+        _cy, y_col = widgets.enum_combo("Y column", y_col, options)
         self._ds_columns[self._ds_name] = (x_col, y_col)
         if self._ds_known != names:
             # The set of datasets changed: forget the ones that are gone, so the map
@@ -896,8 +1352,16 @@ class MathLabPanel(Panel):
             self._ds_known = list(names)
         self._ds_x_col, self._ds_y_col = x_col, y_col
 
-        x = dataset.get(self._ds_x_col)
-        y = dataset.get(self._ds_y_col)
+        x = (
+            np.arange(dataset.n_rows(), dtype=np.float64)
+            if self._ds_x_col == _INDEX_OPTION
+            else dataset.get(self._ds_x_col)
+        )
+        y = (
+            np.arange(dataset.n_rows(), dtype=np.float64)
+            if self._ds_y_col == _INDEX_OPTION
+            else dataset.get(self._ds_y_col)
+        )
         if x is None or y is None:
             return None, "Pick an x and a y column."
 
@@ -1057,16 +1521,30 @@ class MathLabPanel(Panel):
                 finally:
                     imgui.pop_item_width()
 
-                result, error = self._cached_result(source, params)
+                result, error, status = self._cached_result(source, params, key)
                 imgui.spacing()
-                self._draw_preview(source, result, error)
-                if result is not None:
-                    imgui.spacing()
-                    self._draw_export_row(result, key)
-                if result is not None and result.stats:
-                    imgui.spacing()
-                    self._draw_report_header(source, result, key)
-                    widgets.stats_table(f"##stats_{key}", ("Statistic", "Value"), result.stats)
+                if status == "pending":
+                    self._draw_pending_row(key)
+                elif status == "cancelled":
+                    self._draw_cancelled_row(key)
+                else:
+                    if key == "umap" and result is not None and error is None:
+                        # UMAP's own preview (Phase 5): the same scatter, plus a
+                        # presentation-only "Color by column" pick -- see
+                        # _draw_umap_preview's own docstring.
+                        self._draw_umap_preview(source, result, key)
+                    else:
+                        self._draw_preview(source, result, error)
+                    if result is not None:
+                        imgui.spacing()
+                        self._draw_export_row(result, key)
+                    if result is not None and result.stats:
+                        imgui.spacing()
+                        self._draw_report_header(source, result, key)
+                        widgets.stats_table(f"##stats_{key}", ("Statistic", "Value"), result.stats)
+                    if result is not None and result.diagnostic is not None:
+                        imgui.spacing()
+                        self._draw_diagnostic(result)
         finally:
             # CONTRACT 2.2: end_child is unconditional.
             imgui.end_child()
@@ -1075,12 +1553,35 @@ class MathLabPanel(Panel):
             imgui.separator()
             before = imgui.get_cursor_pos_y()
             self._draw_apply(source, result, key)
+            self._draw_save_model_row(source, result, key)
             self._apply_heights[key] = max(0.0, imgui.get_cursor_pos_y() - before)
         elif child_visible:
             # The body drew and has nothing to commit -- Statistics, or an op that
             # errored -- so give it the whole panel back. Only when the body actually
             # drew: a culled child must not clobber a good measurement with zero.
             self._apply_heights[key] = 0.0
+
+    def _draw_pending_row(self, tab_key: str) -> None:
+        """A background job is running (or still debouncing) for this tab: spinner,
+        elapsed time and a Cancel button, in place of the normal preview/stats/Apply."""
+        job = self._async_jobs.get(tab_key)
+        elapsed = job.poll().elapsed if job is not None else 0.0
+        title = _TAB_BY_KEY.get(tab_key, (tab_key, ""))[0]
+        if widgets.busy_row(f"Computing {title}", elapsed, id_str=f"pending_{tab_key}"):
+            self._cancel_async(tab_key)
+        imgui.same_line()
+        widgets.help_marker(
+            "Running in the background so the interface stays responsive. Cancel "
+            "stops waiting on it immediately -- the computation itself may keep "
+            "running briefly, unobserved, since it cannot be forced to stop mid-call."
+        )
+
+    def _draw_cancelled_row(self, tab_key: str) -> None:
+        """The user cancelled this tab's in-flight computation -- offer to retry it."""
+        imgui.text_disabled("Cancelled.")
+        imgui.same_line()
+        if imgui.button(f"Retry##cancelled_{tab_key}", (90.0, 0.0)):
+            self._retry_async(tab_key)
 
     def _apply_reserve(self, key: str) -> float:
         """Vertical space to keep free at the panel bottom for ``key``'s Apply block."""
@@ -1638,6 +2139,114 @@ class MathLabPanel(Panel):
             values[:] = seed
         return tuple(values)
 
+    def _sampling_controls(self, key: str, n_total: int) -> _SamplingParams:
+        """A collapsible "Sampling" block for a "trainable" tab (see ``_TRAINABLE_TABS``
+        -- a fit, a clustering, a projection -- whose cost actually scales with the row
+        count, unlike a pointwise transform): run the technique on a random subset of
+        the rows instead of all of them, and/or hold out a random val/test slice to
+        score separately from what it was fit on.
+
+        Both controls live behind the same collapsible section (drawn only while it is
+        open) but are otherwise independent: a split does not require sub-sampling
+        first, and sub-sampling does not require a split.
+        """
+        assert key in _TRAINABLE_TABS, f"{key!r} is not a trainable tab"
+        imgui.push_id(key)
+        try:
+            if not widgets.section("Sampling", default_open=False):
+                return _NO_SAMPLING
+
+            enabled = bool(self._sampling_enabled.get(key, False))
+            _c, enabled = imgui.checkbox("Sub-sample", enabled)
+            self._sampling_enabled[key] = enabled
+            imgui.same_line()
+            widgets.help_marker(
+                "Run this operation on a random subset of the rows instead of all of "
+                "them -- useful when the source is too large to fit the 16ms preview "
+                "budget (UMAP and hierarchical clustering are the usual culprits). "
+                "The subset is chosen once per seed, not reshuffled every frame."
+            )
+
+            max_rows = int(_NO_SAMPLING.max_rows)
+            subsample_seed = int(_NO_SAMPLING.subsample_seed)
+            if enabled:
+                max_rows = max(100, int(self._sampling_max_rows.get(key, 5000)))
+                changed, new_max_rows = imgui.input_int("Max rows", max_rows)
+                if changed:
+                    max_rows = max(100, int(new_max_rows))
+                self._sampling_max_rows[key] = max_rows
+
+                subsample_seed = int(self._sampling_seed.get(key, 0))
+                _c, subsample_seed = imgui.input_int("Seed", subsample_seed)
+                self._sampling_seed[key] = int(subsample_seed)
+                imgui.same_line()
+                widgets.help_marker(
+                    "The subset is reproducible for a given seed; change it to try a "
+                    "different random slice of the same size."
+                )
+
+                used = min(max_rows, n_total) if n_total > 0 else max_rows
+                imgui.text_disabled(f"{used:,} of {n_total:,} rows")
+
+            split_enabled = bool(self._split_enabled.get(key, False))
+            _c, split_enabled = imgui.checkbox("Train/val/test split", split_enabled)
+            self._split_enabled[key] = split_enabled
+            imgui.same_line()
+            widgets.help_marker(
+                "Fit only on a random 'train' slice of the rows (after sub-sampling "
+                "above, if that is also on) and score a held-out 'val'/'test' slice "
+                "separately -- catches a fit/clustering/projection that only looks "
+                "good on the exact rows it was trained on."
+            )
+
+            val_frac = float(_NO_SAMPLING.val_frac)
+            test_frac = float(_NO_SAMPLING.test_frac)
+            split_seed = int(_NO_SAMPLING.split_seed)
+            if split_enabled:
+                val_frac = float(self._split_val_frac.get(key, _NO_SAMPLING.val_frac))
+                _c, val_frac = widgets.labeled_slider_float(
+                    "Val fraction",
+                    val_frac,
+                    vmin=0.05,
+                    vmax=0.45,
+                    fmt="%.2f",
+                    help="Fraction of the (sub-sampled) rows held out for validation.",
+                )
+                self._split_val_frac[key] = float(val_frac)
+
+                test_frac = float(self._split_test_frac.get(key, _NO_SAMPLING.test_frac))
+                _c, test_frac = widgets.labeled_slider_float(
+                    "Test fraction",
+                    test_frac,
+                    vmin=0.05,
+                    vmax=0.45,
+                    fmt="%.2f",
+                    help="Fraction held out for a final test score, separate from val. "
+                    "Val + test are capped at 90% combined so train never goes empty.",
+                )
+                self._split_test_frac[key] = float(test_frac)
+
+                split_seed = int(self._split_seed.get(key, 0))
+                _c, split_seed = imgui.input_int("Split seed", split_seed)
+                self._split_seed[key] = int(split_seed)
+                imgui.same_line()
+                widgets.help_marker(
+                    "Which rows land in train/val/test is reproducible for a given "
+                    "seed; change it to try a different random partition."
+                )
+
+            return _SamplingParams(
+                subsample=enabled,
+                max_rows=int(max_rows),
+                subsample_seed=int(subsample_seed),
+                split=split_enabled,
+                val_frac=float(val_frac),
+                test_frac=float(test_frac),
+                split_seed=int(split_seed),
+            )
+        finally:
+            imgui.pop_id()
+
     def _tab_fit(self) -> Tuple[Any, ...]:
         """Fit parameters: polynomial regression, a named nonlinear model, or custom f(x).
 
@@ -1646,6 +2255,7 @@ class MathLabPanel(Panel):
         panel is for: free parameters, an initial guess, and a standard error on every
         fitted value.
         """
+        n_total = int(len(self._current_source.x_raw)) if self._current_source is not None else 0
         changed, self._fit_model = widgets.enum_combo(
             "Model",
             self._fit_model,
@@ -1671,16 +2281,40 @@ class MathLabPanel(Panel):
             )
             band, level = self._fit_band_controls()
             use_grid, n_points = self._fit_output_controls()
+            training = self._sampling_controls("fit", n_total)
             return (
-                "fit", "polynomial", int(self._fit_degree), "", None, False, "soft_l1",
-                band, level, use_grid, n_points,
+                "fit",
+                "polynomial",
+                int(self._fit_degree),
+                "",
+                None,
+                False,
+                "soft_l1",
+                band,
+                level,
+                use_grid,
+                n_points,
+                training,
             )
 
         if not mathops.fit_available():
             # No numpy fallback exists for curve_fit, so say so plainly instead of
             # offering a control that cannot work. Polynomial is still right there.
             widgets.error_box(mathops.FIT_UNAVAILABLE_MESSAGE)
-            return ("fit", model, 0, self._fit_expr, None, False, "soft_l1", False, 0.95, False, 200)
+            return (
+                "fit",
+                model,
+                0,
+                self._fit_expr,
+                None,
+                False,
+                "soft_l1",
+                False,
+                0.95,
+                False,
+                200,
+                _NO_SAMPLING,
+            )
 
         if model in _MULTIPEAK_MODELS:
             npeaks_changed, npeaks = imgui.input_int("Peaks", int(self._fit_npeaks))
@@ -1708,16 +2342,40 @@ class MathLabPanel(Panel):
             spec = self._fit_spec(model, self._fit_expr, int_slot)
         except ValueError as exc:
             widgets.error_box(str(exc))
-            return ("fit", model, int_slot, self._fit_expr, None, False, "soft_l1", False, 0.95, False, 200)
+            return (
+                "fit",
+                model,
+                int_slot,
+                self._fit_expr,
+                None,
+                False,
+                "soft_l1",
+                False,
+                0.95,
+                False,
+                200,
+                _NO_SAMPLING,
+            )
 
         imgui.text_disabled(spec.formula)
         p0 = self._fit_guess_controls(model, spec)
         robust, loss = self._fit_robust_controls()
         band, level = self._fit_band_controls()
         use_grid, n_points = self._fit_output_controls()
+        training = self._sampling_controls("fit", n_total)
         return (
-            "fit", model, int_slot, self._fit_expr, p0, robust, loss, band, level,
-            use_grid, n_points,
+            "fit",
+            model,
+            int_slot,
+            self._fit_expr,
+            p0,
+            robust,
+            loss,
+            band,
+            level,
+            use_grid,
+            n_points,
+            training,
         )
 
     def _tab_fft(self) -> Tuple[Any, ...]:
@@ -1775,19 +2433,48 @@ class MathLabPanel(Panel):
         )
 
     def _column_picker(
-        self, label: str, current: str, *, help: Optional[str] = None
+        self, label: str, current: str, *, help: Optional[str] = None, allow_none: bool = False
     ) -> Optional[str]:
         """A combo over the *current* source's dataset columns (see ``_current_source``).
 
         Returns the selected column name, or None with an explanatory disabled line when
         the source has no dataset (a plotted layer has no table to pick a second column
         from) or the dataset has no columns.
+
+        ``allow_none``: prepend a "(none)" entry ahead of the dataset's own columns and
+        return None when it is the current selection -- the UMAP "Color by" picker's
+        default uncolored state (Phase 5). Every existing caller leaves this False and
+        is unaffected: the combo always shows a real column, defaulting to the first.
         """
         source = self._current_source
         dataset = source.dataset if source is not None else None
         if dataset is None:
             imgui.text_disabled(f"{label}: needs a dataset source (a plotted layer has no table).")
             return None
+        names = dataset.column_names()
+        if not names:
+            imgui.text_disabled(f"{label}: the dataset has no columns.")
+            return None
+        if allow_none:
+            options = ("(none)",) + tuple(names)
+            value = current if current in options else "(none)"
+            _c, picked = widgets.enum_combo(label, value, options, help=help)
+            return None if picked == "(none)" else picked
+        value = current if current in names else names[0]
+        _c, picked = widgets.enum_combo(label, value, tuple(names), help=help)
+        return picked
+
+    def _target_column_picker(
+        self, label: str, dataset: DataSet, current: str, *, help: Optional[str] = None
+    ) -> Optional[str]:
+        """A combo over an EXPLICIT ``dataset``'s columns -- ``_column_picker``'s sibling
+        for Phase 4's "Apply saved model to..." flow, which maps a model's own trained
+        column names onto a TARGET dataset that is (deliberately) not whatever the
+        Source tab currently has open.
+
+        Same disabled-line behaviour as ``_column_picker`` when ``dataset`` has no
+        columns; otherwise identical ``widgets.enum_combo`` mechanics.
+        """
         names = dataset.column_names()
         if not names:
             imgui.text_disabled(f"{label}: the dataset has no columns.")
@@ -1949,8 +2636,118 @@ class MathLabPanel(Panel):
         )
         return ("compare", self._compare_col, self._compare_method, show_ci, ci_level)
 
+    def _cluster_training_xy(self, source: _Source, key: str) -> Tuple[np.ndarray, np.ndarray]:
+        """The (x, y) pair the main Cluster computation for tab ``key`` actually fits
+        on: the source's own (x, y), sub-sampled and (if a split is on) reduced to the
+        train partition only -- mirroring ``_compute``'s own "cluster" branch exactly.
+
+        Used by the elbow/silhouette diagnostic so its k-sweep runs against the SAME
+        rows the tab's own result was fit on, read fresh from the panel's current
+        sampling/split state rather than threaded through ``_Result`` (nothing else
+        needs it).
+        """
+        xa = np.asarray(source.x_raw, dtype=np.float64)
+        ya = np.asarray(source.y_raw, dtype=np.float64)
+        if self._sampling_enabled.get(key, False):
+            max_rows = int(self._sampling_max_rows.get(key, _NO_SAMPLING.max_rows))
+            seed = int(self._sampling_seed.get(key, _NO_SAMPLING.subsample_seed))
+            idx = _subsample_indices(int(xa.size), max_rows, seed=seed)
+            if idx is not None:
+                xa, ya = xa[idx], ya[idx]
+        if self._split_enabled.get(key, False):
+            val_frac = float(self._split_val_frac.get(key, _NO_SAMPLING.val_frac))
+            test_frac = float(self._split_test_frac.get(key, _NO_SAMPLING.test_frac))
+            split_seed = int(self._split_seed.get(key, _NO_SAMPLING.split_seed))
+            train_idx, _val_idx, _test_idx = _split_indices(
+                int(xa.size), val_frac, test_frac, seed=split_seed
+            )
+            xa, ya = xa[train_idx], ya[train_idx]
+        return xa, ya
+
+    def _draw_elbow_section(self, source: _Source, key: str) -> None:
+        """The k-means elbow/silhouette diagnostic (Phase 5): a k-fold-more-expensive
+        k-sweep, offered ONLY as an explicit button click -- never dispatched through
+        ``_cached_result_async``/``_compute``, since a k-sweep is several fits, not one
+        ``_Result``, and must not restart just because the tab's own params look stable
+        (the debounce/memoisation machinery those build on assumes a single dispatch-by-
+        kind-string result, which this is not).
+
+        Collapsible, same convention as ``_sampling_controls``, so a tab that never
+        clicks it stays uncluttered.
+        """
+        if not widgets.section("Elbow / silhouette (k-means)", default_open=False):
+            return
+        imgui.text_disabled(
+            "Fits k-means at every k from 2 up to 10 (capped below the row count) and "
+            "reports inertia and silhouette for each -- helps pick k, at the cost of "
+            "several fits instead of one."
+        )
+        imgui.same_line()
+        widgets.help_marker(
+            "Runs on the same (sub-sampled/train) rows the Cluster computation above "
+            "uses. Never runs automatically -- only when this button is clicked."
+        )
+
+        job = self._elbow_jobs.get(key)
+        if job is not None:
+            status = job.poll()
+            if status.state == "running":
+                if widgets.busy_row(
+                    "Computing elbow/silhouette", status.elapsed, id_str=f"elbow_{key}"
+                ):
+                    job.cancel()
+                    self._elbow_jobs.pop(key, None)
+                return
+            self._elbow_jobs.pop(key, None)
+            if status.state == "error":
+                widgets.error_box(status.error or "elbow/silhouette failed")
+            elif status.state == "done" and status.result is not None:
+                self._elbow_results[key] = status.result
+
+        if imgui.button(f"Compute elbow/silhouette (k=2..N)##elbow_{key}"):
+            xa, ya = self._cluster_training_xy(source, key)
+            seed = int(self._cluster_seed)
+            self._elbow_jobs[key] = BackgroundJob(lambda: _elbow_sweep(xa, ya, seed=seed))
+
+        results = self._elbow_results.get(key)
+        if results is None:
+            return
+        k_values, inertias, silhouettes = results
+        if k_values.size == 0:
+            imgui.text_disabled("Not enough rows for a k-sweep.")
+            return
+        chosen = float(self._cluster_k)
+        nearest = int(np.argmin(np.abs(k_values - chosen)))
+        background, grid, palette = self._preview_style()
+        line_color = palette[0 % len(palette)] if palette else None
+        widgets.mini_plot(
+            "elbow_inertia",
+            inertias,
+            x=k_values,
+            markers=([float(k_values[nearest])], [float(inertias[nearest])]),
+            marker_color=theme.get_color("warn"),
+            height=90.0,
+            label="Inertia vs k",
+            color=line_color,
+            background_color=background,
+            grid_color=grid,
+        )
+        widgets.mini_plot(
+            "elbow_silhouette",
+            silhouettes,
+            x=k_values,
+            markers=([float(k_values[nearest])], [float(silhouettes[nearest])]),
+            marker_color=theme.get_color("warn"),
+            height=90.0,
+            label="Silhouette vs k",
+            color=line_color,
+            background_color=background,
+            grid_color=grid,
+        )
+
     def _tab_cluster(self) -> Tuple[Any, ...]:
         """K-means or hierarchical clustering of the source's (x, y) points into k groups."""
+        n_total = int(len(self._current_source.x_raw)) if self._current_source is not None else 0
         imgui.text_disabled("Groups the plotted (x, y) points into k clusters.")
         imgui.same_line()
         widgets.help_marker(
@@ -1989,7 +2786,14 @@ class MathLabPanel(Panel):
                 "farthest, or average pairwise distance -- single is prone to "
                 "'chaining' long strands together; complete and average stay compact.",
             )
-            return ("cluster", "hierarchical", int(self._cluster_k), self._cluster_linkage)
+            training = self._sampling_controls("cluster", n_total)
+            return (
+                "cluster",
+                "hierarchical",
+                int(self._cluster_k),
+                self._cluster_linkage,
+                training,
+            )
 
         _c, self._cluster_seed = imgui.input_int("Seed", int(self._cluster_seed))
         imgui.same_line()
@@ -1998,7 +2802,19 @@ class MathLabPanel(Panel):
             "valid) groupings depending on it. Changing the seed reruns with a different "
             "start; the same seed always reproduces the same result."
         )
-        return ("cluster", "kmeans", int(self._cluster_k), int(self._cluster_seed))
+        training = self._sampling_controls("cluster", n_total)
+        if self._current_source is not None:
+            # kmeans only: hierarchical re-cuts the SAME merge tree per k rather than
+            # re-fitting, so there is no comparable "try several k cheaply" story for
+            # it -- see _draw_elbow_section's own docstring.
+            self._draw_elbow_section(self._current_source, "cluster")
+        return (
+            "cluster",
+            "kmeans",
+            int(self._cluster_k),
+            int(self._cluster_seed),
+            training,
+        )
 
     def _tab_density2d(self) -> Tuple[Any, ...]:
         """2-D density of the source's (x, y) points: a binned histogram, or a KDE surface."""
@@ -2079,7 +2895,7 @@ class MathLabPanel(Panel):
         return ("spatial",)
 
     def _default_nd_columns(self, current: Tuple[str, ...]) -> Tuple[str, ...]:
-        """"Every column of the dataset" the first time an N-D tab meets a real source.
+        """ "Every column of the dataset" the first time an N-D tab meets a real source.
 
         Shared by PCA and UMAP: both start with ``current == ()`` (see the fields'
         own comments in __init__) and want the same "just try it" default once a
@@ -2128,7 +2944,16 @@ class MathLabPanel(Panel):
             "structure, not just whichever column happens to have the biggest raw "
             "numbers. minmax: each column mapped onto [0, 1] first instead.",
         )
-        return ("pca", self._pca_columns, int(self._pca_n_components), self._pca_scale)
+        dataset = self._current_source.dataset if self._current_source is not None else None
+        n_total = int(dataset.n_rows()) if dataset is not None else 0
+        training = self._sampling_controls("pca", n_total)
+        return (
+            "pca",
+            self._pca_columns,
+            int(self._pca_n_components),
+            self._pca_scale,
+            training,
+        )
 
     def _tab_umap(self) -> Tuple[Any, ...]:
         """UMAP: a nonlinear embedding of 2+ columns onto 2 (or more) dimensions."""
@@ -2171,7 +2996,9 @@ class MathLabPanel(Panel):
             "more like a continuous shape)."
         )
         _c, self._umap_scale = widgets.enum_combo(
-            "Scale", self._umap_scale, mathopsnd.SCALE_MODES,
+            "Scale",
+            self._umap_scale,
+            mathopsnd.SCALE_MODES,
             help="Same per-column preprocessing as PCA's Scale option, applied before "
             "UMAP runs -- see there for what each mode does.",
         )
@@ -2182,6 +3009,9 @@ class MathLabPanel(Panel):
             "reproduces the same embedding, a different seed gives an equally valid "
             "but differently arranged one."
         )
+        dataset = self._current_source.dataset if self._current_source is not None else None
+        n_total = int(dataset.n_rows()) if dataset is not None else 0
+        training = self._sampling_controls("umap", n_total)
         return (
             "umap",
             self._umap_columns,
@@ -2190,6 +3020,7 @@ class MathLabPanel(Panel):
             float(self._umap_min_dist),
             self._umap_scale,
             int(self._umap_seed),
+            training,
         )
 
     def _tab_dynamics(self) -> Tuple[Any, ...]:
@@ -2230,10 +3061,57 @@ class MathLabPanel(Panel):
 
     # -- compute -------------------------------------------------------------------
 
+    def _async_enabled(self) -> bool:
+        """True when compute should run on a background thread instead of inline.
+
+        Defaults to True for a real, live plot (``GPULinePlot._is_test_mode`` is False
+        unless explicitly set) and to False for anything else -- including every
+        headless test's ``_FakePlot`` stand-in, which has no ``_is_test_mode``
+        attribute at all. That default (missing attribute => synchronous) is what
+        keeps the whole pre-existing test suite deterministic: it drives the panel
+        through a fixed, small number of ``_draw_frame()`` calls and asserts on
+        ``self._cache_result``/``_cache_error`` immediately afterward, which is only
+        valid if compute is synchronous. ``_force_async`` is the escape hatch for
+        tests that specifically want to exercise the background path.
+        """
+        if self._force_async:
+            return True
+        return not getattr(self.plot, "_is_test_mode", True)
+
+    def _async_compute_fn(self, source: _Source, params: Tuple[Any, ...]) -> Callable[[], _Result]:
+        """Wrap ``_compute`` so a background failure carries the exact same message the
+        synchronous path would show. ``BackgroundJob`` only stringifies whatever it
+        catches, so the ValueError-vs-anything-else classification has to happen here,
+        not there.
+        """
+
+        def run() -> _Result:
+            try:
+                return self._compute(source, params)
+            except ValueError as exc:
+                # The documented failure mode of every mathops entry point.
+                raise RuntimeError(str(exc)) from exc
+            except Exception as exc:  # pragma: no cover - defensive, mirrors the sync path
+                logger.exception("Math Lab background compute failed for params %r", params)
+                raise RuntimeError(f"Unexpected error: {exc}") from exc
+
+        return run
+
     def _cached_result(
-        self, source: _Source, params: Tuple[Any, ...]
-    ) -> Tuple[Optional[_Result], Optional[str]]:
-        """Memoised ``_compute``. See the module docstring on the fingerprint heuristic."""
+        self, source: _Source, params: Tuple[Any, ...], tab_key: str
+    ) -> Tuple[Optional[_Result], Optional[str], str]:
+        """Memoised ``_compute``. See the module docstring on the fingerprint heuristic.
+
+        Returns ``(result, error, status)``. ``status`` is one of:
+
+        * ``"ready"`` -- ``result``/``error`` reflect a settled computation (sync or
+          async); this is the only status possible in synchronous mode, unchanged
+          from before background compute existed.
+        * ``"pending"`` -- still computing, or debouncing before starting (see
+          ``_cached_result_async``); ``result``/``error`` are both None. Async only.
+        * ``"cancelled"`` -- the user cancelled this exact computation; both None.
+          Async only.
+        """
         key = (
             self._cache_epoch,
             source.key,
@@ -2241,23 +3119,120 @@ class MathLabPanel(Panel):
             params,
         )
         if key == self._cache_key:
-            return self._cache_result, self._cache_error
+            return self._cache_result, self._cache_error, "ready"
 
-        self._cache_key = key
-        try:
-            self._cache_result = self._compute(source, params)
-            self._cache_error = None
-        except ValueError as exc:
-            # The documented failure mode of every mathops entry point.
-            self._cache_result = None
-            self._cache_error = str(exc)
-        except Exception as exc:  # pragma: no cover - defensive
-            # An exception escaping here would kill the imgui frame, taking the whole
-            # window with it. Surface it and keep drawing.
-            logger.exception("Math Lab preview failed for params %r", params)
-            self._cache_result = None
-            self._cache_error = f"Unexpected error: {exc}"
-        return self._cache_result, self._cache_error
+        if not self._async_enabled():
+            self._cache_key = key
+            try:
+                self._cache_result = self._compute(source, params)
+                self._cache_error = None
+            except ValueError as exc:
+                # The documented failure mode of every mathops entry point.
+                self._cache_result = None
+                self._cache_error = str(exc)
+            except Exception as exc:  # pragma: no cover - defensive
+                # An exception escaping here would kill the imgui frame, taking the whole
+                # window with it. Surface it and keep drawing.
+                logger.exception("Math Lab preview failed for params %r", params)
+                self._cache_result = None
+                self._cache_error = f"Unexpected error: {exc}"
+            return self._cache_result, self._cache_error, "ready"
+
+        return self._cached_result_async(source, params, tab_key, key)
+
+    def _cached_result_async(
+        self,
+        source: _Source,
+        params: Tuple[Any, ...],
+        tab_key: str,
+        key: Tuple[Any, ...],
+    ) -> Tuple[Optional[_Result], Optional[str], str]:
+        """The background half of :meth:`_cached_result`.
+
+        One :class:`~glplot.gui.background.BackgroundJob` at a time per tab, tracked
+        in ``self._async_jobs``/``_async_job_keys``/``_async_stable_since`` (all keyed
+        by ``tab_key``, never globally): switching tabs must not cancel a slow
+        computation the user is still waiting on elsewhere, so each tab's in-flight/
+        settled state is independent of every other tab's.
+
+        Debounce applies ONLY when superseding a job that was still running --
+        stopping a continuous parameter drag from piling up several abandoned slow
+        jobs it can never hard-cancel (see background.py). The very first dispatch for
+        a tab, or a dispatch after a settled/cancelled state, starts immediately: no
+        latency added to the common "open a tab, see a result" case.
+        """
+        settled = self._async_results.get(tab_key)
+        if settled is not None and settled[2] == key:
+            result, error, _settled_key = settled
+            self._cache_key, self._cache_result, self._cache_error = key, result, error
+            return result, error, "ready"
+
+        now = time.monotonic()
+        job = self._async_jobs.get(tab_key)
+
+        if self._async_job_keys.get(tab_key) != key:
+            # "Churning" covers both a job actually running right now AND an earlier
+            # supersession still debouncing with no job dispatched yet -- either way
+            # this key change extends the SAME wait, it does not start a fresh one.
+            # Using only "is a job running" here is the bug this guards against: once
+            # one supersession pops the job (below) without dispatching a replacement,
+            # a second rapid change would see no job at all and wrongly conclude
+            # nothing was in flight, defeating the debounce for every change after
+            # the first.
+            was_churning = job is not None or tab_key in self._async_stable_since
+            if job is not None:
+                job.cancel()
+            self._async_job_keys[tab_key] = key
+            self._async_jobs.pop(tab_key, None)
+            job = None
+            if was_churning:
+                self._async_stable_since[tab_key] = now
+            else:
+                self._async_stable_since.pop(tab_key, None)
+
+        if job is None:
+            stable_since = self._async_stable_since.get(tab_key)
+            if stable_since is not None and now - stable_since < _ASYNC_DEBOUNCE_SECONDS:
+                return None, None, "pending"
+            self._async_stable_since.pop(tab_key, None)
+            self._async_jobs[tab_key] = BackgroundJob(self._async_compute_fn(source, params))
+            return None, None, "pending"
+
+        status = job.poll()
+        if status.state == "running":
+            return None, None, "pending"
+        if status.state == "cancelled":
+            return None, None, "cancelled"
+
+        # Settled ("done" or "error") -- becomes this tab's result until its params
+        # next change.
+        del self._async_jobs[tab_key]
+        title = _TAB_BY_KEY.get(tab_key, (tab_key, ""))[0]
+        if status.state == "done":
+            result, error = status.result, None
+            if status.elapsed >= _ASYNC_NOTIFY_THRESHOLD_SECONDS:
+                notifications.push(f"{title} finished ({status.elapsed:.1f}s)", kind="success")
+        else:
+            result, error = None, status.error
+            if status.elapsed >= _ASYNC_NOTIFY_THRESHOLD_SECONDS:
+                notifications.push(f"{title} failed: {error}", kind="error")
+        self._async_results[tab_key] = (result, error, key)
+        self._cache_key, self._cache_result, self._cache_error = key, result, error
+        return result, error, "ready"
+
+    def _cancel_async(self, tab_key: str) -> None:
+        """Abandon ``tab_key``'s in-flight job. See background.py: cooperative, not a
+        hard kill -- poll() reports "cancelled" from the next call on regardless of
+        whether the underlying thread has actually stopped."""
+        job = self._async_jobs.get(tab_key)
+        if job is not None:
+            job.cancel()
+
+    def _retry_async(self, tab_key: str) -> None:
+        """Re-run a cancelled computation with its same params, right away -- no
+        debounce, the user just explicitly asked for this one; it is not drag churn."""
+        self._async_jobs.pop(tab_key, None)
+        self._async_stable_since.pop(tab_key, None)
 
     def _compute(self, source: _Source, params: Tuple[Any, ...]) -> _Result:
         """Run one operation. Pure: reads the source, returns a new _Result."""
@@ -2537,7 +3512,9 @@ class MathLabPanel(Panel):
             table: Optional[List[Tuple[str, np.ndarray]]] = None
             if peak_x.size:
                 extreme = int(np.argmin(peak_y)) if is_valleys else int(np.argmax(peak_y))
-                extreme_label = f"Deepest {noun.lower()}" if is_valleys else f"Tallest {noun.lower()}"
+                extreme_label = (
+                    f"Deepest {noun.lower()}" if is_valleys else f"Tallest {noun.lower()}"
+                )
                 value_label = "value" if is_valleys else "height"
                 stats.append((f"{extreme_label} at x", _fmt(float(peak_x[extreme]))))
                 stats.append((f"{extreme_label} {value_label}", _fmt(float(peak_y[extreme]))))
@@ -2628,9 +3605,49 @@ class MathLabPanel(Panel):
             )
 
         if kind == "fit":
-            _, model_key, degree, expr, p0, robust, loss, want_band, level, use_grid, n_points = params
+            (
+                _,
+                model_key,
+                degree,
+                expr,
+                p0,
+                robust,
+                loss,
+                want_band,
+                level,
+                use_grid,
+                n_points,
+                training,
+            ) = params
             ya = np.asarray(y_raw, dtype=np.float64)
             xa = np.asarray(x_raw, dtype=np.float64)
+            total_rows = int(xa.size)
+            used_rows = total_rows
+            if training.subsample:
+                idx = _subsample_indices(
+                    total_rows, training.max_rows, seed=training.subsample_seed
+                )
+                if idx is not None:
+                    xa = xa[idx]
+                    ya = ya[idx]
+                    used_rows = int(idx.size)
+            rows_used_stat: Optional[Tuple[str, str]] = None
+            if training.subsample:
+                suffix = " (subsampled)" if used_rows < total_rows else ""
+                rows_used_stat = ("Rows used", f"{used_rows:,} of {total_rows:,}{suffix}")
+
+            # Train/val/test split (post-subsample): fitting below uses xa_fit/ya_fit,
+            # which equal xa/ya themselves (same objects, not copies) when the split is
+            # off -- every existing computation that follows is then byte-for-byte
+            # unchanged from before this feature existed.
+            if training.split:
+                train_idx, val_idx, test_idx = _split_indices(
+                    int(xa.size), training.val_frac, training.test_frac, seed=training.split_seed
+                )
+                xa_fit, ya_fit = xa[train_idx], ya[train_idx]
+            else:
+                train_idx = val_idx = test_idx = np.empty(0, dtype=np.int64)
+                xa_fit, ya_fit = xa, ya
 
             def _output_grid(fn: Callable[..., Any], fit_params: np.ndarray) -> np.ndarray:
                 """N evenly spaced points across the x range, evaluated through ``fn``.
@@ -2649,27 +3666,52 @@ class MathLabPanel(Panel):
                 return grid, np.broadcast_to(values, grid.shape).astype(np.float64, copy=True)
 
             if model_key == "polynomial":
-                coeffs, cov, y_fit = mathops.fit_polynomial_covariance(x_raw, y_raw, degree)
-                stats: List[Tuple[str, str]] = [
-                    ("R squared", _fmt(_r_squared(ya, y_fit))),
-                    ("Effective degree", _fmt(float(len(coeffs) - 1))),
-                ]
+                coeffs, cov, y_fit = mathops.fit_polynomial_covariance(xa_fit, ya_fit, degree)
+                poly_fn = lambda xx, *c: np.polyval(c, xx)  # noqa: E731
+                stats: List[Tuple[str, str]] = []
+                if rows_used_stat is not None:
+                    stats.append(rows_used_stat)
+                stats.extend(
+                    [
+                        ("R squared", _fmt(_r_squared(ya_fit, y_fit))),
+                        ("Effective degree", _fmt(float(len(coeffs) - 1))),
+                    ]
+                )
                 # np.polyfit returns highest order first.
                 for i, coeff in enumerate(coeffs):
                     power = len(coeffs) - 1 - i
                     name = "constant" if power == 0 else ("x" if power == 1 else f"x^{power}")
                     stats.append((f"Coefficient of {name}", _fmt(float(coeff))))
+                if training.split:
+                    stats.extend(
+                        _held_out_fit_stats(
+                            poly_fn, coeffs, xa, ya, train_idx, val_idx, test_idx, len(coeffs)
+                        )
+                    )
 
-                poly_fn = lambda xx, *c: np.polyval(c, xx)  # noqa: E731
                 if use_grid:
                     x_out, y_out = _output_grid(poly_fn, coeffs)
-                    overlay_out, markers_out = None, (xa, ya)
+                    overlay_out, markers_out = None, (xa_fit, ya_fit)
                     stats.append(("Output points", str(int(x_out.size))))
                 else:
-                    x_out, y_out, overlay_out, markers_out = xa, y_fit, ya, None
+                    x_out, y_out, overlay_out, markers_out = xa_fit, y_fit, ya_fit, None
                 band = None
                 if want_band:
                     band = mathops.confidence_band(x_out, coeffs, cov, poly_fn, level=level)
+                model_state = {
+                    "popt": coeffs,
+                    "pcov": cov,
+                    "model_key": "polynomial",
+                    "expr": "",
+                    "n_peaks": 0,
+                }
+                # Residuals diagnostic (Phase 5): actual minus fitted at the source's OWN
+                # x -- xa/ya (post-subsample, every row -- not xa_fit/ya_fit, which is
+                # train-only when a split is on) -- independent of x_out, which may be a
+                # synthetic output grid instead of the source's own samples.
+                with np.errstate(all="ignore"):
+                    residual_fit = np.polyval(coeffs, xa)
+                diagnostic = {"kind": "residuals", "x": xa, "y": ya - residual_fit}
                 return _Result(
                     x=x_out,
                     y=y_out,
@@ -2683,6 +3725,8 @@ class MathLabPanel(Panel):
                     x_changed=use_grid,
                     stats=stats,
                     band=band,
+                    model_state=model_state,
+                    diagnostic=diagnostic,
                 )
 
             if not mathops.fit_available():
@@ -2695,30 +3739,38 @@ class MathLabPanel(Panel):
             # take it over.
             key = _fit_state_key(model_key, spec)
             try:
-                self._fit_auto[key] = [float(v) for v in mathops.initial_guess(xa, ya, spec)]
+                self._fit_auto[key] = [
+                    float(v) for v in mathops.initial_guess(xa_fit, ya_fit, spec)
+                ]
             except ValueError:
                 self._fit_auto.pop(key, None)
 
             start = np.asarray(p0, dtype=np.float64) if p0 is not None else None
             if robust:
                 popt, pcov, y_fit, names = mathops.fit_model_robust(
-                    xa, ya, spec, p0=start, loss=loss
+                    xa_fit, ya_fit, spec, p0=start, loss=loss
                 )
             else:
-                popt, pcov, y_fit, names = mathops.fit_model(xa, ya, spec, p0=start)
+                popt, pcov, y_fit, names = mathops.fit_model(xa_fit, ya_fit, spec, p0=start)
             errors = mathops.fit_errors(pcov)
-            # Goodness-of-fit always compares the model to the ACTUAL data at the
-            # ACTUAL sample points -- independent of what the output grid below commits.
-            summary = mathops.fit_statistics(ya, y_fit, len(names))
-            stats = [
-                ("R squared", _fmt(summary["r_squared"])),
-                # No per-point errors are available here, so chi squared carries unit
-                # weights and this is the residual variance, in y units squared -- not
-                # the dimensionless "should be near 1" statistic. Labelled, not implied.
-                ("Reduced chi sq (unit weights)", _fmt(summary["reduced_chi_squared"])),
-                ("Degrees of freedom", _fmt(summary["dof"])),
-                ("RMS residual", _fmt(summary["rmse"])),
-            ]
+            # Goodness-of-fit always compares the model to the ACTUAL data it was fit on
+            # -- independent of what the output grid below commits, and (with a split
+            # on) that is the train partition, not the full working set.
+            summary = mathops.fit_statistics(ya_fit, y_fit, len(names))
+            stats = []
+            if rows_used_stat is not None:
+                stats.append(rows_used_stat)
+            stats.extend(
+                [
+                    ("R squared", _fmt(summary["r_squared"])),
+                    # No per-point errors are available here, so chi squared carries unit
+                    # weights and this is the residual variance, in y units squared -- not
+                    # the dimensionless "should be near 1" statistic. Labelled, not implied.
+                    ("Reduced chi sq (unit weights)", _fmt(summary["reduced_chi_squared"])),
+                    ("Degrees of freedom", _fmt(summary["dof"])),
+                    ("RMS residual", _fmt(summary["rmse"])),
+                ]
+            )
             # The whole point of the tab: a value AND its standard error, per parameter.
             for name, value, error in zip(names, popt, errors):
                 stats.append((name, f"{_fmt(float(value))} +/- {_fmt(float(error))}"))
@@ -2733,17 +3785,37 @@ class MathLabPanel(Panel):
                 stats.append(("Total peak area", _fmt(float(sum(peak_areas)))))
                 for i, area in enumerate(peak_areas, start=1):
                     stats.append((f"Peak {i} area", _fmt(float(area))))
+            if training.split:
+                stats.extend(
+                    _held_out_fit_stats(
+                        spec.fn, popt, xa, ya, train_idx, val_idx, test_idx, len(names)
+                    )
+                )
 
             if use_grid:
                 x_out, y_out = _output_grid(spec.fn, popt)
-                overlay_out, markers_out = None, (xa, ya)
+                overlay_out, markers_out = None, (xa_fit, ya_fit)
                 stats.append(("Output points", str(int(x_out.size))))
             else:
-                x_out, y_out, overlay_out, markers_out = xa, y_fit, ya, None
+                x_out, y_out, overlay_out, markers_out = xa_fit, y_fit, ya_fit, None
             band = None
             if want_band:
                 band = mathops.confidence_band(x_out, popt, pcov, spec.fn, level=level)
             plot_label = f"{spec.label} fit" + (" (robust)" if robust else "")
+            model_state = {
+                "popt": popt,
+                "pcov": pcov,
+                "model_key": model_key,
+                "expr": expr,
+                "n_peaks": int(degree) if model_key in _MULTIPEAK_MODELS else 0,
+            }
+            # Residuals diagnostic (Phase 5): same convention as the polynomial branch
+            # above -- actual minus fitted at xa/ya (post-subsample, every row),
+            # mirroring _evaluate_model's own named/multipeak/custom reconstruction
+            # (spec.fn(x, *popt)) rather than the polynomial special case.
+            with np.errstate(all="ignore"):
+                residual_fit = np.asarray(spec.fn(xa, *popt), dtype=np.float64)
+            diagnostic = {"kind": "residuals", "x": xa, "y": ya - residual_fit}
             return _Result(
                 x=x_out,
                 y=y_out,
@@ -2757,6 +3829,8 @@ class MathLabPanel(Panel):
                 x_changed=use_grid,
                 stats=stats,
                 band=band,
+                model_state=model_state,
+                diagnostic=diagnostic,
             )
 
         if kind == "fft":
@@ -2968,7 +4042,9 @@ class MathLabPanel(Panel):
             if show_ci:
                 ci = mathops.confidence_interval_correlation(xs, ys, level=ci_level)
                 pct = f"{ci_level * 100:.0f}%"
-                stats.append((f"{pct} CI for Pearson r", f"[{_fmt(ci['lower'])}, {_fmt(ci['upper'])}]"))
+                stats.append(
+                    (f"{pct} CI for Pearson r", f"[{_fmt(ci['lower'])}, {_fmt(ci['upper'])}]")
+                )
             return _Result(
                 x=xs,
                 y=ys,
@@ -3007,7 +4083,9 @@ class MathLabPanel(Panel):
             # Always Welch's CI for the mean gap, independent of the hypothesis-test
             # method picked above: mannwhitney/ks test the full distribution, not the
             # mean, so there is no matching closed-form interval for them to switch to.
-            diff_ci = mathops.confidence_interval_difference(a, b, level=ci_level) if show_ci else None
+            diff_ci = (
+                mathops.confidence_interval_difference(a, b, level=ci_level) if show_ci else None
+            )
             if diff_ci is not None:
                 pct = f"{ci_level * 100:.0f}%"
                 stats.append(
@@ -3048,8 +4126,12 @@ class MathLabPanel(Panel):
                 ("p-value", np.array([float(outcome["p_value"])], dtype=np.float64)),
             ]
             if diff_ci is not None:
-                table.append(("CI lower (mean diff)", np.array([diff_ci["lower"]], dtype=np.float64)))
-                table.append(("CI upper (mean diff)", np.array([diff_ci["upper"]], dtype=np.float64)))
+                table.append(
+                    ("CI lower (mean diff)", np.array([diff_ci["lower"]], dtype=np.float64))
+                )
+                table.append(
+                    ("CI upper (mean diff)", np.array([diff_ci["upper"]], dtype=np.float64))
+                )
             return _Result(
                 x=sil_x,
                 y=sil_a,
@@ -3067,24 +4149,83 @@ class MathLabPanel(Panel):
             )
 
         if kind == "cluster":
-            _, cluster_method, k, extra = params
+            _, cluster_method, k, extra, training = params
             xa = np.asarray(x_raw, dtype=np.float64)
             ya = np.asarray(y_raw, dtype=np.float64)
-            if cluster_method == "hierarchical":
-                labels, centroid_x, centroid_y = mathops2d.hierarchical_cluster(
-                    xa, ya, k, method=extra
+            total_rows = int(xa.size)
+            used_rows = total_rows
+            if training.subsample:
+                idx = _subsample_indices(
+                    total_rows, training.max_rows, seed=training.subsample_seed
                 )
-                method_label = f"hierarchical ({extra})"
+                if idx is not None:
+                    xa = xa[idx]
+                    ya = ya[idx]
+                    used_rows = int(idx.size)
+            if training.split:
+                train_idx, val_idx, test_idx = _split_indices(
+                    int(xa.size), training.val_frac, training.test_frac, seed=training.split_seed
+                )
+                xa_fit, ya_fit = xa[train_idx], ya[train_idx]
+                if cluster_method == "hierarchical":
+                    _labels_fit, centroid_x, centroid_y = mathops2d.hierarchical_cluster(
+                        xa_fit, ya_fit, k, method=extra
+                    )
+                    method_label = f"hierarchical ({extra})"
+                else:
+                    _labels_fit, centroid_x, centroid_y = mathops2d.kmeans_cluster(
+                        xa_fit, ya_fit, k, seed=extra
+                    )
+                    method_label = "k-means"
+                # Every post-subsample point (train + held-out) is coloured/tabled here,
+                # assigned to the TRAIN-fitted centroids via nearest-centroid -- k-means's
+                # own assignments reduce to exactly this rule at convergence (see
+                # mathops2d.nearest_centroid), and it is the accepted approximation for
+                # hierarchical, which has no native out-of-sample rule at all.
+                labels = mathops2d.nearest_centroid(xa, ya, centroid_x, centroid_y)
             else:
-                labels, centroid_x, centroid_y = mathops2d.kmeans_cluster(xa, ya, k, seed=extra)
-                method_label = "k-means"
+                # Unchanged path: fit directly on every post-subsample point, exactly as
+                # before this feature existed.
+                if cluster_method == "hierarchical":
+                    labels, centroid_x, centroid_y = mathops2d.hierarchical_cluster(
+                        xa, ya, k, method=extra
+                    )
+                    method_label = f"hierarchical ({extra})"
+                else:
+                    labels, centroid_x, centroid_y = mathops2d.kmeans_cluster(xa, ya, k, seed=extra)
+                    method_label = "k-means"
             n_clusters = int(centroid_x.size)
-            stats = [("Method", method_label), ("Clusters found", str(n_clusters))]
+            stats = [("Method", method_label)]
+            if training.subsample:
+                suffix = " (subsampled)" if used_rows < total_rows else ""
+                stats.append(("Rows used", f"{used_rows:,} of {total_rows:,}{suffix}"))
+            stats.append(("Clusters found", str(n_clusters)))
             unclustered = int(np.count_nonzero(labels < 0.0))
             if unclustered:
                 stats.append(("Unclustered (non-finite) points", str(unclustered)))
             for i in range(n_clusters):
                 stats.append((f"Cluster {i} size", str(int(np.count_nonzero(labels == float(i))))))
+            if training.split:
+                for label, idx in (("Train", train_idx), ("Val", val_idx), ("Test", test_idx)):
+                    if idx.size < 2:
+                        stats.append((f"{label} inertia", "not enough held-out points"))
+                        stats.append((f"{label} silhouette", "not enough held-out points"))
+                        continue
+                    xs_split, ys_split = xa[idx], ya[idx]
+                    labels_split = mathops2d.nearest_centroid(
+                        xs_split, ys_split, centroid_x, centroid_y
+                    )
+                    inertia = mathops2d.cluster_inertia(
+                        xs_split, ys_split, centroid_x, centroid_y, labels_split
+                    )
+                    stats.append((f"{label} inertia", _fmt(inertia)))
+                    sil = mathops2d.silhouette_score(xs_split, ys_split, labels_split)
+                    stats.append((f"{label} silhouette", _fmt(sil)))
+            model_state = {
+                "method": cluster_method,
+                "centroid_x": centroid_x,
+                "centroid_y": centroid_y,
+            }
             return _Result(
                 x=xa,
                 y=ya,
@@ -3098,6 +4239,7 @@ class MathLabPanel(Panel):
                 color_values=labels,
                 markers=(centroid_x, centroid_y),
                 table=[(source.x_name, xa), (source.y_name, ya), ("cluster", labels)],
+                model_state=model_state,
             )
 
         if kind == "density2d":
@@ -3143,7 +4285,9 @@ class MathLabPanel(Panel):
             ]
             if "mean_nn_distance" in spatial:
                 stats.append(("Mean nearest-neighbor distance", _fmt(spatial["mean_nn_distance"])))
-                stats.append(("Median nearest-neighbor distance", _fmt(spatial["median_nn_distance"])))
+                stats.append(
+                    ("Median nearest-neighbor distance", _fmt(spatial["median_nn_distance"]))
+                )
                 stats.append(("Min nearest-neighbor distance", _fmt(spatial["min_nn_distance"])))
                 stats.append(("Max nearest-neighbor distance", _fmt(spatial["max_nn_distance"])))
             table: Optional[List[Tuple[str, np.ndarray]]] = None
@@ -3263,19 +4407,62 @@ class MathLabPanel(Panel):
             raise ValueError(f"unknown dynamics analysis {mode!r}")
 
         if kind == "pca":
-            _, columns, n_components, scale = params
+            _, columns, n_components, scale, training = params
             if source.dataset is None:
                 raise ValueError("PCA needs a dataset source (a plotted layer has no table).")
             if len(columns) < 2:
                 raise ValueError("PCA needs at least 2 columns selected.")
             arrays = [source.dataset.get(name) for name in columns]
-            out = mathopsnd.pca(arrays, n_components=n_components, scale=scale)
-            scores = out["scores"]
+            total_rows = int(len(arrays[0])) if arrays else 0
+            if training.subsample:
+                idx = _subsample_indices(
+                    total_rows, training.max_rows, seed=training.subsample_seed
+                )
+                if idx is not None:
+                    arrays = [np.asarray(a)[idx] for a in arrays]
+
+            if training.split:
+                n_post_subsample = int(len(arrays[0])) if arrays else 0
+                train_idx, val_idx, test_idx = _split_indices(
+                    n_post_subsample,
+                    training.val_frac,
+                    training.test_frac,
+                    seed=training.split_seed,
+                )
+                train_arrays = [np.asarray(a)[train_idx] for a in arrays]
+                # Fit on train only; project every post-subsample row (train + held-out)
+                # through that fit via pca_transform -- the out-of-sample half -- rather
+                # than a fresh pca() over everything, so the preview/table cover every
+                # row without leaking val/test into the fit itself.
+                out = mathopsnd.pca(train_arrays, n_components=n_components, scale=scale)
+                scores = mathopsnd.pca_transform(
+                    arrays,
+                    mean_=out["mean_"],
+                    components_=out["components"],
+                    scale_stats=out["scale_stats_"],
+                    scale=scale,
+                )
+            else:
+                # Unchanged path: fit directly on every post-subsample row, exactly as
+                # before this feature existed.
+                out = mathopsnd.pca(arrays, n_components=n_components, scale=scale)
+                scores = out["scores"]
             explained = out["explained_variance_ratio"]
+            # "Rows used" is the technique's own finite-row count (out["n_samples"]) --
+            # after sub-sampling too, since that ran before pca() saw the data. Only the
+            # *format* changes when sub-sampling is on: "of <total>" and the annotation
+            # are meaningless noise on the common (off) path, so that path's value stays
+            # byte-identical to before this feature existed.
+            used_rows = int(out["n_samples"])
+            if training.subsample:
+                suffix = " (subsampled)" if used_rows < total_rows else ""
+                rows_used_value = f"{used_rows:,} of {total_rows:,}{suffix}"
+            else:
+                rows_used_value = str(used_rows)
             stats = [
                 ("Method", "PCA (SVD)"),
                 ("Columns used", ", ".join(columns)),
-                ("Rows used", str(int(out["n_samples"]))),
+                ("Rows used", rows_used_value),
                 ("Scale", scale),
             ]
             for i, ratio in enumerate(explained, start=1):
@@ -3283,7 +4470,46 @@ class MathLabPanel(Panel):
             stats.append(
                 ("Cumulative explained variance", f"{float(np.sum(explained)) * 100:.1f}%")
             )
+            if training.split:
+                # Reconstruction error per split: scale (with the FITTED stats) and
+                # center each split's own rows, project through the train-fitted
+                # components, reconstruct back (scores @ components + mean_), and report
+                # the mean squared error between the scaled input and that
+                # reconstruction -- the same metric, computed the same way, for every
+                # split including train, so the three numbers are directly comparable.
+                components_arr = np.asarray(out["components"], dtype=np.float64)
+                mean_arr = np.asarray(out["mean_"], dtype=np.float64)
+                for label, idx in (("Train", train_idx), ("Val", val_idx), ("Test", test_idx)):
+                    if idx.size < 1:
+                        stats.append((f"{label} reconstruction error", "not enough points"))
+                        continue
+                    split_arrays = [np.asarray(a)[idx] for a in arrays]
+                    m_split = _finite_column_matrix(split_arrays)
+                    if m_split.shape[0] < 1:
+                        stats.append((f"{label} reconstruction error", "not enough points"))
+                        continue
+                    scaled_split = mathopsnd.apply_scale(m_split, out["scale_stats_"], mode=scale)
+                    centered_split = scaled_split - mean_arr
+                    scores_split = centered_split @ components_arr.T
+                    recon_split = scores_split @ components_arr + mean_arr
+                    mse = float(np.mean((scaled_split - recon_split) ** 2))
+                    stats.append((f"{label} reconstruction error", _fmt(mse)))
             table = [(f"PC{i + 1}", scores[:, i]) for i in range(scores.shape[1])]
+            model_state = {
+                "mean_": out["mean_"],
+                "components_": out["components"],
+                "scale_stats_": out["scale_stats_"],
+                "scale": scale,
+                "columns": tuple(columns),
+            }
+            # Scree diagnostic (Phase 5): the FULL explained-variance spectrum (every
+            # singular value, not just the n_components kept) plus which count was
+            # actually requested, for marking on the plot.
+            diagnostic = {
+                "kind": "scree",
+                "ratios": out["explained_variance_ratio_full"],
+                "chosen": int(n_components),
+            }
             return _Result(
                 x=scores[:, 0],
                 y=scores[:, 1],
@@ -3297,17 +4523,44 @@ class MathLabPanel(Panel):
                 force_scatter=True,
                 table=table,
                 stats=stats,
+                model_state=model_state,
+                diagnostic=diagnostic,
             )
 
         if kind == "umap":
-            _, columns, n_components, n_neighbors, min_dist, scale, seed = params
+            _, columns, n_components, n_neighbors, min_dist, scale, seed, training = params
             if source.dataset is None:
                 raise ValueError("UMAP needs a dataset source (a plotted layer has no table).")
             if len(columns) < 2:
                 raise ValueError("UMAP needs at least 2 columns selected.")
             arrays = [source.dataset.get(name) for name in columns]
+            total_rows = int(len(arrays[0])) if arrays else 0
+            if training.subsample:
+                idx = _subsample_indices(
+                    total_rows, training.max_rows, seed=training.subsample_seed
+                )
+                if idx is not None:
+                    arrays = [np.asarray(a)[idx] for a in arrays]
+
+            train_idx = val_idx = test_idx = np.empty(0, dtype=np.int64)
+            fit_arrays = arrays
+            if training.split:
+                n_post_subsample = int(len(arrays[0])) if arrays else 0
+                train_idx, val_idx, test_idx = _split_indices(
+                    n_post_subsample,
+                    training.val_frac,
+                    training.test_frac,
+                    seed=training.split_seed,
+                )
+                # Fit (and embed, for the preview) on train only -- UMAP has no closed
+                # form to project new points through cheaply the way PCA does, so
+                # phase 1 does not embed the held-out rows at all; a later phase adds a
+                # visual (embedding-coloured-by-split) read using the reducer's own
+                # .transform().
+                fit_arrays = [np.asarray(a)[train_idx] for a in arrays]
+
             out = mathopsnd.umap_embed(
-                arrays,
+                fit_arrays,
                 n_components=n_components,
                 n_neighbors=n_neighbors,
                 min_dist=min_dist,
@@ -3315,16 +4568,36 @@ class MathLabPanel(Panel):
                 seed=seed,
             )
             emb = out["embedding"]
+            # See the PCA branch above: same "Rows used" convention.
+            used_rows = int(out["n_samples"])
+            if training.subsample:
+                suffix = " (subsampled)" if used_rows < total_rows else ""
+                rows_used_value = f"{used_rows:,} of {total_rows:,}{suffix}"
+            else:
+                rows_used_value = str(used_rows)
             stats = [
                 ("Method", "UMAP"),
                 ("Columns used", ", ".join(columns)),
-                ("Rows used", str(int(out["n_samples"]))),
+                ("Rows used", rows_used_value),
                 ("Neighbors used", str(int(out["n_neighbors_used"]))),
                 ("Min distance", _fmt(min_dist)),
                 ("Scale", scale),
                 ("Seed", str(int(seed))),
             ]
+            if training.split:
+                # No fabricated quality score -- UMAP has no reconstruction error or
+                # out-of-sample metric this project is willing to present as one. Row
+                # counts are the honest, purely descriptive thing to report here.
+                stats.append(("Train rows", str(int(train_idx.size))))
+                stats.append(("Val rows", str(int(val_idx.size))))
+                stats.append(("Test rows", str(int(test_idx.size))))
             table = [(f"UMAP{i + 1}", emb[:, i]) for i in range(emb.shape[1])]
+            model_state = {
+                "reducer": out["reducer"],
+                "scale_stats_": out["scale_stats_"],
+                "scale": scale,
+                "columns": tuple(columns),
+            }
             return _Result(
                 x=emb[:, 0],
                 y=emb[:, 1],
@@ -3338,6 +4611,7 @@ class MathLabPanel(Panel):
                 force_scatter=True,
                 table=table,
                 stats=stats,
+                model_state=model_state,
             )
 
         raise ValueError(f"unknown operation {kind!r}")
@@ -3382,11 +4656,8 @@ class MathLabPanel(Panel):
         if error:
             widgets.error_box(error)
 
-        background, grid, palette = self._preview_style()
-        line_color = palette[0 % len(palette)]
-        overlay_color = palette[1 % len(palette)]
-
         if result is None:
+            background, grid, _palette = self._preview_style()
             widgets.mini_plot(
                 "preview",
                 source.y_raw,
@@ -3409,12 +4680,30 @@ class MathLabPanel(Panel):
                 "or to your data until you press Apply at the bottom of the panel."
             )
 
+        self._draw_result_preview(result, height=_PREVIEW_HEIGHT, id_prefix="preview")
+
+    def _draw_result_preview(
+        self, result: _Result, *, height: float, id_prefix: str = "preview"
+    ) -> None:
+        """Dispatch ``result`` to the widget its shape calls for -- scatter, heatmap or
+        line -- plus its matching legend. Extracted from :meth:`_draw_preview` so a
+        trained-model rail row (Phase 3) can render the exact ``_Result`` a "Save as
+        model" click captured, at a different (smaller) height, without recomputing it.
+
+        ``id_prefix`` becomes the widget's own ``id_str``, so a rail thumbnail's ImGui
+        ids never collide with the live preview's own ``"preview"``-prefixed ones when
+        both are on screen in the same frame.
+        """
+        background, grid, palette = self._preview_style()
+        line_color = palette[0 % len(palette)]
+        overlay_color = palette[1 % len(palette)]
+
         if result.color_values is not None or result.force_scatter:
             # An unordered point cloud (Cluster, coloured by category; Spatial, plain),
             # not a signal: a scatter, not a connected line -- mini_plot's polyline
             # would draw meaningless zig-zags between points with no natural x order.
             widgets.mini_scatter(
-                "preview",
+                id_prefix,
                 result.x,
                 result.y,
                 point_colors=result.color_values,
@@ -3422,7 +4711,7 @@ class MathLabPanel(Panel):
                 color=None if result.color_values is not None else line_color,
                 markers=result.markers,
                 marker_color=theme.get_color("warn"),
-                height=_PREVIEW_HEIGHT,
+                height=height,
                 label=result.plot_label,
                 background_color=background,
                 grid_color=grid,
@@ -3435,11 +4724,11 @@ class MathLabPanel(Panel):
             # A density grid (Density 2D): filled cells, not a connected line or a
             # scatter -- mini_heatmap is the one widget that draws a 2-D grid.
             widgets.mini_heatmap(
-                "preview",
+                id_prefix,
                 result.grid_z,
                 result.grid_x,
                 result.grid_y,
-                height=_PREVIEW_HEIGHT,
+                height=height,
                 background_color=background,
                 grid_color=grid,
                 overlay_points=(result.x, result.y),
@@ -3451,13 +4740,13 @@ class MathLabPanel(Panel):
         line_y = result.base_y if result.base_y is not None else result.y
         line_x = result.base_x if result.base_x is not None else result.x
         widgets.mini_plot(
-            "preview",
+            id_prefix,
             line_y,
             x=line_x,
             overlay=result.overlay,
             markers=result.markers,
             marker_color=theme.get_color("warn"),
-            height=_PREVIEW_HEIGHT,
+            height=height,
             label=result.plot_label,
             color=line_color,
             overlay_color=overlay_color,
@@ -3500,6 +4789,439 @@ class MathLabPanel(Panel):
             imgui.text_colored(theme.get_color("warn"), "o")
             imgui.same_line()
             imgui.text("centroids")
+
+    def _draw_diagnostic(self, result: _Result) -> None:
+        """A separate, clearly-labeled mini-plot for ``result.diagnostic`` (Phase 5),
+        drawn below the main preview/stats. Collapsible, same convention as
+        ``_sampling_controls``, so a tab with a diagnostic to show does not force it on
+        someone who never opens the section.
+        """
+        diag = result.diagnostic
+        if diag is None:
+            return
+        kind = diag.get("kind")
+        background, grid, palette = self._preview_style()
+        line_color = palette[0 % len(palette)] if palette else None
+
+        if kind == "residuals":
+            if not widgets.section("Residuals", default_open=False):
+                return
+            imgui.text_disabled("Actual minus fitted, at every (post-subsample) source point.")
+            widgets.mini_plot(
+                "fit_residuals",
+                diag["y"],
+                x=diag["x"],
+                height=90.0,
+                label="Residuals",
+                color=line_color,
+                background_color=background,
+                grid_color=grid,
+            )
+            return
+
+        if kind == "scree":
+            if not widgets.section("Scree plot", default_open=False):
+                return
+            ratios = np.asarray(diag["ratios"], dtype=np.float64)
+            chosen = int(diag["chosen"])
+            xs = np.arange(1, ratios.size + 1, dtype=np.float64)
+            markers = None
+            if 1 <= chosen <= ratios.size:
+                markers = ([float(chosen)], [float(ratios[chosen - 1])])
+            widgets.mini_plot(
+                "pca_scree",
+                ratios,
+                x=xs,
+                markers=markers,
+                marker_color=theme.get_color("warn"),
+                height=90.0,
+                label="Explained variance by component",
+                color=line_color,
+                background_color=background,
+                grid_color=grid,
+            )
+            return
+
+    # -- UMAP "color by column" preview (Phase 5) ------------------------------------
+    # Presentation only: none of this touches _compute, model_state, or Save-as-model
+    # -- it only changes how the ALREADY-COMPUTED embedding in `result` is drawn.
+
+    def _umap_row_indices(
+        self, source: _Source, key: str, embed_columns: Tuple[str, ...]
+    ) -> np.ndarray:
+        """Which of ``source.dataset``'s row indices feed the UMAP embedding currently
+        shown for tab ``key``, recomputed deterministically from the panel's own
+        sampling/split state -- no new data threaded through ``_Result`` for this.
+
+        Mirrors ``_compute``'s own "umap" branch's row selection exactly: sub-sample,
+        then reduce to the train partition only if a split is on, then drop any row
+        non-finite in any of ``embed_columns`` -- the same finite-row filter
+        ``mathopsnd.umap_embed`` applies internally (``_as_matrix`` + ``np.isfinite``),
+        reproduced here so the returned indices line up with the embedding's own rows
+        one for one, including when that filter dropped some.
+        """
+        dataset = source.dataset
+        n_total = int(dataset.n_rows()) if dataset is not None else 0
+        base = np.arange(n_total)
+        if self._sampling_enabled.get(key, False):
+            max_rows = int(self._sampling_max_rows.get(key, _NO_SAMPLING.max_rows))
+            seed = int(self._sampling_seed.get(key, _NO_SAMPLING.subsample_seed))
+            idx = _subsample_indices(n_total, max_rows, seed=seed)
+            if idx is not None:
+                base = idx
+
+        if self._split_enabled.get(key, False):
+            val_frac = float(self._split_val_frac.get(key, _NO_SAMPLING.val_frac))
+            test_frac = float(self._split_test_frac.get(key, _NO_SAMPLING.test_frac))
+            split_seed = int(self._split_seed.get(key, _NO_SAMPLING.split_seed))
+            train_idx, _val_idx, _test_idx = _split_indices(
+                int(base.size), val_frac, test_frac, seed=split_seed
+            )
+            base = base[train_idx]
+
+        if not embed_columns or dataset is None or base.size == 0:
+            return base
+        arrays = [np.asarray(dataset.get(name), dtype=np.float64)[base] for name in embed_columns]
+        matrix = np.column_stack(arrays)
+        good = np.all(np.isfinite(matrix), axis=1)
+        return base[good]
+
+    def _umap_color_values(
+        self, source: _Source, key: str, result: _Result, column: str
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Bucket ``column``'s values, via ``np.unique(..., return_inverse=True)``, for
+        exactly the rows ``result``'s embedding used.
+
+        Returns ``(categories, bucketed)`` -- ``categories`` the unique values (for a
+        legend), ``bucketed`` an int array the same length as ``result.x``/``result.y``
+        -- or None if the source has no dataset, ``result`` has no ``model_state``
+        (should not happen for a real UMAP result), or (a defensive fallback) the
+        recomputed row count does not match the embedding's own, in which case coloring
+        is skipped rather than raising or silently misaligning the two arrays.
+        """
+        dataset = source.dataset
+        if dataset is None or result.model_state is None:
+            return None
+        values = dataset.get(column)
+        if values is None:
+            return None
+        embed_columns = tuple(result.model_state.get("columns", ()))
+        row_idx = self._umap_row_indices(source, key, embed_columns)
+        n_embedding = int(np.asarray(result.x).size)
+        if row_idx.size != n_embedding:
+            return None
+        picked = np.asarray(values)[row_idx]
+        categories, bucketed = np.unique(picked, return_inverse=True)
+        return categories, bucketed.astype(np.int64)
+
+    def _draw_umap_color_legend(self, categories: np.ndarray, palette: Tuple[Any, ...]) -> None:
+        """A colour key for the UMAP "color by column" scatter: one swatch per category
+        VALUE (unlike :meth:`_draw_cluster_legend`, whose categories are anonymous
+        cluster indices, these are the picked column's own values)."""
+        for i, value in enumerate(categories.tolist()):
+            color = palette[i % len(palette)] if palette else theme.get_color("accent")
+            imgui.text_colored(color, "o")
+            imgui.same_line()
+            imgui.text(str(value))
+
+    def _draw_umap_preview(self, source: _Source, result: _Result, key: str) -> None:
+        """The UMAP tab's own preview: the normal embedding scatter, plus a "Color by"
+        column pick (Phase 5) that recolors it in place. Replaces the generic
+        :meth:`_draw_preview` call for this one tab; every other tab is unaffected.
+        """
+        if result.allow_apply:
+            imgui.text_disabled("Preview -- not applied")
+            imgui.same_line()
+            widgets.help_marker(
+                "This curve is computed but not committed. Nothing is added to the scene "
+                "or to your data until you press Apply at the bottom of the panel."
+            )
+
+        current = self._umap_color_column.get(key, "")
+        picked = self._column_picker(
+            "Color by",
+            current,
+            allow_none=True,
+            help="Colour the embedding by a chosen column's value instead of one flat "
+            "colour. Presentation only -- does not change what Apply commits.",
+        )
+        self._umap_color_column[key] = picked or ""
+
+        if picked:
+            bucket = self._umap_color_values(source, key, result, picked)
+            if bucket is not None:
+                categories, bucketed = bucket
+                background, grid, palette = self._preview_style()
+                widgets.mini_scatter(
+                    "preview",
+                    result.x,
+                    result.y,
+                    point_colors=bucketed,
+                    palette=palette,
+                    markers=result.markers,
+                    marker_color=theme.get_color("warn"),
+                    height=_PREVIEW_HEIGHT,
+                    label=result.plot_label,
+                    background_color=background,
+                    grid_color=grid,
+                )
+                self._draw_umap_color_legend(categories, palette)
+                return
+            imgui.text_disabled(f"Cannot color by {picked!r} for this embedding.")
+
+        self._draw_result_preview(result, height=_PREVIEW_HEIGHT, id_prefix="preview")
+
+    # -- trained-model rail (Phase 3) ------------------------------------------------
+
+    def _draw_model_rail(self) -> None:
+        """The right-hand rail: every saved TrainedModel, newest first.
+
+        ImGui child windows scroll their own overflow by default, and this rail is
+        already drawn inside one (see draw()) -- a second, nested child here would add
+        nothing but a redundant scrollbar.
+        """
+        if not self.models.models:
+            imgui.text_disabled("No saved models yet -- train something")
+            imgui.text_disabled("and press Save as model.")
+            return
+
+        for model in reversed(self.models.models):
+            self._draw_model_row(model)
+            imgui.separator()
+
+    def _draw_model_row(self, model: TrainedModel) -> None:
+        """One rail row: a technique badge, a renameable name, a thumbnail, delete.
+
+        Scoped by ``model.name`` rather than ``id(model)``: it reads more meaningfully
+        in a debugger and ``ModelStore.add`` already guarantees names are unique at any
+        instant, which is all a per-frame id scope needs.
+        """
+        imgui.push_id(model.name)
+        try:
+            imgui.text_colored(theme.get_color("accent"), model.technique.upper())
+
+            if self._rail_rename_target == model.name:
+                self._draw_rail_rename_field(model)
+            else:
+                avail = imgui.get_content_region_avail().x
+                name_w = max(40.0, avail - 18.0 - 8.0)
+                clicked, _ = imgui.selectable(
+                    f"{model.name}##name",
+                    False,
+                    imgui.SelectableFlags_.allow_double_click,
+                    (name_w, 0.0),
+                )
+                if clicked and imgui.is_mouse_double_clicked(0):
+                    self._begin_rail_rename(model)
+                imgui.same_line()
+                if icons.icon_button(
+                    f"##del_{model.name}",
+                    "trash",
+                    size=18.0,
+                    tooltip=f"Delete '{model.name}'",
+                ):
+                    self.submit(lambda m=model: self.models.remove(m))
+
+            try:
+                self._draw_result_preview(
+                    model.preview, height=_RAIL_THUMB_HEIGHT, id_prefix=f"rail_{model.name}"
+                )
+            except Exception:
+                # Defensive only: model.preview is meant to be an immutable, already-
+                # settled _Result, but a row that ever failed to render must not take
+                # the whole panel down with it.
+                imgui.text_disabled("(preview unavailable)")
+
+            self._draw_apply_model_section(model)
+        finally:
+            imgui.pop_id()
+
+    def _draw_apply_model_section(self, model: TrainedModel) -> None:
+        """The "Apply to..." affordance on a rail row: transfer ``model`` onto a
+        different (or the same) dataset elsewhere in the workspace.
+
+        Collapsed by default (a button that expands an inline section) since the rail
+        is only ``_RAIL_WIDTH`` wide and every row already carries a thumbnail. Expanded,
+        the flow is: pick a target dataset -> map the model's own trained column
+        name(s) onto that dataset's columns -> name the output -> pick Add column/New
+        dataset -> Apply.
+        """
+        key = model.name
+        open_now = self._apply_model_open.get(key, False)
+        label = "Apply to..." if not open_now else "Apply to... (close)"
+        if imgui.button(label, (-1.0, 0.0)):
+            open_now = not open_now
+            self._apply_model_open[key] = open_now
+        if not open_now:
+            return
+
+        imgui.indent()
+        try:
+            if model.technique == "umap" and model.umap_reducer is None:
+                widgets.help_marker(
+                    "Unavailable: this model's UMAP reducer was not available when it "
+                    "was trained."
+                )
+                return
+
+            names = self.store.names()
+            if not names:
+                imgui.text_disabled("No datasets to apply to yet.")
+                return
+            target_name = self._apply_model_target_ds.get(key, "")
+            if target_name not in names:
+                target_name = names[0]
+            _c, target_name = widgets.enum_combo("Target dataset", target_name, names)
+            self._apply_model_target_ds[key] = target_name
+            dataset = self.store.get(target_name)
+            if dataset is None:
+                return
+
+            column_map = dict(self._apply_model_columns.get(key, {}))
+            if model.technique == "fit":
+                picked = self._target_column_picker(
+                    "x",
+                    dataset,
+                    column_map.get("x", ""),
+                    help="The dataset column to evaluate the fit against.",
+                )
+                if picked is not None:
+                    column_map["x"] = picked
+            elif model.technique == "cluster":
+                picked_x = self._target_column_picker(
+                    "x",
+                    dataset,
+                    column_map.get("x", ""),
+                    help="The dataset column mapped to the trained x axis.",
+                )
+                if picked_x is not None:
+                    column_map["x"] = picked_x
+                picked_y = self._target_column_picker(
+                    "y",
+                    dataset,
+                    column_map.get("y", ""),
+                    help="The dataset column mapped to the trained y axis.",
+                )
+                if picked_y is not None:
+                    column_map["y"] = picked_y
+                if model.cluster_method == "hierarchical":
+                    widgets.help_marker(
+                        "No native out-of-sample rule for hierarchical clustering -- "
+                        "points are assigned to the nearest saved centroid (approximate)."
+                    )
+            else:  # pca / umap
+                trained_columns = (
+                    model.pca_columns if model.technique == "pca" else model.umap_columns
+                )
+                for trained_col in trained_columns:
+                    picked = self._target_column_picker(
+                        f"'{trained_col}' maps to",
+                        dataset,
+                        column_map.get(trained_col, ""),
+                    )
+                    if picked is not None:
+                        column_map[trained_col] = picked
+            self._apply_model_columns[key] = column_map
+
+            default_output = f"{model.name} applied"
+            output_name = self._apply_model_output_name.get(key, "") or default_output
+            _c, output_name = imgui.input_text("Output name", output_name)
+            self._apply_model_output_name[key] = output_name
+            output_name = output_name.strip() or default_output
+
+            mode = self._apply_model_mode.get(key, "add_column")
+            imgui.text("Apply as")
+            imgui.same_line()
+            if imgui.radio_button("Add column", mode == "add_column"):
+                mode = "add_column"
+            imgui.same_line()
+            if imgui.radio_button("New dataset", mode == "new_dataset"):
+                mode = "new_dataset"
+            self._apply_model_mode[key] = mode
+
+            theme.push_accent()
+            clicked = imgui.button("Apply", (-1.0, 0.0))
+            theme.pop_accent()
+            if clicked:
+                self._submit_apply_model(model, dataset, dict(column_map), output_name, mode)
+        finally:
+            imgui.unindent()
+
+    def _submit_apply_model(
+        self,
+        model: TrainedModel,
+        dataset: DataSet,
+        column_map: Dict[str, str],
+        output_name: str,
+        mode: str,
+    ) -> None:
+        """Build the right Command for ``mode`` and queue it -- ``_submit_apply``'s
+        sibling for a transferred model instead of a tab's own settled result."""
+        if mode == "new_dataset":
+            cmd = self._command_apply_model_new_dataset(model, dataset, column_map, output_name)
+        else:
+            cmd = self._command_apply_model_add_column(model, dataset, column_map, output_name)
+        if cmd is None:
+            return
+        self.submit(lambda: self._push(cmd))
+
+    def _begin_rail_rename(self, model: TrainedModel) -> None:
+        """Enter inline rename on a rail row."""
+        self._rail_rename_target = model.name
+        self._rail_rename_buf = model.name
+        self._rail_focus_rename = True
+
+    def _cancel_rail_rename(self) -> None:
+        """Leave rail rename without touching the model."""
+        self._rail_rename_target = None
+        self._rail_rename_buf = ""
+        self._rail_focus_rename = False
+
+    def _commit_rail_rename(self, model: TrainedModel, text: str) -> None:
+        """Commit a rail rename via :meth:`submit`, deliberately NOT via
+        :meth:`push_command`: trained models are outside the undo stack, same as
+        Phase 2's "Save as model" (see :meth:`_draw_save_model_row`). An empty or
+        unchanged name is a no-op; a name colliding with a DIFFERENT model is deduped
+        via ``ModelStore.unique_name``, the same rename-on-collision logic
+        ``ModelStore.add`` already uses.
+        """
+        new = str(text).strip()
+        old = model.name
+        self._cancel_rail_rename()
+        if not new or new == old:
+            return
+        unique = self.models.unique_name(new)
+        self.submit(lambda: setattr(model, "name", unique))
+
+    def _draw_rail_rename_field(self, model: TrainedModel) -> None:
+        """Inline rename field. Enter commits, Escape cancels, click-away commits.
+
+        The exact idiom scene.py's ``_draw_rename_field`` uses for a layer row.
+        """
+        if self._rail_focus_rename:
+            imgui.set_keyboard_focus_here()
+            self._rail_focus_rename = False
+
+        imgui.push_item_width(max(60.0, imgui.get_content_region_avail().x - 8.0))
+        # buffer_length is left at its -1 default: an explicit length shorter than the
+        # text silently truncates it (CONTRACT §2.4).
+        entered, text = imgui.input_text(
+            "##rail_rename",
+            self._rail_rename_buf,
+            flags=imgui.InputTextFlags_.enter_returns_true | imgui.InputTextFlags_.auto_select_all,
+        )
+        imgui.pop_item_width()
+        self._rail_rename_buf = text
+
+        if entered:
+            self._commit_rail_rename(model, text)
+        elif imgui.is_item_deactivated():
+            # Escape reverts imgui's own buffer, so the returned text is already the
+            # original; check the key rather than trusting the value.
+            if imgui.is_key_pressed(imgui.Key.escape):
+                self._cancel_rail_rename()
+            else:
+                self._commit_rail_rename(model, text)
 
     # -- report --------------------------------------------------------------------
 
@@ -3550,7 +5272,10 @@ class MathLabPanel(Panel):
             x_name = result.x_name
             y_name = result.y_name if result.y_name != x_name else f"{result.y_name} (2)"
             headers = [x_name, y_name]
-            columns = [np.asarray(result.x, dtype=np.float64), np.asarray(result.y, dtype=np.float64)]
+            columns = [
+                np.asarray(result.x, dtype=np.float64),
+                np.asarray(result.y, dtype=np.float64),
+            ]
 
         path = self._csv_path.strip()
         try:
@@ -3584,6 +5309,17 @@ class MathLabPanel(Panel):
         """None if "Replace source" is possible, else a human explanation of why not."""
         if not result.allow_replace:
             return "This operation's output is not a replacement for its own input."
+        # The synthetic row-index axis (_INDEX_OPTION) has no dataset column to write
+        # back into. ``_command_replace_dataset`` always writes y, and writes x only when
+        # the result changed it -- so only an index Y axis, or an index X axis this
+        # result actually changed, makes Replace impossible; an index X axis the result
+        # leaves alone is fine (only y gets written).
+        if source.y_col == _INDEX_OPTION or (result.x_changed and source.x_col == _INDEX_OPTION):
+            axis = "Y" if source.y_col == _INDEX_OPTION else "X"
+            return (
+                f"The {axis} axis is the row index, not a real dataset column, so there is "
+                "nothing to write the result back into. Use New dataset or New layer instead."
+            )
         if source.dataset is not None:
             rows = source.dataset.n_rows()
             if int(result.y.size) != rows:
@@ -3677,7 +5413,10 @@ class MathLabPanel(Panel):
                     imgui.text_colored(
                         f"This tab's {n_values} points will be {verb} the dataset's "
                         f"{n_rows} rows -- the Samples count above is not preserved.",
-                        1.0, 0.7, 0.2, 1.0,
+                        1.0,
+                        0.7,
+                        0.2,
+                        1.0,
                     )
         finally:
             imgui.pop_item_width()
@@ -3703,6 +5442,105 @@ class MathLabPanel(Panel):
         )
         if clicked:
             self._submit_apply(source, result, key)
+
+    def _build_trained_model(
+        self, source: _Source, result: _Result, key: str
+    ) -> Optional[TrainedModel]:
+        """Build a :class:`TrainedModel` by reading ``result.model_state``/``result.stats``.
+
+        A pure read of the already-settled ``result`` -- this never calls ``_compute``
+        again. Returns None when ``key`` is not one of ``_TRAINABLE_TABS`` or ``result``
+        carries no ``model_state`` (an operation that has not successfully trained yet).
+        """
+        if key not in _TRAINABLE_TABS or result.model_state is None:
+            return None
+        state = result.model_state
+        train_metrics, val_metrics, test_metrics = _split_metrics(result.stats)
+        title = _TAB_BY_KEY.get(key, (key, ""))[0]
+
+        if key == "fit":
+            input_columns: Tuple[str, ...] = (source.x_name,)
+        elif key == "cluster":
+            # A cluster assignment compares a new point against the centroids in the
+            # same (x, y) space it was fit on, so reuse needs both axes, not just one.
+            input_columns = (source.x_name, source.y_name)
+        else:
+            input_columns = tuple(state.get("columns", ()))
+
+        if key in ("pca", "umap"):
+            base = source.dataset.name if source.dataset is not None else source.label
+            source_label = f"{base} [{', '.join(state.get('columns', ()))}]"
+        else:
+            source_label = f"{source.label} ({source.x_name}, {source.y_name})"
+
+        model = TrainedModel(
+            name=f"{title} model",
+            technique=key,
+            created=time.time(),
+            source_label=source_label,
+            input_columns=input_columns,
+            train_metrics=train_metrics,
+            val_metrics=val_metrics,
+            test_metrics=test_metrics,
+            preview=result,
+        )
+        if key == "fit":
+            model.fit_model_key = str(state["model_key"])
+            model.fit_expr = str(state["expr"])
+            model.fit_n_peaks = int(state["n_peaks"])
+            model.fit_popt = state["popt"]
+            model.fit_pcov = state["pcov"]
+        elif key == "cluster":
+            model.cluster_method = str(state["method"])
+            model.cluster_centroid_x = state["centroid_x"]
+            model.cluster_centroid_y = state["centroid_y"]
+        elif key == "pca":
+            model.pca_columns = tuple(state.get("columns", ()))
+            model.pca_scale = str(state.get("scale", "zscore"))
+            model.pca_mean_ = state.get("mean_")
+            model.pca_components_ = state.get("components_")
+            model.pca_scale_stats = state.get("scale_stats_")
+        else:  # umap
+            model.umap_columns = tuple(state.get("columns", ()))
+            model.umap_scale = str(state.get("scale", "zscore"))
+            model.umap_scale_stats = state.get("scale_stats_")
+            model.umap_reducer = state.get("reducer")
+        return model
+
+    def _draw_save_model_row(self, source: _Source, result: _Result, key: str) -> None:
+        """ "Save as model" name field and button, drawn right after Apply.
+
+        Only for the four trainable tabs (``_TRAINABLE_TABS``), and only once this
+        frame's result has actually trained something (``result.model_state`` is not
+        None -- an errored or not-yet-successful fit has nothing to save). Registering
+        the model uses :meth:`submit`, not :meth:`push_command`: trained models are
+        deliberately outside the undo stack.
+        """
+        if key not in _TRAINABLE_TABS or result.model_state is None:
+            return
+        imgui.separator()
+        title = _TAB_BY_KEY.get(key, (key, ""))[0]
+        default_name = self.models.unique_name(f"{title} model")
+        current = self._model_names.get(key, "")
+        imgui.push_item_width(-140.0)
+        try:
+            _c, typed = imgui.input_text("Model name", current)
+        finally:
+            imgui.pop_item_width()
+        self._model_names[key] = typed
+        imgui.same_line()
+        widgets.help_marker(f"Leave empty for the default: {default_name!r}")
+        clicked = imgui.button("Save as model", (160.0, 0.0))
+        imgui.same_line()
+        widgets.help_marker(
+            "Saves the trained model (parameters, not a live link) for reuse elsewhere. "
+            "Not recorded on the undo stack."
+        )
+        if clicked:
+            model = self._build_trained_model(source, result, key)
+            if model is not None:
+                model.name = typed.strip() or default_name
+                self.submit(lambda m=model: self.models.add(m))
 
     def _default_name(self, source: _Source, result: _Result) -> str:
         """The auto-generated name for a new layer or dataset."""
@@ -3847,6 +5685,216 @@ class MathLabPanel(Panel):
                 dataset.remove_column(col_name)
 
         return Command(label=f"Add column {name!r} to {dataset.name!r}", do=do, undo=undo)
+
+    # -- apply a saved model to a dataset (Phase 4) -----------------------------------
+
+    def _evaluate_model(
+        self, model: TrainedModel, dataset: DataSet, column_map: Dict[str, str]
+    ) -> Any:
+        """Evaluate a saved :class:`TrainedModel` against ``dataset``'s own columns.
+
+        ``column_map`` maps a role the model needs onto the ``dataset`` column that
+        supplies it: ``{"x": ...}`` for fit, ``{"x": ..., "y": ...}`` for cluster, and
+        for pca/umap one entry per ``model.pca_columns``/``model.umap_columns`` name
+        (the model's OWN trained column name as key, the ``dataset`` column to read as
+        value).
+
+        Returns a 1-D array (fit/cluster, length ``dataset.n_rows()``) or a 2-D
+        ``(n_rows, n_components)`` array (pca/umap).
+
+        Raises:
+            ValueError: A required column is missing from ``column_map``/``dataset``,
+                the model has no technique this function knows, or (umap only) the
+                model was saved with no reducer.
+        """
+        technique = model.technique
+
+        if technique == "fit":
+            x_col = column_map.get("x")
+            x_values = dataset.get(x_col) if x_col else None
+            if x_col is None or x_values is None:
+                raise ValueError(f"'{dataset.name}' has no column {x_col!r}")
+            x_values = np.asarray(x_values, dtype=np.float64)
+            if model.fit_model_key == "polynomial":
+                # See the module-level note (and _fit_spec's own docstring): a
+                # polynomial fit's expr is "" and n_peaks is 0 -- _fit_spec only knows
+                # named/multipeak/custom models, so this one is evaluated directly.
+                return np.polyval(model.fit_popt, x_values)
+            spec = self._fit_spec(model.fit_model_key, model.fit_expr, model.fit_n_peaks)
+            return spec.fn(x_values, *model.fit_popt)
+
+        if technique == "cluster":
+            x_col = column_map.get("x")
+            y_col = column_map.get("y")
+            x_values = dataset.get(x_col) if x_col else None
+            y_values = dataset.get(y_col) if y_col else None
+            if x_col is None or x_values is None:
+                raise ValueError(f"'{dataset.name}' has no column {x_col!r}")
+            if y_col is None or y_values is None:
+                raise ValueError(f"'{dataset.name}' has no column {y_col!r}")
+            return mathops2d.nearest_centroid(
+                x_values, y_values, model.cluster_centroid_x, model.cluster_centroid_y
+            )
+
+        if technique in ("pca", "umap"):
+            trained_columns = model.pca_columns if technique == "pca" else model.umap_columns
+            arrays: List[np.ndarray] = []
+            for trained_col in trained_columns:
+                target_col = column_map.get(trained_col)
+                values = dataset.get(target_col) if target_col else None
+                if target_col is None or values is None:
+                    raise ValueError(
+                        f"'{dataset.name}' has no column {target_col!r} "
+                        f"(mapped from {trained_col!r})"
+                    )
+                arrays.append(values)
+
+            n_rows = dataset.n_rows()
+            if technique == "pca":
+                projected = mathopsnd.pca_transform(
+                    arrays,
+                    mean_=model.pca_mean_,
+                    components_=model.pca_components_,
+                    scale_stats=model.pca_scale_stats,
+                    scale=model.pca_scale,
+                )
+            else:
+                if model.umap_reducer is None:
+                    # Defensive backstop only: the UI checks model.umap_reducer is None
+                    # BEFORE ever calling this function and shows a disabled reason
+                    # instead, so this path should not normally be reached.
+                    raise ValueError(
+                        f"Model {model.name!r} has no saved UMAP reducer; transfer is "
+                        f"unavailable for it."
+                    )
+                # The same tiny local mirror of mathopsnd._as_matrix's finite-row-
+                # filtered stacking that the PCA reconstruction-error branch above
+                # already uses -- _as_matrix is private to mathopsnd and this file
+                # already declined to reach into it once, so this follows the same
+                # call rather than a second, inconsistent way in.
+                matrix = _finite_column_matrix(arrays)
+                scaled = mathopsnd.apply_scale(
+                    matrix, model.umap_scale_stats, mode=model.umap_scale
+                )
+                projected = model.umap_reducer.transform(scaled)
+
+            if int(np.asarray(projected).shape[0]) != n_rows:
+                # Both pca_transform and the manual UMAP path above drop rows with a
+                # non-finite value in any mapped column (mathopsnd's own, established
+                # convention -- see pca_transform's docstring). That is the one case
+                # where this technique's output is not exactly dataset.n_rows() long
+                # "by construction"; surfaced as a clear error rather than silently
+                # padding with NaN (see _command_apply_model_add_column's docstring).
+                raise ValueError(
+                    f"'{dataset.name}' has non-finite values in the mapped column(s); "
+                    f"{technique.upper()} transfer needs a finite value in every row."
+                )
+            return projected
+
+        raise ValueError(f"unknown technique {technique!r}")
+
+    def _command_apply_model_add_column(
+        self,
+        model: TrainedModel,
+        dataset: DataSet,
+        column_map: Dict[str, str],
+        output_name: str,
+    ) -> Optional[Command]:
+        """Evaluate ``model`` against ``dataset`` and append the result as new column(s).
+
+        Mirrors ``_command_add_column``'s do/undo/Command shape, but never needs that
+        command's NaN-padding branch: every technique's output is exactly
+        ``dataset.n_rows()`` long by construction (fit/cluster evaluate pointwise;
+        pca/umap read the dataset's own chosen columns), except the pca/umap
+        non-finite-input edge case ``_evaluate_model`` already turns into a clear
+        ValueError instead of a silently short array.
+
+        A 1-D result (fit/cluster) becomes one column named ``output_name``. A 2-D
+        result (pca/umap, ``n_components`` columns) becomes one column per component,
+        named ``f"{output_name} {i + 1}"`` (1-based) -- the same convention
+        ``_command_apply_model_new_dataset`` uses for its own output columns.
+        """
+        try:
+            values = self._evaluate_model(model, dataset, column_map)
+        except ValueError as exc:
+            self._notice = str(exc)
+            return None
+
+        arr = np.asarray(values, dtype=np.float64)
+        if arr.ndim == 1:
+            columns_to_add: List[Tuple[str, np.ndarray]] = [(output_name, arr)]
+        else:
+            columns_to_add = [(f"{output_name} {i + 1}", arr[:, i]) for i in range(arr.shape[1])]
+
+        added: Dict[str, Any] = {}
+
+        def do() -> None:
+            names: List[str] = []
+            for name, col_values in columns_to_add:
+                column = dataset.add_column(name, col_values)
+                names.append(column.name)
+            added["names"] = names
+
+        def undo() -> None:
+            for col_name in added.pop("names", []):
+                dataset.remove_column(col_name)
+
+        return Command(label=f"Apply {model.name!r} to {dataset.name!r}", do=do, undo=undo)
+
+    def _command_apply_model_new_dataset(
+        self,
+        model: TrainedModel,
+        dataset: DataSet,
+        column_map: Dict[str, str],
+        output_name: str,
+    ) -> Optional[Command]:
+        """Evaluate ``model`` against ``dataset`` and register the result as a fresh
+        dataset, undo unregisters it -- ``_command_new_dataset``'s shape.
+
+        Fit's new dataset gets the x column plus one output column; Cluster's gets x,
+        y, and the cluster-label column, mirroring the ORIGINAL cluster tab's own
+        ``table=[(x_name, xa), (y_name, ya), ("cluster", labels))]`` convention (see
+        the Cluster branch of ``_compute``) so a transferred cluster assignment is
+        immediately plottable the same way a freshly trained one is. PCA/UMAP's new
+        dataset carries only the ``n_components`` output columns (named the same
+        ``f"{output_name} {i + 1}"`` way ``_command_apply_model_add_column`` does) --
+        the input columns are not included there, since which of potentially many
+        mapped columns would even be "the" input is not obvious the way it is for
+        fit/cluster's single (x)/(x, y).
+        """
+        try:
+            values = self._evaluate_model(model, dataset, column_map)
+        except ValueError as exc:
+            self._notice = str(exc)
+            return None
+
+        arr = np.asarray(values, dtype=np.float64)
+        store = self.store
+        name = output_name
+        new_dataset = DataSet(name)
+        new_dataset.source = "derived"
+
+        if model.technique == "fit":
+            x_col = column_map["x"]
+            new_dataset.add_column(x_col, np.array(dataset.get(x_col), dtype=np.float64))
+            new_dataset.add_column(output_name, arr)
+        elif model.technique == "cluster":
+            x_col = column_map["x"]
+            y_col = column_map["y"]
+            new_dataset.add_column(x_col, np.array(dataset.get(x_col), dtype=np.float64))
+            new_dataset.add_column(y_col, np.array(dataset.get(y_col), dtype=np.float64))
+            new_dataset.add_column("cluster", arr)
+        else:  # pca / umap
+            for i in range(arr.shape[1]):
+                new_dataset.add_column(f"{output_name} {i + 1}", arr[:, i])
+
+        def do() -> None:
+            store.add(new_dataset)
+
+        def undo() -> None:
+            store.remove(new_dataset)
+
+        return Command(label=f"Create dataset {name!r}", do=do, undo=undo)
 
     def _command_replace_dataset(self, source: _Source, result: _Result) -> Optional[Command]:
         """Overwrite the source columns in place, honouring any live layer link."""

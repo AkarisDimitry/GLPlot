@@ -26,6 +26,14 @@ except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less
     IMGUI_AVAILABLE = False
     imgui = None
 
+try:
+    from imgui_bundle import imspinner
+
+    IMSPINNER_AVAILABLE = True
+except (ImportError, Exception):  # pragma: no cover - exercised only on GL-less systems
+    IMSPINNER_AVAILABLE = False
+    imspinner = None
+
 
 # Maximum number of vertices a mini_plot series may emit after decimation.
 MAX_PLOT_POINTS = 2000
@@ -607,12 +615,35 @@ def kind_options_editor(opts: Dict[str, Any], *, width: float = 120.0) -> bool:
         changed |= hit
     if "bins" in opts:
         imgui.set_next_item_width(width)
-        hit, bins = imgui.input_int("Bins (0 = auto)", int(opts["bins"]))
+        hit, bins = imgui.drag_int(
+            "Bins (0 = auto)", int(opts["bins"]), 1.0, 0, layerops.MAX_HIST_BINS
+        )
         opts["bins"] = max(0, min(int(bins), layerops.MAX_HIST_BINS))
+        changed |= hit
+    if "gridsize" in opts:
+        imgui.set_next_item_width(width)
+        hit, gridsize = imgui.drag_int(
+            "Gridsize (0 = auto)", int(opts["gridsize"]), 1.0, 0, layerops.MAX_HIST_BINS
+        )
+        opts["gridsize"] = max(0, min(int(gridsize), layerops.MAX_HIST_BINS))
+        changed |= hit
+    if "mincnt" in opts:
+        imgui.set_next_item_width(width)
+        hit, mincnt = imgui.drag_int(
+            "Min count (0 = show all)", int(opts["mincnt"]), 1.0, 0, 1_000_000
+        )
+        opts["mincnt"] = max(0, int(mincnt))
+        changed |= hit
+    if "pad" in opts:
+        imgui.set_next_item_width(width)
+        hit, pad = imgui.drag_float(
+            "Cell size (0% = exact fit)", float(opts["pad"]), 0.5, -90.0, 200.0, "%.1f%%"
+        )
+        opts["pad"] = max(-90.0, float(pad))
         changed |= hit
     if "bar_width" in opts:
         imgui.set_next_item_width(width)
-        hit, value = imgui.input_float("Bar width (0 = auto)", float(opts["bar_width"]))
+        hit, value = imgui.drag_float("Bar width (0 = auto)", float(opts["bar_width"]), 0.05)
         opts["bar_width"] = max(0.0, float(value))
         changed |= hit
     if "align" in opts:
@@ -628,11 +659,11 @@ def kind_options_editor(opts: Dict[str, Any], *, width: float = 120.0) -> bool:
         changed |= hit
     if "baseline" in opts:
         imgui.set_next_item_width(width)
-        hit, opts["baseline"] = imgui.input_float("Baseline", float(opts["baseline"]))
+        hit, opts["baseline"] = imgui.drag_float("Baseline", float(opts["baseline"]), 0.1)
         changed |= hit
     if "whis" in opts:
         imgui.set_next_item_width(width)
-        hit, value = imgui.input_float("Whisker (x IQR)", float(opts["whis"]))
+        hit, value = imgui.drag_float("Whisker (x IQR)", float(opts["whis"]), 0.05, 0.0, 20.0)
         opts["whis"] = max(0.0, float(value))
         changed |= hit
     if "cmap" in opts:
@@ -1007,7 +1038,11 @@ def mini_plot(
                 stride = max(1, bx.size // MAX_PLOT_POINTS)
                 bx, blo, bhi = bx[::stride], blo[::stride], bhi[::stride]
             _draw_band(
-                draw_list, to_screen_x(bx), to_screen_y(blo), to_screen_y(bhi), _u32(band_rgba, 0.25)
+                draw_list,
+                to_screen_x(bx),
+                to_screen_y(blo),
+                to_screen_y(bhi),
+                _u32(band_rgba, 0.25),
             )
         if ov_data is not None:
             ox, oy = _minmax_decimate(x_data[: ov_data.size], ov_data, columns)
@@ -1179,8 +1214,22 @@ def mini_scatter(
         return py1 - (values - y_lo) * scale_y
 
     _draw_axes_frame(
-        draw_list, x0, px0, py0, px1, py1, x_lo, x_hi, y_lo, y_hi,
-        scale_x, scale_y, grid_col, zero_col, frame_col, muted_col,
+        draw_list,
+        x0,
+        px0,
+        py0,
+        px1,
+        py1,
+        x_lo,
+        x_hi,
+        y_lo,
+        y_hi,
+        scale_x,
+        scale_y,
+        grid_col,
+        zero_col,
+        frame_col,
+        muted_col,
     )
 
     # --- points -------------------------------------------------------------
@@ -1202,9 +1251,7 @@ def mini_scatter(
             for px, py, lbl in zip(sx.tolist(), sy.tolist(), labels.tolist()):
                 idx = int(round(lbl))
                 col = (
-                    unclustered_u32
-                    if idx < 0
-                    else _u32(active_palette[idx % len(active_palette)])
+                    unclustered_u32 if idx < 0 else _u32(active_palette[idx % len(active_palette)])
                 )
                 draw_list.add_circle_filled((px, py), 2.5, col)
         else:
@@ -1371,8 +1418,22 @@ def mini_heatmap(
                 draw_list.add_rect_filled((left, top), (right, bottom), col)
 
         _draw_axes_frame(
-            draw_list, x0, px0, py0, px1, py1, x_lo, x_hi, y_lo, y_hi,
-            scale_x, scale_y, grid_col, grid_col, frame_col, muted_col,
+            draw_list,
+            x0,
+            px0,
+            py0,
+            px1,
+            py1,
+            x_lo,
+            x_hi,
+            y_lo,
+            y_hi,
+            scale_x,
+            scale_y,
+            grid_col,
+            grid_col,
+            frame_col,
+            muted_col,
         )
 
         if overlay_points is not None:
@@ -1830,3 +1891,104 @@ def _draw_scene3d_dots(
     r = max(0.75, float(radius))
     for i in range(len(cols)):
         draw_list.add_circle_filled((xs[i], ys[i]), r, cols[i])
+
+
+def spinner(id_str: str, *, radius: float = 7.0, thickness: float = 2.5) -> None:
+    """A small indeterminate busy indicator, themed with the accent color.
+
+    Backed by imgui_bundle's ImSpinner bindings (``imspinner.spinner_ang``). Draws
+    dimmed static text instead if that submodule is unavailable -- degrade, don't
+    disappear, matching every other optional-dependency widget in this module.
+    """
+    if not IMGUI_AVAILABLE:
+        return
+    if not IMSPINNER_AVAILABLE:
+        imgui.text_disabled("...")
+        return
+    accent = _token("accent")
+    imspinner.spinner_ang(id_str, radius, thickness, imgui.ImColor(*accent))
+
+
+def busy_row(label: str, elapsed: float, *, id_str: str, cancellable: bool = True) -> bool:
+    """A "<spinner> {label}... {elapsed}s   [Cancel]" row for a pending background job.
+
+    Returns True the frame Cancel is clicked. This widget only reports the click --
+    the caller owns actually cancelling the job (BackgroundJob.cancel()).
+    """
+    if not IMGUI_AVAILABLE:
+        return False
+    spinner(f"##spinner_{id_str}")
+    imgui.same_line()
+    imgui.text(f"{label}... {elapsed:.1f}s")
+    if not cancellable:
+        return False
+    imgui.same_line()
+    return imgui.button(f"Cancel##{id_str}", (90.0, 0.0))
+
+
+def draw_toasts() -> None:
+    """Render the global notification stack (``notifications.py``) as a column of
+    small cards stacked bottom-right, on top of whatever panel is active.
+
+    Call exactly once per frame, after every panel has drawn -- imgui's own draw
+    list is composited last, so anything drawn after ``workspace.draw()`` sits on top
+    of the 3D scene and every panel, which is what makes a toast visible regardless of
+    which panel (if any) currently has focus.
+    """
+    if not IMGUI_AVAILABLE:
+        return
+    try:
+        from . import notifications
+    except Exception:  # pragma: no cover - defensive, mirrors _icon()'s own guard
+        return
+
+    toasts = notifications.active()
+    if not toasts:
+        return
+
+    from . import icons
+
+    viewport = imgui.get_main_viewport()
+    margin = 16.0
+    width = 320.0
+    y = viewport.work_pos.y + viewport.work_size.y - margin
+    kind_token = {"info": "accent", "success": "ok", "error": "err"}
+    flags = (
+        imgui.WindowFlags_.no_decoration
+        | imgui.WindowFlags_.no_move
+        | imgui.WindowFlags_.no_saved_settings
+        | imgui.WindowFlags_.no_focus_on_appearing
+        | imgui.WindowFlags_.no_nav
+        | imgui.WindowFlags_.always_auto_resize
+    )
+
+    # Newest toast at the bottom (the stack grows upward from there), so a fresh
+    # notification never shoves an older one somewhere the user wasn't looking.
+    for toast in reversed(toasts):
+        text = str(toast.message)
+        wrap_width = width - 44.0
+        text_h = imgui.calc_text_size(
+            text, hide_text_after_double_hash=False, wrap_width=wrap_width
+        ).y
+        height = max(32.0, text_h + 16.0)
+        y -= height + 8.0
+
+        imgui.set_next_window_pos((viewport.work_pos.x + viewport.work_size.x - margin - width, y))
+        imgui.set_next_window_size((width, height))
+        border = _token(kind_token.get(toast.kind, "accent"))
+        imgui.push_style_color(imgui.Col_.border, border)
+        imgui.push_style_var(imgui.StyleVar_.window_border_size, 1.5)
+        expanded, _p_open = imgui.begin(f"##toast_{toast.id}", flags=flags)
+        try:
+            if expanded:
+                imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + wrap_width)
+                imgui.text_unformatted(text)
+                imgui.pop_text_wrap_pos()
+                imgui.same_line(width - 34.0)
+                if icons.icon_button(f"##toast_close_{toast.id}", "close", size=16.0):
+                    notifications.dismiss(toast.id)
+        finally:
+            # CONTRACT 2.2: end() is unconditional, exactly like end_child()/end().
+            imgui.end()
+            imgui.pop_style_var(1)
+            imgui.pop_style_color(1)

@@ -323,6 +323,118 @@ class TestMultiPanelExport:
                 os.unlink(path)
 
 
+class TestHeadlessAxisLimitPinning:
+    """``gplt.xlim()``/``gplt.ylim()`` used to have zero effect on a headless ``savefig()``
+    export: ``render_preview()`` ended with an unconditional ``ax.autoscale(enable=True)``,
+    which always re-fit the view to the plotted data and silently discarded any pinned
+    range (see project memory ``project_plotting_api_gaps`` for the original bug report).
+    Fixed via ``engine._needs_initial_autoscale`` -- these guard the fix from regressing
+    quietly, since none of the existing ``xlim()``/``ylim()`` tests render anything; they
+    only check that the live engine's own ``get_xlim()``/``get_ylim()`` reflects the call.
+    """
+
+    def test_xlim_survives_headless_export(self):
+        from glplot.utils.preview import _build_preview_figure
+
+        gplt.plot([0, 10], [0, 10])
+        gplt.xlim(2, 6)
+        fig = _build_preview_figure(gplt.gcf())
+        try:
+            assert fig.axes[0].get_xlim() == pytest.approx((2.0, 6.0))
+        finally:
+            import matplotlib.pyplot as mpl
+
+            mpl.close(fig)
+
+    def test_ylim_survives_headless_export(self):
+        from glplot.utils.preview import _build_preview_figure
+
+        gplt.plot([0, 10], [0, 10])
+        gplt.ylim(3, 7)
+        fig = _build_preview_figure(gplt.gcf())
+        try:
+            assert fig.axes[0].get_ylim() == pytest.approx((3.0, 7.0))
+        finally:
+            import matplotlib.pyplot as mpl
+
+            mpl.close(fig)
+
+    def test_an_unpinned_axis_still_autoscales(self):
+        """The fix must not overshoot: with no xlim()/ylim() call, autoscale still runs."""
+        from glplot.utils.preview import _build_preview_figure
+
+        gplt.plot([0, 10], [-5, 5])
+        fig = _build_preview_figure(gplt.gcf())
+        try:
+            xlim = fig.axes[0].get_xlim()
+            ylim = fig.axes[0].get_ylim()
+            assert xlim[0] <= 0 and xlim[1] >= 10, "autoscaled view must still contain the data"
+            assert ylim[0] <= -5 and ylim[1] >= 5
+        finally:
+            import matplotlib.pyplot as mpl
+
+            mpl.close(fig)
+
+
+class TestRenderPreviewArray:
+    """``render_preview_array()`` shares its figure-building code with ``render_preview()``
+    via ``_build_preview_figure()`` (added when `glplot.animation.figure_to_rgb()`'s headless
+    path was switched from a temp-PNG round trip to reading Agg's canvas buffer directly, cutting
+    ~35% of a profiled animation frame's cost). These pin the two entry points to the same
+    output so a future change to one cannot silently drift from the other.
+    """
+
+    def test_matches_render_preview_byte_for_byte(self):
+        from PIL import Image
+
+        from glplot.utils.preview import render_preview, render_preview_array
+
+        gplt.plot([0, 1, 2, 3], [0, 1, 4, 9], color="blue")
+        gplt.scatter([0, 1, 2], [3, 1, 2], s=40)
+        gplt.xlabel("x")
+        gplt.ylabel("y")
+        gplt.title("parity check")
+
+        array = render_preview_array(gplt.gcf())
+        path = tempfile.mktemp(suffix=".png")
+        try:
+            render_preview(gplt.gcf(), path)
+            from_file = np.asarray(Image.open(path).convert("RGB"))
+            assert array.shape == from_file.shape
+            assert np.array_equal(array, from_file)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_matches_render_preview_on_a_multi_panel_figure(self):
+        from PIL import Image
+
+        from glplot.utils.preview import render_preview, render_preview_array
+
+        fig, axs = gplt.subplots(1, 2)
+        axs[0].plot([0, 1, 2], [0, 1, 4])
+        axs[1].scatter([0, 1, 2], [2, 0, 1])
+
+        array = render_preview_array(fig)
+        path = tempfile.mktemp(suffix=".png")
+        try:
+            render_preview(fig, path)
+            from_file = np.asarray(Image.open(path).convert("RGB"))
+            assert array.shape == from_file.shape
+            assert np.array_equal(array, from_file)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_returns_uint8_rgb(self):
+        from glplot.utils.preview import render_preview_array
+
+        gplt.plot([0, 1, 2], [0, 1, 4])
+        array = render_preview_array(gplt.gcf())
+        assert array.dtype == np.uint8
+        assert array.ndim == 3 and array.shape[2] == 3
+
+
 class TestNewArtistsExportVisibly:
     """Every new plotting function must leave marks in the PNG, not vanish on save.
 

@@ -10,7 +10,6 @@ the corresponding tab surfaces near the top of the ranking -- not that the heuri
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from glplot.gui import mathadvise
 
@@ -167,7 +166,9 @@ class TestEnvelopeHeuristic:
 
     def test_short_signal_is_not_flagged(self):
         """Below the length floor, envelope() is not even attempted."""
-        recs = {rec.tab_key for rec in mathadvise.recommend([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0])}
+        recs = {
+            rec.tab_key for rec in mathadvise.recommend([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0])
+        }
         assert "envelope" not in recs
 
 
@@ -177,14 +178,20 @@ class TestRollingHeuristic:
         n = 1000
         noise_scale = np.linspace(0.02, 3.0, n)
         y = np.sin(np.linspace(0.0, 20.0, n)) + rng.normal(0.0, 1.0, n) * noise_scale
-        recs = {rec.tab_key for rec in mathadvise.recommend(np.arange(n, dtype=float), y, max_results=10)}
+        recs = {
+            rec.tab_key
+            for rec in mathadvise.recommend(np.arange(n, dtype=float), y, max_results=10)
+        }
         assert "rolling" in recs
 
     def test_stationary_noise_does_not_suggest_rolling(self):
         rng = np.random.default_rng(1)
         n = 1000
         y = np.sin(np.linspace(0.0, 20.0, n)) + rng.normal(0.0, 0.3, n)
-        recs = {rec.tab_key for rec in mathadvise.recommend(np.arange(n, dtype=float), y, max_results=10)}
+        recs = {
+            rec.tab_key
+            for rec in mathadvise.recommend(np.arange(n, dtype=float), y, max_results=10)
+        }
         assert "rolling" not in recs
 
 
@@ -197,7 +204,9 @@ class TestSpatialHeuristic:
         assert "spatial" in recs
 
     def test_too_few_points_does_not_suggest_spatial(self):
-        recs = {rec.tab_key for rec in mathadvise.recommend([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0])}
+        recs = {
+            rec.tab_key for rec in mathadvise.recommend([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0])
+        }
         assert "spatial" not in recs
 
 
@@ -206,9 +215,7 @@ class TestCompareHeuristic:
         rng = np.random.default_rng(0)
         x = np.linspace(0.0, 10.0, 100)
         y = rng.normal(0.0, 1.0, 100)
-        recs = {
-            rec.tab_key for rec in mathadvise.recommend(x, y, has_dataset=True, max_results=10)
-        }
+        recs = {rec.tab_key for rec in mathadvise.recommend(x, y, has_dataset=True, max_results=10)}
         assert "compare" in recs
 
     def test_without_dataset_never_suggests_compare(self):
@@ -223,7 +230,9 @@ class TestCompareHeuristic:
     def test_too_few_points_does_not_suggest_compare_even_with_a_dataset(self):
         recs = {
             rec.tab_key
-            for rec in mathadvise.recommend([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0], has_dataset=True)
+            for rec in mathadvise.recommend(
+                [1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0], has_dataset=True
+            )
         }
         assert "compare" not in recs
 

@@ -33,18 +33,24 @@ How a frame is produced
 :func:`figure_to_rgb` is the whole bridge, and it has two modes:
 
 * **Live GL** — when ``fig.window`` exists, ``fig.export.savefig()`` renders the scene
-  offscreen through the real pipeline at full quality.
-* **Headless** — when it does not, :func:`glplot.utils.preview.render_preview` draws the
-  same scene through matplotlib's Agg backend. This is the path that makes
-  ``ani.save(...)`` work in CI, in a notebook, and in any script that never called
-  ``show()``.
-
-Both render *to a PNG file* and read it back, because that is the only frame-producing
-interface the engine exposes; there is no "give me the pixels" entry point to call
-instead. The cost is one temp-file round trip per frame, which is real but is dwarfed by
-the render itself. Rejected: reimplementing ``ExportManager.savefig``'s ``glReadPixels``
-here to skip the file. It would duplicate the panel/scissor/projection logic and would go
-stale the first time the render pipeline changed.
+  offscreen through the real pipeline at full quality, to a temporary PNG that is read back
+  immediately after. That round trip is a deliberate trade: reimplementing
+  ``ExportManager.savefig``'s ``glReadPixels`` here to skip the file would duplicate the
+  panel/scissor/projection logic and go stale the first time the render pipeline changed —
+  there is no "give me the pixels" entry point to call instead, and this is the one GL render
+  mode this module has, so paying that cost once here beats maintaining a second copy.
+* **Headless** — when it does not,
+  :func:`glplot.utils.preview.render_preview_array` draws the same scene through
+  matplotlib's Agg backend and hands back the rendered pixels directly, with no file
+  involved. This is the path that makes ``ani.save(...)`` work in CI, in a notebook, and in
+  any script that never called ``show()`` — the common case for a saved animation, and the
+  one with hundreds of frames to pay a per-frame cost on. It used to round-trip through a
+  PNG the same way the GL path still does; profiling a real animation loop found PIL's PNG
+  encoder alone cost as much as matplotlib's entire draw, so that encode plus the disk
+  write/read it required were pure overhead for a caller (this one) that only ever wanted
+  the array. :func:`glplot.utils.preview.render_preview` (the file-writing function a plain
+  ``savefig()`` call uses) is unchanged; :func:`render_preview_array` is a second entry
+  point onto the same figure-building code, not a rewrite of it — see its docstring.
 
 **The headless path is not pixel-identical to the GL path.** ``render_preview`` is a
 matplotlib re-drawing of the scene, not the GPU renderer; it approximates. An animation
@@ -59,13 +65,17 @@ Limitations, stated plainly
   changes nothing except that it does not raise. Output is identical either way — blitting
   is an optimisation in matplotlib, not a correctness flag — so ignoring it cannot make a
   saved animation wrong. It is recorded in ``ani._blit`` if you want to assert on it.
-* **There is no live on-screen playback.** ``GPULinePlot.run()`` owns its main loop and
-  exposes no per-frame user hook, so an ``Animation`` cannot drive an open window the way
-  matplotlib's timer drives a GUI canvas. Constructing an animation and calling
-  ``plt.show()`` shows the *scene*, not the animation. :meth:`Animation.save`,
-  :meth:`Animation.to_html5_video` and :meth:`Animation.to_jshtml` all work fully; only
-  interactive playback does not. :meth:`Animation.pause` / :meth:`Animation.resume` set the
-  documented flag and are otherwise inert.
+* **Live on-screen playback rides the engine's frame callback, not a real timer.**
+  ``GPULinePlot.run()`` owns its main loop and has no toolkit timer for a
+  ``TimedAnimation`` to hook the way matplotlib's does — but it does expose
+  ``add_frame_callback`` (:meth:`glplot.engine.GPULinePlot.add_frame_callback`), a per-frame
+  hook driven by wall-clock time, and :class:`TimedAnimation` uses exactly that to step
+  itself at ``interval``. A ``FuncAnimation``/``ArtistAnimation`` built against a live
+  GLPlot figure therefore *does* play when you call ``plt.show()`` — no ``draw_event``, no
+  blitting, just the same full-scene re-render :meth:`Animation.save` uses, paced in real
+  time instead of frame-by-frame. :meth:`Animation.pause` / :meth:`Animation.resume` stop and
+  restart that stepping. A real matplotlib ``Figure`` is untouched by any of this: it keeps
+  using its own canvas and timer, exactly as before.
 * **In-place array mutation is assumed.** A user callback that writes into
   ``layer.pts[:, 1]`` leaves no trace numpy can report, so after every callback this module
   marks every layer dirty rather than trying to detect what changed. Cheap, and the only
@@ -275,46 +285,59 @@ def figure_to_rgb(fig: Any, dpi: Optional[float] = None) -> np.ndarray:
 
     The single bridge between "a figure" and "a frame", and the only function in this
     module that knows a GLPlot engine from a matplotlib one. See the module docstring for
-    the two GLPlot render modes and why both go through a temporary PNG.
+    the two GLPlot render modes, and :func:`_render_glplot_frame` for which of them still
+    goes through a temporary PNG and which does not.
 
     Raises :class:`RuntimeError` naming the figure type if neither renderer applies —
     passing something that is not a figure at all is otherwise diagnosed several frames
     later as a confusing Pillow error.
     """
-    with tempfile.TemporaryDirectory(prefix="glplot-anim-") as tmpdir:
-        target = os.path.join(tmpdir, "frame.png")
-
-        if _is_mpl_figure(fig):
+    if _is_mpl_figure(fig):
+        with tempfile.TemporaryDirectory(prefix="glplot-anim-") as tmpdir:
+            target = os.path.join(tmpdir, "frame.png")
             fig.savefig(target, dpi=dpi, format="png")
-        elif hasattr(fig, "scene"):
-            _render_glplot_figure(fig, target, _dpi_to_scale(dpi))
-        else:
-            raise RuntimeError(
-                f"Cannot grab a frame from {type(fig).__name__}: expected a "
-                f"glplot.engine.GPULinePlot (what glplot.pyplot.figure() returns) or a "
-                f"matplotlib Figure. Pass the figure object itself, not an axes or a "
-                f"layer."
-            )
+            return anim_export.normalize_frame(_read_png(target))
 
-        return anim_export.normalize_frame(_read_png(target))
+    if hasattr(fig, "scene"):
+        return anim_export.normalize_frame(_render_glplot_frame(fig, _dpi_to_scale(dpi)))
+
+    raise RuntimeError(
+        f"Cannot grab a frame from {type(fig).__name__}: expected a "
+        f"glplot.engine.GPULinePlot (what glplot.pyplot.figure() returns) or a "
+        f"matplotlib Figure. Pass the figure object itself, not an axes or a "
+        f"layer."
+    )
 
 
-def _render_glplot_figure(fig: Any, target: str, scale: float) -> None:
-    """Render a GLPlot engine to *target*, through GL if there is a context and Agg if not.
+def _render_glplot_frame(fig: Any, scale: float) -> np.ndarray:
+    """Render one frame of a GLPlot engine, through GL if there is a context and Agg if not.
+
+    **Live GL** still round-trips through a temporary PNG — see the module docstring's
+    "Rejected: reimplementing ExportManager.savefig's glReadPixels here", unchanged reasoning
+    so this stays unchanged.
+
+    **Headless** does not: :func:`glplot.utils.preview.render_preview_array` hands back the
+    rendered pixels directly from matplotlib's Agg canvas, skipping the PNG encode and the
+    disk write/read a file-based caller needs. Profiled: PIL's PNG encoder alone cost as much
+    as matplotlib's entire draw, so for an animation's hundreds of headless frames — the
+    common case, since a saved animation is usually built without ever calling ``fig.run()``
+    — this removes roughly a third of each frame's cost with no change in what gets drawn.
 
     ``ExportManager.savefig`` prints a "Exported high-res image to ..." line on every call.
     That is fine for one interactive export and intolerable at 300 frames, so stdout is
-    swallowed for the duration — this is the only place that print reaches, and suppressing
-    it here beats every alternative that would require editing the engine.
+    swallowed for the duration of the GL branch — this is the only place that print reaches,
+    and suppressing it here beats every alternative that would require editing the engine.
     """
     if getattr(fig, "window", None) is not None and hasattr(fig, "export"):
-        with contextlib.redirect_stdout(io.StringIO()):
-            fig.export.savefig(target, scale=scale)
-        return
+        with tempfile.TemporaryDirectory(prefix="glplot-anim-") as tmpdir:
+            target = os.path.join(tmpdir, "frame.png")
+            with contextlib.redirect_stdout(io.StringIO()):
+                fig.export.savefig(target, scale=scale)
+            return _read_png(target)
 
-    from .utils.preview import render_preview
+    from .utils.preview import render_preview_array
 
-    render_preview(fig, target, scale)
+    return render_preview_array(fig, scale)
 
 
 def _read_png(path: str) -> np.ndarray:
@@ -419,9 +442,9 @@ class _NullTimer:
 
     :class:`TimedAnimation` needs *an* event source; it does not need one that works in
     order for :meth:`Animation.save` to render every frame, because saving drives the frame
-    sequence directly and never consults the timer. Live playback is what a real timer
-    would buy, and live playback is unavailable for the separate reason given in the module
-    docstring.
+    sequence directly and never consults the timer. Live playback does not go through this
+    timer either -- :meth:`TimedAnimation._start_live_playback` drives it straight off
+    ``fig.add_frame_callback`` instead, since that is the hook the engine actually has.
     """
 
     def __init__(self, interval: Optional[float] = None, callbacks: Any = None) -> None:
@@ -1195,9 +1218,9 @@ class Animation:
     """Base class for animations, with matplotlib's constructor and public methods.
 
     Subclasses supply the frame data (:meth:`new_frame_seq`) and what to do with one
-    (:meth:`_draw_frame`); this class supplies :meth:`save` and the HTML exports, which is
-    where all the real work happens given that live playback is unavailable (module
-    docstring).
+    (:meth:`_draw_frame`); this class supplies :meth:`save` and the HTML exports. Live
+    playback (:class:`TimedAnimation`'s ``fig.add_frame_callback`` hook, module docstring)
+    is the other consumer of that same frame-stepping machinery.
     """
 
     def __init__(self, fig: Any, event_source: Any = None, blit: bool = False) -> None:
@@ -1557,9 +1580,29 @@ class TimedAnimation(Animation):
 
     ``interval`` (milliseconds per frame) is what :meth:`Animation.save` turns into ``fps``
     when the caller does not pass one, which is why ``FuncAnimation(..., interval=20)``
-    followed by a bare ``save()`` produces a 50 fps file. That conversion is the only place
-    ``interval`` has any effect here, since there is no live loop for it to pace.
+    followed by a bare ``save()`` produces a 50 fps file.
+
+    It is also what makes live on-screen playback possible, and *controllable*: when ``fig``
+    is a GLPlot figure (no real matplotlib canvas), :meth:`_start_live_playback` hands this
+    animation's frames to ``fig.active_panel.timeline`` -- the same playhead the GUI's
+    Timeline panel already has Play/Pause/Stop buttons and a scrub bar for -- instead of
+    running its own independent clock. ``plt.show()`` after building a ``FuncAnimation``
+    plays it, and if the Timeline panel is open, its transport controls drive this animation
+    exactly as they drive a hand-keyed one. See :meth:`_start_live_playback`.
     """
+
+    #: A frame sequence at most this long is materialised into a concrete list so the
+    #: Timeline's scrub bar can jump to any frame directly. Past this (or for an unbounded
+    #: ``frames=None`` generator), only forward playback is exact -- see
+    #: :meth:`_materialize_frames`.
+    _MAX_SEEKABLE_FRAMES = 100_000
+
+    #: Duration assigned to the panel's timeline when the frame count is unknowable
+    #: (``frames=None``) or too large to materialise. Arbitrary but not consequential: it
+    #: only sets how far the scrub bar's grid extends before it loops, not how long the
+    #: animation itself runs, since :meth:`_start_live_playback`'s callback keeps stepping
+    #: forward regardless of where in that grid the playhead sits.
+    _UNKNOWN_DURATION_SECONDS = 60.0
 
     def __init__(
         self,
@@ -1576,15 +1619,136 @@ class TimedAnimation(Animation):
         self._repeat_delay = repeat_delay if repeat_delay is not None else 0
         self._repeat = repeat
         self._paused = False
+        self._live_timeline: Any = None
         if event_source is None:
             canvas = _canvas_for(fig)
             event_source = canvas.new_timer(interval=self._interval)
         super().__init__(fig, event_source=event_source, *args, **kwargs)
+        self._start_live_playback(fig)
 
     @property
     def repeat(self) -> bool:
         """Whether the animation loops. Read-only, as in matplotlib."""
         return self._repeat
+
+    def pause(self) -> None:
+        """Pause the animation.
+
+        Proxies to ``fig.active_panel.timeline.pause()`` when live playback is bound (see
+        :meth:`_start_live_playback`), so this has the same effect as pressing Pause in the
+        Timeline panel. Otherwise a documented no-op, as it always was; see the module
+        docstring.
+        """
+        self._paused = True
+        if self._live_timeline is not None:
+            self._live_timeline.pause()
+        if self.event_source is not None:
+            with contextlib.suppress(Exception):
+                self.event_source.stop()
+
+    def resume(self) -> None:
+        """Resume the animation. See :meth:`pause`; proxies to ``timeline.play()`` likewise."""
+        self._paused = False
+        if self._live_timeline is not None:
+            self._live_timeline.play()
+        if self.event_source is not None:
+            with contextlib.suppress(Exception):
+                self.event_source.start()
+
+    def _materialize_frames(self) -> Optional[List[Any]]:
+        """This animation's frame data as a concrete, randomly-indexable list, or ``None``.
+
+        ``None`` means the Timeline can only step forward through the sequence (an
+        unbounded ``frames=None`` generator, or a declared length past
+        :data:`_MAX_SEEKABLE_FRAMES`) -- scrubbing backward then restarts it from frame 0
+        rather than landing on the exact frame, since an arbitrary generator cannot be
+        rewound. Every other case -- :class:`ArtistAnimation` (already a concrete list),
+        an integer or sized ``frames=``, an explicit ``save_count`` -- seeks exactly,
+        because the whole sequence is known and cheap to hold: it is usually the caller's
+        own list or array already sitting in memory, and ``new_frame_seq()`` just re-reads
+        it rather than duplicating anything expensive.
+        """
+        existing = getattr(self, "_framedata", None)
+        if isinstance(existing, (list, tuple)):
+            return list(existing)
+        save_count = getattr(self, "_save_count", None)
+        if save_count is not None and 0 < save_count <= self._MAX_SEEKABLE_FRAMES:
+            return list(itertools.islice(self.new_frame_seq(), save_count))
+        return None
+
+    def _start_live_playback(self, fig: Any) -> None:
+        """Bind this animation's frames to ``fig.active_panel.timeline``'s playhead.
+
+        A real matplotlib ``Figure`` already has a toolkit timer driving it -- ``self._canvas``
+        is the real canvas in that case (:func:`_canvas_for`), so this does nothing and that
+        timer keeps doing its job unmodified. Only a GLPlot figure (``_NullCanvas``) with a
+        panel to bind to gets this treatment.
+
+        The bound timeline is configured to this animation's own cadence (``fps = 1000 /
+        interval``, ``duration`` from the frame count or :data:`_UNKNOWN_DURATION_SECONDS`
+        when that is not knowable, ``loop`` from ``repeat``) and started playing -- an
+        animation you just built plays immediately, same as before. From there the engine's
+        own per-frame hook (``fig.add_frame_callback``, invoked *after*
+        ``GPULinePlot._advance_timelines`` already moved the playhead this frame -- see
+        ``engine.py``) does one thing every frame: compute which frame the playhead's
+        *current* time corresponds to, and draw it if that differs from what is already on
+        screen. It does not advance the clock itself. That is deliberate: Play/Pause only
+        has to flip ``timeline.playing`` (which gates whether the playhead moves at all) and
+        Stop/seek/step only have to move ``timeline.time`` directly (which the GUI's
+        transport buttons already do) for this animation to follow suit exactly the way a
+        hand-keyed one does -- there is no separate "is it playing" state here to keep in
+        sync with the Timeline panel's.
+        """
+        register = getattr(fig, "add_frame_callback", None)
+        panel = getattr(fig, "active_panel", None)
+        timeline = getattr(panel, "timeline", None)
+        if not callable(register) or not isinstance(self._canvas, _NullCanvas) or timeline is None:
+            return
+
+        frames = self._materialize_frames()
+        interval_s = max(float(self._interval), 1.0) / MS_PER_SECOND
+        duration = (
+            max(len(frames) - 1, 0) * interval_s if frames else self._UNKNOWN_DURATION_SECONDS
+        )
+        timeline.set_fps(1.0 / interval_s)
+        if timeline.is_empty():
+            # No hand-authored keyframes here yet -- the overwhelmingly common case for a
+            # freshly-built animation -- so this animation may as well own the grid exactly:
+            # duration matches its real length, and the scrub bar has nothing past the last
+            # frame to run into. A timeline that already has keyframes on it keeps its own
+            # length (never shrinks) rather than have this animation truncate them.
+            timeline.set_duration(duration)
+        else:
+            timeline.fit_duration(minimum=duration)
+        timeline.set_loop("loop" if self._repeat else "once")
+        timeline.play()
+        self._live_timeline = timeline
+
+        live_seq = {"iter": self.frame_seq}
+        state = {"last_index": None}
+
+        def _tick(now: float) -> None:
+            index = timeline.frame_index()
+            if index == state["last_index"]:
+                return
+            if frames is not None:
+                framedata = frames[min(index, len(frames) - 1)]
+            else:
+                if state["last_index"] is not None and index < state["last_index"]:
+                    live_seq["iter"] = self.new_frame_seq()  # scrubbed back / looped: restart
+                try:
+                    framedata = next(live_seq["iter"])
+                except StopIteration:
+                    if not self._repeat:
+                        fig.remove_frame_callback(_tick)
+                        return
+                    live_seq["iter"] = self.new_frame_seq()
+                    framedata = next(live_seq["iter"])
+            state["last_index"] = index
+            self._draw_was_started = True
+            self._draw_next_frame(framedata, blit=False)
+
+        register(_tick)
 
 
 class FuncAnimation(TimedAnimation):

@@ -11,16 +11,35 @@ and headless-testable; this module is only the imgui shell -- the drag-and-drop,
 editors, the preview and the Apply command. As with every panel it never mutates the live
 scene from ``draw`` (CONTRACT 1.1): Apply is queued through the CommandQueue and recorded
 on the UndoStack, exactly as Math Lab does.
+
+Caching and background compute
+-------------------------------
+``run_pipeline`` used to run unconditionally, every call to ``draw``, with no
+memoisation at all -- worse than Math Lab was even before ITS compute got backgrounded:
+a chain with an AsLS baseline step measured 150-700ms depending on size, meaning any
+dataset with one configured drove this panel to 2-6 FPS continuously for as long as it
+stayed open, not a one-off freeze. Results are now memoised against a key of
+``(source fingerprint, steps fingerprint)`` (:func:`_fingerprint`/:meth:`PipelinePanel
+._steps_key`), and -- against a real, live plot; see :meth:`PipelinePanel._async_enabled`
+-- run on a :class:`~glplot.gui.background.BackgroundJob` daemon thread exactly like
+Math Lab's ``_compute``, for the identical reason: ``run_pipeline`` is pure numpy/scipy
+over plain arrays with no GL/imgui/scene touch, so it is exactly as safe to background.
+See ``glplot/gui/panels/mathlab.py``'s own "Background compute" docstring section for
+the full reasoning (cooperative cancellation, per-tab-equivalent debounce, why a thread
+and not the ``utils/mpl_process.py`` subprocess pattern) -- deliberately not repeated
+here in full, since it would just drift out of sync with the original.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from glplot.gui import icons, layerops, pipeline, theme, widgets
+from glplot.gui import icons, layerops, notifications, pipeline, theme, widgets
+from glplot.gui.background import BackgroundJob
 from glplot.gui.datasets import Column, DataSet
 from glplot.gui.history import Command
 from glplot.gui.panels.base import Panel
@@ -38,6 +57,18 @@ logger = logging.getLogger(__name__)
 __all__ = ["PipelinePanel"]
 
 _PREVIEW_HEIGHT = 160.0
+
+# Samples taken by _fingerprint. Small enough to be free at 1e6 rows, large enough that a
+# realistic edit moves the sum. Matches mathlab.py's own constant of the same name and
+# purpose -- not imported from there (panels stay self-contained; see _layer_table's own
+# "a compact local copy" precedent below) but deliberately identical in value.
+_FINGERPRINT_SAMPLES = 64
+
+# See mathlab.py's _ASYNC_DEBOUNCE_SECONDS/_ASYNC_NOTIFY_THRESHOLD_SECONDS for the full
+# reasoning -- identical values, independently owned constants (same "self-contained
+# panel" reasoning as _FINGERPRINT_SAMPLES above).
+_ASYNC_DEBOUNCE_SECONDS = 0.15
+_ASYNC_NOTIFY_THRESHOLD_SECONDS = 1.5
 
 # Drag-and-drop payload types. ADD carries a step key (palette -> chain); MOVE carries a
 # source index (reorder within the chain).
@@ -87,6 +118,21 @@ class PipelinePanel(Panel):
         self._apply_name = ""
         self._notice: Optional[str] = None
 
+        # -- preview cache (see the module docstring's "Caching and background compute") --
+        self._cache_key: Optional[Tuple[Any, ...]] = None
+        self._cache_result: Optional[pipeline.PipelineResult] = None
+
+        # -- background compute. A single slot, not a per-tab dict like Math Lab's: this
+        # panel has exactly one chain, not several independent tabs that can each have
+        # their own job running concurrently.
+        self._async_job: Optional[BackgroundJob] = None
+        self._async_job_key: Optional[Tuple[Any, ...]] = None
+        self._async_stable_since: Optional[float] = None
+        #: (result, cache_key) of the most recently settled background computation.
+        self._async_result: Optional[Tuple[pipeline.PipelineResult, Tuple[Any, ...]]] = None
+        #: Test-only escape hatch, exactly like MathLabPanel's -- see _async_enabled().
+        self._force_async = False
+
     # -- lifecycle -----------------------------------------------------------------
 
     def draw(self) -> None:
@@ -103,8 +149,14 @@ class PipelinePanel(Panel):
         self._draw_steps()
         self._apply_pending()
 
-        result = pipeline.run_pipeline(x, y, self._steps)
+        result, status = self._cached_result(x, y)
         imgui.separator()
+        if status == "pending":
+            self._draw_pending_row()
+            return
+        if status == "cancelled":
+            self._draw_cancelled_row()
+            return
         self._draw_preview(x, y, label, result)
         if self._steps and result.ok and result.y.size:
             imgui.separator()
@@ -116,6 +168,124 @@ class PipelinePanel(Panel):
         widgets.error_box(self._notice)
         if icons.icon_button("##pipe_dismiss", "close", size=18.0, tooltip="Dismiss"):
             self._notice = None
+
+    # -- compute cache / background ---------------------------------------------
+
+    def _steps_key(self) -> Tuple[Any, ...]:
+        """A hashable fingerprint of the chain's structure and every step's params."""
+        return tuple((step.kind, tuple(sorted(step.params.items()))) for step in self._steps)
+
+    def _async_enabled(self) -> bool:
+        """See MathLabPanel._async_enabled -- identical reasoning and default, kept as
+        an independent method (not shared) for the same "panels stay self-contained"
+        reason as _fingerprint/_layer_table above."""
+        if self._force_async:
+            return True
+        return not getattr(self.plot, "_is_test_mode", True)
+
+    def _cached_result(
+        self, x: np.ndarray, y: np.ndarray
+    ) -> Tuple[Optional[pipeline.PipelineResult], str]:
+        """Memoised ``run_pipeline``. Returns ``(result, status)``; ``status`` is one of
+        ``"ready"`` (``result`` is the settled outcome, sync or async), ``"pending"`` or
+        ``"cancelled"`` (``result`` is None; async-only, see ``_cached_result_async``).
+        """
+        key = (_fingerprint(x, y), self._steps_key())
+        if key == self._cache_key:
+            return self._cache_result, "ready"
+
+        if not self._async_enabled():
+            self._cache_key = key
+            self._cache_result = pipeline.run_pipeline(x, y, self._steps)
+            return self._cache_result, "ready"
+
+        return self._cached_result_async(x, y, key)
+
+    def _cached_result_async(
+        self, x: np.ndarray, y: np.ndarray, key: Tuple[Any, ...]
+    ) -> Tuple[Optional[pipeline.PipelineResult], str]:
+        """The background half of :meth:`_cached_result`. See
+        ``glplot/gui/panels/mathlab.py``'s ``_cached_result_async`` -- same algorithm,
+        single-slot instead of per-tab dicts (this panel has exactly one chain).
+        """
+        settled = self._async_result
+        if settled is not None and settled[1] == key:
+            result, _settled_key = settled
+            self._cache_key, self._cache_result = key, result
+            return result, "ready"
+
+        now = time.monotonic()
+        job = self._async_job
+
+        if self._async_job_key != key:
+            # Same "was churning" fix as mathlab.py's _cached_result_async: a job
+            # already popped mid-debounce (no BackgroundJob object left to point to)
+            # must still count as churning, or the second rapid change in a row would
+            # wrongly look like a fresh start and skip the debounce entirely.
+            was_churning = job is not None or self._async_stable_since is not None
+            if job is not None:
+                job.cancel()
+            self._async_job_key = key
+            self._async_job = None
+            job = None
+            self._async_stable_since = now if was_churning else None
+
+        if job is None:
+            if (
+                self._async_stable_since is not None
+                and now - self._async_stable_since < _ASYNC_DEBOUNCE_SECONDS
+            ):
+                return None, "pending"
+            self._async_stable_since = None
+            steps = list(self._steps)  # a snapshot: the chain may be edited while this runs
+            self._async_job = BackgroundJob(lambda: pipeline.run_pipeline(x, y, steps))
+            return None, "pending"
+
+        status = job.poll()
+        if status.state == "running":
+            return None, "pending"
+        if status.state == "cancelled":
+            return None, "cancelled"
+
+        # "done" -- run_pipeline never raises (a failing step becomes result.error, not
+        # an exception), so BackgroundJob's "error" state is unreachable here.
+        self._async_job = None
+        result: pipeline.PipelineResult = status.result
+        self._async_result = (result, key)
+        self._cache_key, self._cache_result = key, result
+        if status.elapsed >= _ASYNC_NOTIFY_THRESHOLD_SECONDS:
+            if result.ok:
+                notifications.push(f"Pipeline finished ({status.elapsed:.1f}s)", kind="success")
+            else:
+                notifications.push(f"Pipeline failed: {result.error}", kind="error")
+        return result, "ready"
+
+    def _cancel_async(self) -> None:
+        """Abandon the in-flight job. Cooperative, not a hard kill -- see background.py."""
+        if self._async_job is not None:
+            self._async_job.cancel()
+
+    def _retry_async(self) -> None:
+        """Re-run a cancelled computation with its same inputs, right away."""
+        self._async_job = None
+        self._async_stable_since = None
+
+    def _draw_pending_row(self) -> None:
+        elapsed = self._async_job.poll().elapsed if self._async_job is not None else 0.0
+        if widgets.busy_row("Computing pipeline", elapsed, id_str="pipeline"):
+            self._cancel_async()
+        imgui.same_line()
+        widgets.help_marker(
+            "Running in the background so the interface stays responsive. Cancel stops "
+            "waiting on it immediately -- the computation itself may keep running "
+            "briefly, unobserved, since it cannot be forced to stop mid-call."
+        )
+
+    def _draw_cancelled_row(self) -> None:
+        imgui.text_disabled("Cancelled.")
+        imgui.same_line()
+        if imgui.button("Retry##pipeline_cancelled", (90.0, 0.0)):
+            self._retry_async()
 
     # -- source --------------------------------------------------------------------
 
@@ -504,6 +674,36 @@ class PipelinePanel(Panel):
             store.remove(dataset)
 
         return Command(label=f"Create dataset {name!r}", do=do, undo=undo)
+
+
+# ----------------------------------------------------------------------------------
+# preview cache fingerprint (a compact local copy of mathlab.py's _fingerprint; see
+# this module's own docstring on why the compute step is memoised/backgrounded)
+# ----------------------------------------------------------------------------------
+
+
+def _fingerprint(*arrays: Optional[np.ndarray]) -> Tuple[Any, ...]:
+    """A cheap change-detection key: length, endpoints and a strided sample sum per
+    array. O(1) in the data size -- hashing a 1e6-row column every frame would cost
+    more than the pipeline it is guarding. A heuristic, and can miss an edit that
+    leaves all of those invariant; matches mathlab.py's own fingerprint exactly.
+    """
+    parts: List[Any] = []
+    for arr in arrays:
+        if arr is None:
+            parts.append(None)
+            continue
+        a = np.asarray(arr)
+        n = int(a.size)
+        parts.append(n)
+        if n == 0:
+            continue
+        step = max(1, n // _FINGERPRINT_SAMPLES)
+        with np.errstate(all="ignore"):
+            parts.append(float(np.nansum(a[::step])))
+        parts.append(float(a[0]))
+        parts.append(float(a[-1]))
+    return tuple(parts)
 
 
 # ----------------------------------------------------------------------------------

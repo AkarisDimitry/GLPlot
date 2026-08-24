@@ -52,11 +52,11 @@ from .options import (
 )
 from .policy import RenderPolicyManager
 from .renderers import axes3d
+from .renderers.colorbar import draw_colorbars
+from .renderers.contour_labels import draw_contour_labels
 from .renderers.density import DensityRenderer
 from .renderers.exact import ExactLineRenderer
 from .renderers.interaction import InteractionRenderer
-from .renderers.colorbar import draw_colorbars
-from .renderers.contour_labels import draw_contour_labels
 from .renderers.legend import draw_legend
 from .utils.export import ExportManager
 from .utils.scale import forward as _scale_forward
@@ -779,8 +779,9 @@ class GPULinePlot:
         The hook the engine was missing. ``run()`` owns its loop and exposed no way in, so
         anything that wanted to drive the scene over time — a ``FuncAnimation``, a
         simulation stepping itself, a recorder — could render frames offline but could not
-        make an open window move. That is why ``glplot.animation`` can ``save()`` a movie
-        but could not play one.
+        make an open window move. ``glplot.animation.TimedAnimation`` now uses exactly this
+        hook (``_start_live_playback``) so a ``FuncAnimation`` plays live, not just on
+        ``save()``.
 
         ``fn`` receives the loop's wall-clock time in seconds. It runs on the GL thread at
         the top of the frame, in the same slot the command queue drains, so it may mutate
@@ -2251,11 +2252,6 @@ class GPULinePlot:
         t_start = time.perf_counter()
         self._apply_blending_policy()
 
-        # Disable world clipping for screen-space impostor
-        if self.options.enable_clipping_optimization:
-            for i in range(4):
-                glDisable(GL_CLIP_DISTANCE0 + i)
-
         current_window = self.camera_controller.world_window(self.width, self.height)
         if (
             self.options.enable_cache_interaction_path
@@ -2272,17 +2268,27 @@ class GPULinePlot:
             # occupies a sub-rect, so fall back to an exact per-panel redraw during drags.
             and len(self.panels) == 1
         ):
+            # World clipping is only meaningless for the impostor itself -- a screen-space
+            # textured quad, not world geometry -- so the disable/re-enable is scoped to
+            # just this draw. It used to bracket the whole if/else, which meant the *else*
+            # branch's real geometry redraw (below) ran with every shader's world-window
+            # clip planes silently off: nothing then stopped a marker, line or patch whose
+            # centre had drifted outside the current view from drawing straight through the
+            # axis margins and out to the window edge, which is what a script bouncing
+            # in and out of INTERACTIVE mode (any HUD interaction, or once the cache
+            # activates after a view change) saw as the plot "spilling out of its frame".
+            if self.options.enable_clipping_optimization:
+                for i in range(4):
+                    glDisable(GL_CLIP_DISTANCE0 + i)
             current_fbo = glGetIntegerv(GL_FRAMEBUFFER_BINDING)
             self.interaction_renderer.draw_cached_impostor(
                 self.cache.capture_window, current_window, target_fbo=current_fbo
             )
+            if self.options.enable_clipping_optimization:
+                for i in range(4):
+                    glEnable(GL_CLIP_DISTANCE0 + i)
         else:
             self._draw_exact_view()
-
-        # Re-enable if needed for next passes (exact view usually enables it anyway)
-        if self.options.enable_clipping_optimization:
-            for i in range(4):
-                glEnable(GL_CLIP_DISTANCE0 + i)
 
         self.hud.state.gpu_timings["Interaction"] = time.perf_counter() - t_start
 
@@ -2483,6 +2489,19 @@ class GPULinePlot:
 
                 self.effects.draw_background()
                 self._apply_blending_policy()
+
+                # World-space clip planes are switched off for the screen-space chrome
+                # drawn after the scene (zoom box, HUD, axis labels/legend -- see the
+                # "Disable world clipping" spots below) and never switched back on before
+                # this point, so without this every scene redraw following one of those
+                # would inherit CLIP_DISTANCE left disabled from the *previous* frame.
+                # Every primitive shader now writes gl_ClipDistance against the visible
+                # world window (see SCATTER_VS, PATCH_VS, WIDE_SEGMENT_INSTANCED_VS,
+                # WIDE_LINES_INSTANCED_VS), so that state must be back on before any of
+                # them draws or their geometry is free to spill past the axis margins.
+                if self.options.enable_clipping_optimization:
+                    for i in range(4):
+                        glEnable(GL_CLIP_DISTANCE0 + i)
 
                 if self.policy.runtime.current_mode == RenderMode.INTERACTIVE:
                     self._draw_panels(self._draw_interaction_view)

@@ -58,11 +58,13 @@ from __future__ import annotations
 import logging
 import math
 import os
-from typing import Any, Callable, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .. import clipboard, icons, layerops, layerops3d, theme, widgets
+from .. import clipboard, expressions, icons, layerops, layerops3d, notifications, theme, widgets
+from ..background import BackgroundJob
 from ..datasets import Column, DataSet
 from ..expressions import ExpressionError
 from ..history import Command, is_snapshot_safe
@@ -92,6 +94,31 @@ _FOCUSED_ROOT_AND_CHILD_WINDOWS = 3
 
 #: Extra rows rendered above/below the viewport, absorbing row-range estimation error.
 _OVERSCAN = 4
+
+#: A settled CSV import/export only raises a toast if it ran at least this long -- see
+#: mathlab.py's _ASYNC_NOTIFY_THRESHOLD_SECONDS for the identical reasoning (an
+#: independently-owned constant of the same value, not imported -- panels stay
+#: self-contained, matching this file's own established convention elsewhere).
+_ASYNC_NOTIFY_THRESHOLD_SECONDS = 1.5
+
+#: Transform-section parameter sliders (a*x+b -- a/b become sliders): defaults and cap,
+#: matching panels/functions.py's Param/DEFAULT_PARAM_*/MAX_REMEMBERED_PARAMS exactly --
+#: an independently-owned local copy, same "panels stay self-contained" convention as
+#: everywhere else in this file, not a shared import.
+_PARAM_MIN = -10.0
+_PARAM_MAX = 10.0
+_PARAM_VALUE = 1.0
+_MAX_REMEMBERED_PARAMS = 64
+
+
+@dataclass
+class _Param:
+    """One Transform-expression parameter's current slider state."""
+
+    value: float = _PARAM_VALUE
+    vmin: float = _PARAM_MIN
+    vmax: float = _PARAM_MAX
+
 
 #: Grid columns are fixed-width so the horizontal scroll range is stable while scrolling.
 _CELL_WIDTH = 92.0
@@ -208,6 +235,16 @@ class DataEditorPanel(Panel):
 
         self._copy_headers = False
         self._csv_path = os.path.join(os.getcwd(), "data.csv")
+        #: An in-flight CSV read+parse or format+write, if any (see _import_csv/
+        #: _export_csv/_poll_csv_job) -- backgrounded so a large file does not freeze
+        #: the interface the way Math Lab's compute used to before it was, and Pipeline
+        #: was found to still be, doing exactly (see glplot/gui/background.py).
+        self._csv_job: Optional[BackgroundJob] = None
+        self._csv_job_kind: str = ""  # "import" | "export", while _csv_job is not None
+        self._csv_job_path: str = ""  # the path that job was dispatched for
+        self._csv_job_rows: int = 0  # export only: for the "Exported N rows" message
+        #: Test-only escape hatch, exactly like MathLabPanel's -- see _async_enabled().
+        self._force_async = False
         self._plot_x = ""
         self._plot_y = ""
         self._plot_kind = "line"
@@ -255,6 +292,21 @@ class DataEditorPanel(Panel):
         self._transform_expr = ""
         self._transform_to_new = False
         self._transform_target = "z"
+        #: Auto-detected sliders for a parametrized transform (a*x+b -- a/b become
+        #: sliders here), keyed by name; see _sync_transform_params. Persists across
+        #: edits like panels/functions.py's own Param dict does, so tweaking the
+        #: expression back and forth does not reset a slider you already dialled in.
+        self._transform_params: Dict[str, _Param] = {}
+        self._transform_param_order: List[str] = []
+        self._transform_synced_expr: Optional[str] = None
+        self._transform_edit_ranges = False
+        #: Cache for the live preview (see _transform_preview) -- a single numpy
+        #: expression eval is cheap even at 1e6 rows (unlike AsLS/UMAP/robust-fit,
+        #: which is why THOSE got backgrounded elsewhere in this app), so a plain
+        #: recompute-when-changed key is enough here; no BackgroundJob needed.
+        self._transform_preview_key: Optional[Tuple[Any, ...]] = None
+        self._transform_preview_values: Optional[np.ndarray] = None
+        self._transform_preview_error: str = ""
 
     # -- dataset selection -----------------------------------------------------
 
@@ -1108,29 +1160,162 @@ class DataEditorPanel(Panel):
         imgui.same_line()
         imgui.text("=")
         imgui.same_line()
-        imgui.set_next_item_width(-90.0)
+        imgui.set_next_item_width(-1.0)
         applied, self._transform_expr = imgui.input_text(
             "##texpr", self._transform_expr, flags=imgui.InputTextFlags_.enter_returns_true
         )
-        imgui.same_line()
-        if (imgui.button("Apply", (80.0, 0.0)) or applied) and self._transform_expr.strip():
-            target = self._transform_target.strip() if self._transform_to_new else None
-            self._transform(ds, self._transform_col, self._transform_expr.strip(), target or None)
+
+        self._sync_transform_params(ds)
+        self._draw_transform_params()
+        if self._transform_expr.strip():
+            self._draw_transform_preview(ds)
 
         _, self._transform_to_new = imgui.checkbox("Into a new column", self._transform_to_new)
         if self._transform_to_new:
             imgui.same_line()
             imgui.set_next_item_width(110.0)
             _, self._transform_target = imgui.input_text("##tnew", self._transform_target)
+
+        if (imgui.button("Apply", (80.0, 0.0)) or applied) and self._transform_expr.strip():
+            target = self._transform_target.strip() if self._transform_to_new else None
+            variables = {n: p.value for n, p in self._transform_params.items()} or None
+            self._transform(
+                ds,
+                self._transform_col,
+                self._transform_expr.strip(),
+                target or None,
+                variables=variables,
+            )
+
         widgets.help_marker(
             "An expression over the columns, evaluated for every row: y*2, y - mean(y), "
             "sqrt(x**2 + y**2). Undoable.\n\n"
+            "Any OTHER name becomes a slider -- try a*x + b -- and the preview below "
+            "updates live as you drag it. The slider's value at the moment you press "
+            "Apply is what gets written; a slider does not keep updating the column "
+            "afterward.\n\n"
             "Unchecked, it overwrites the chosen column in place. Checked, it writes a "
             "new column (re-running with the same name overwrites it rather than piling "
             "up copies).\n\n"
             "This is a per-column edit of the table. For operations that produce a new "
             "curve from (x, y) — integrate, smooth, fit, FFT — use Math Lab, which "
             "previews before it commits."
+        )
+
+    def _sync_transform_params(self, ds: DataSet) -> None:
+        """Re-derive the Transform expression's parameter sliders. Gated on the text
+        changing -- same reasoning as panels/functions.py's own _sync_params: a
+        rejected or mid-typing expression must not yank the sliders away and make the
+        panel jump around on every keystroke.
+        """
+        expr = self._transform_expr
+        if expr == self._transform_synced_expr:
+            return
+        self._transform_synced_expr = expr
+        try:
+            names = expressions.free_variables(expr, exclude=set(ds.column_names()))
+        except ExpressionError:
+            return
+        for name in names:
+            if name not in self._transform_params:
+                self._transform_params[name] = _Param()
+        self._transform_param_order = names
+        if len(self._transform_params) > _MAX_REMEMBERED_PARAMS:
+            keep = set(names)
+            self._transform_params = {k: v for k, v in self._transform_params.items() if k in keep}
+
+    def _draw_transform_params(self) -> None:
+        """One live slider per auto-detected free variable in the Transform
+        expression -- the Desmos half of "excel + desmos": type a*x + b, get sliders
+        for a and b, drag and watch _draw_transform_preview update."""
+        if not self._transform_param_order:
+            return
+        if not widgets.section("Parameters", default_open=True):
+            return
+        changed, value = imgui.checkbox("Edit ranges", self._transform_edit_ranges)
+        if changed:
+            self._transform_edit_ranges = bool(value)
+        imgui.same_line()
+        widgets.help_marker("Show min/max inputs for each slider's range.")
+        for name in self._transform_param_order:
+            param = self._transform_params.get(name)
+            if param is None:  # pragma: no cover - _sync_transform_params always fills these in
+                param = self._transform_params.setdefault(name, _Param())
+            imgui.push_id(name)
+            self._draw_transform_param_row(name, param)
+            imgui.pop_id()
+
+    def _draw_transform_param_row(self, name: str, param: _Param) -> None:
+        """One parameter: reset button, slider, and optionally its range inputs."""
+        if icons.icon_button("##reset", "refresh", size=20.0, tooltip=f"Reset {name} to 1"):
+            param.value = _PARAM_VALUE
+        imgui.same_line()
+
+        # A slider whose bounds are inverted or collapsed silently refuses to move;
+        # order them here rather than fighting a half-typed range.
+        lo, hi = sorted((param.vmin, param.vmax))
+        if lo == hi:
+            hi = lo + 1.0
+        imgui.set_next_item_width(-1.0 if not self._transform_edit_ranges else -160.0)
+        changed, value = imgui.slider_float(name, param.value, lo, hi, format="%.4g")
+        if changed:
+            param.value = float(value)
+
+        if self._transform_edit_ranges:
+            imgui.same_line()
+            imgui.set_next_item_width(70.0)
+            changed, value = imgui.input_float("##min", param.vmin, 0.0, 0.0, "%.3g")
+            if changed:
+                param.vmin = float(value)
+            imgui.same_line()
+            imgui.set_next_item_width(70.0)
+            changed, value = imgui.input_float("##max", param.vmax, 0.0, 0.0, "%.3g")
+            if changed:
+                param.vmax = float(value)
+
+    def _draw_transform_preview(self, ds: DataSet) -> None:
+        """A live mini_plot of what the Transform expression would produce -- the
+        payoff of the parameter sliders: watch the shape change before committing
+        anything, the Excel-cell-preview half of "excel + desmos".
+
+        Recomputed only when the expression, parameter values or the table itself
+        change (see the key below) -- a single numpy expression eval is cheap even at
+        1e6 rows (unlike the AsLS/UMAP/robust-fit calls elsewhere in this app that
+        genuinely needed a BackgroundJob), so a plain recompute-when-changed cache is
+        enough here; no threading needed.
+        """
+        expr = self._transform_expr.strip()
+        variables = {name: p.value for name, p in self._transform_params.items()}
+        key = (
+            id(ds),
+            ds.n_rows(),
+            tuple(ds.column_names()),
+            expr,
+            tuple(sorted(variables.items())),
+        )
+        if key != self._transform_preview_key:
+            self._transform_preview_key = key
+            try:
+                self._transform_preview_values = ds.eval_expression(
+                    expr, variables=variables or None
+                )
+                self._transform_preview_error = ""
+            except ExpressionError as exc:
+                self._transform_preview_values = None
+                self._transform_preview_error = str(exc)
+
+        if self._transform_preview_error:
+            widgets.error_box(f"Preview: {self._transform_preview_error}")
+            return
+        if self._transform_preview_values is None:
+            return
+        label = self._transform_target.strip() if self._transform_to_new else self._transform_col
+        widgets.mini_plot(
+            "##transform_preview",
+            self._transform_preview_values,
+            height=100.0,
+            label=f"preview: {label or '?'}",
+            color=theme.get_color("accent"),
         )
 
     def _draw_plot_section(self, ds: DataSet) -> None:
@@ -1151,13 +1336,14 @@ class DataEditorPanel(Panel):
             self._draw_plot_section_3d(ds, names)
             return
 
-        if self._plot_x not in names:
+        xy_options = [self._INDEX_OPTION] + list(names)
+        if self._plot_x not in xy_options:
             self._plot_x = names[0]
-        if self._plot_y not in names:
+        if self._plot_y not in xy_options:
             self._plot_y = names[1]
 
-        _, self._plot_x = widgets.enum_combo("X column", self._plot_x, names)
-        _, self._plot_y = widgets.enum_combo("Y column", self._plot_y, names)
+        _, self._plot_x = widgets.enum_combo("X column", self._plot_x, xy_options)
+        _, self._plot_y = widgets.enum_combo("Y column", self._plot_y, xy_options)
 
         labels = [layerops.kind_spec(k).label for k in layerops.KIND_KEYS]
         current = layerops.kind_spec(self._plot_kind).label
@@ -1228,8 +1414,10 @@ class DataEditorPanel(Panel):
             )
         elif bound is not None:
             kind_name = layerops.layer_kind(bound) or bound.layer_type
+            color_col = self._layer_color_column(ds, bound)
+            suffix = f" — coloured by {color_col!r}" if color_col else ""
             imgui.text_disabled(
-                f"Linked to {bound.label!r} ({kind_name}) — cell edits update it live."
+                f"Linked to {bound.label!r} ({kind_name}) — cell edits update it live.{suffix}"
             )
         else:
             imgui.text_disabled("(plotting links the dataset for live editing)")
@@ -1272,16 +1460,17 @@ class DataEditorPanel(Panel):
         """The 3D half of the plot picker: x/y/z, a 3D plot type, and its encodings."""
         if len(names) < 3:
             return
-        if self._plot_x not in names:
+        xyz_options = [self._INDEX_OPTION] + list(names)
+        if self._plot_x not in xyz_options:
             self._plot_x = names[0]
-        if self._plot_y not in names:
+        if self._plot_y not in xyz_options:
             self._plot_y = names[1]
-        if self._plot_z not in names:
+        if self._plot_z not in xyz_options:
             self._plot_z = names[2]
 
-        _, self._plot_x = widgets.enum_combo("X column", self._plot_x, names)
-        _, self._plot_y = widgets.enum_combo("Y column", self._plot_y, names)
-        _, self._plot_z = widgets.enum_combo("Z column", self._plot_z, names)
+        _, self._plot_x = widgets.enum_combo("X column", self._plot_x, xyz_options)
+        _, self._plot_y = widgets.enum_combo("Y column", self._plot_y, xyz_options)
+        _, self._plot_z = widgets.enum_combo("Z column", self._plot_z, xyz_options)
 
         keys = list(layerops3d.KIND3D_KEYS)
         labels = [layerops3d.kind3d_spec(k).label for k in keys]
@@ -1350,9 +1539,9 @@ class DataEditorPanel(Panel):
         """Colour-by / size-by for 3D. Size applies only to the point kinds."""
         spec = layerops3d.kind3d_spec(self._plot_kind3d)
         none = "(none)"
-        options = [none] + list(names)
+        options = [none, self._INDEX_OPTION] + list(names)
 
-        cur_c = self._plot_c if self._plot_c in names else none
+        cur_c = self._plot_c if self._plot_c in options else none
         _, picked_c = widgets.enum_combo(
             "Color by",
             cur_c,
@@ -1365,7 +1554,7 @@ class DataEditorPanel(Panel):
         _, self._plot_cmap = widgets.enum_combo("Colormap", cur_cmap, list(self._ENCODING_CMAPS))
 
         if spec.primitive == "points":
-            cur_s = self._plot_s if self._plot_s in names else none
+            cur_s = self._plot_s if self._plot_s in options else none
             _, picked_s = widgets.enum_combo("Size by", cur_s, options)
             self._plot_s = "" if picked_s == none else picked_s
 
@@ -1378,14 +1567,15 @@ class DataEditorPanel(Panel):
     def _plot_dataset_3d(self, ds: DataSet) -> None:
         """Queue a 3D layer built from the x/y/z pickers, switching the figure to 3D."""
         names = ds.column_names()
+        xyz_options = [self._INDEX_OPTION] + list(names)
         for attr in ("_plot_x", "_plot_y", "_plot_z"):
-            if getattr(self, attr) not in names:
+            if getattr(self, attr) not in xyz_options:
                 self._error = "Pick three columns to plot in 3D."
                 return
 
-        x = ds.get(self._plot_x)
-        y = ds.get(self._plot_y)
-        z = ds.get(self._plot_z)
+        x = self._resolve_axis_values(ds, self._plot_x)
+        y = self._resolve_axis_values(ds, self._plot_y)
+        z = self._resolve_axis_values(ds, self._plot_z)
         if x is None or y is None or z is None:
             self._error = "Pick three columns to plot in 3D."
             return
@@ -1399,13 +1589,20 @@ class DataEditorPanel(Panel):
                 self._error = "A vector field needs at least one of the U/V/W columns."
                 return
 
-        c = ds.get(self._plot_c) if self._plot_c in names else None
+        if self._plot_c == self._INDEX_OPTION:
+            c = np.arange(ds.n_rows(), dtype=np.float64)
+        else:
+            c = ds.get(self._plot_c) if self._plot_c in names else None
         s = None
-        if (
-            self._plot_s in names
-            and layerops3d.kind3d_spec(self._plot_kind3d).primitive == "points"
-        ):
-            s = self._size_pixels(ds.get(self._plot_s))
+        if (self._plot_s in names or self._plot_s == self._INDEX_OPTION) and layerops3d.kind3d_spec(
+            self._plot_kind3d
+        ).primitive == "points":
+            s_raw = (
+                np.arange(ds.n_rows(), dtype=np.float64)
+                if self._plot_s == self._INDEX_OPTION
+                else ds.get(self._plot_s)
+            )
+            s = self._size_pixels(s_raw)
 
         plot = self.plot
         hud = self.hud
@@ -1487,6 +1684,15 @@ class DataEditorPanel(Panel):
         """The parameters of the selected plot type. Nothing at all for line/scatter."""
         widgets.kind_options_editor(self._plot_opts)
 
+    #: Sentinel offered alongside real column names in the "Color by"/"Size by" pickers: maps
+    #: each point/vertex/bar to its position (``0..N-1``) rather than any dataset column, for
+    #: plots with no natural encoding column (e.g. tracing draw order along a scatter/line).
+    #: Bracketed like ``(none)`` so it reads as a picker sentinel rather than a real column,
+    #: and mirrors the `#` sample-index pseudo-variable already used in the transform/Math Lab
+    #: expression editors (``gui/expressions.py``) -- same "row index" concept, this codebase's
+    #: established name for it.
+    _INDEX_OPTION = "(index)"
+
     #: Colormaps offered for a data-driven colour encoding, common perceptual maps first.
     _ENCODING_CMAPS = (
         "viridis",
@@ -1517,9 +1723,9 @@ class DataEditorPanel(Panel):
         if not allows_color:
             return
         none = "(none)"
-        options = [none] + list(names)
+        options = [none, self._INDEX_OPTION] + list(names)
 
-        cur_c = self._plot_c if self._plot_c in names else none
+        cur_c = self._plot_c if self._plot_c in options else none
         _, picked_c = widgets.enum_combo("Color by", cur_c, options)
         self._plot_c = "" if picked_c == none else picked_c
         if self._plot_c:
@@ -1529,7 +1735,7 @@ class DataEditorPanel(Panel):
             )
 
         if allows_size:
-            cur_s = self._plot_s if self._plot_s in names else none
+            cur_s = self._plot_s if self._plot_s in options else none
             _, picked_s = widgets.enum_combo("Size by", cur_s, options)
             self._plot_s = "" if picked_s == none else picked_s
 
@@ -1547,10 +1753,17 @@ class DataEditorPanel(Panel):
         if self._plot_kind not in ("scatter", "line", "bar"):
             return None, None, self._plot_cmap
         names = ds.column_names()
-        c = ds.get(self._plot_c) if self._plot_c in names else None
+        n = ds.n_rows()
+        if self._plot_c == self._INDEX_OPTION:
+            c = np.arange(n, dtype=np.float64)
+        else:
+            c = ds.get(self._plot_c) if self._plot_c in names else None
         # Size is a scatter-only encoding; bars take colour but not per-bar size.
         s_name = self._plot_s if self._plot_kind == "scatter" else ""
-        s_raw = ds.get(s_name) if s_name in names else None
+        if s_name == self._INDEX_OPTION:
+            s_raw = np.arange(n, dtype=np.float64)
+        else:
+            s_raw = ds.get(s_name) if s_name in names else None
         s = None
         if s_raw is not None:
             vals = np.asarray(s_raw, dtype=np.float64).ravel()
@@ -1564,10 +1777,51 @@ class DataEditorPanel(Panel):
                 s = (lo_px + norm * (hi_px - lo_px)).astype(np.float32)
         return c, s, self._plot_cmap
 
+    def _layer_color_column(self, ds: DataSet, layer: Any) -> Optional[str]:
+        """The dataset column driving ``layer``'s colour, or None if there isn't one.
+
+        Read off the layer's own retained ``metadata["cvalues"]`` (:func:`layerops.
+        add_xy_layer`'s colour-source tag) rather than the "Color by" picker's state, so
+        it is right even for a layer coloured from a script, or one whose colour-by
+        selection survived a kind switch that the picker never saw. A colormapped kind's
+        own values (a histogram's counts, say) simply match no column and fall through.
+        """
+        metadata = getattr(layer, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        stored = metadata.get("cvalues")
+        if stored is None:
+            return None
+        cvalues = np.asarray(stored, dtype=np.float64).ravel()
+        if cvalues.size == 0:
+            return None
+        for name in ds.column_names():
+            column = ds.get(name)
+            if column is None:
+                continue
+            values = np.asarray(column, dtype=np.float64).ravel()
+            if values.shape != cvalues.shape:
+                continue
+            if np.allclose(values, cvalues, rtol=1e-4, atol=1e-4, equal_nan=True):
+                return name
+        # No column matches. This is also what "(index)" produces (an ordinary looking
+        # 0..N-1 series), but that is indistinguishable here from a real sequential column
+        # (a plain "x" axis, a row-number column) that simply is not in `ds` under this
+        # dataset -- so, unlike a genuine no-match, it is deliberately left unreported
+        # rather than guessed at.
+        return None
+
     def _draw_io_section(self, ds: DataSet) -> None:
         """CSV import/export by path (pyimgui has no native file dialog)."""
+        self._poll_csv_job()
         imgui.set_next_item_width(-70.0)
         _, self._csv_path = imgui.input_text("##csv", self._csv_path)
+        if self._csv_job is not None:
+            label = "Importing" if self._csv_job_kind == "import" else "Exporting"
+            elapsed = self._csv_job.poll().elapsed
+            if widgets.busy_row(label, elapsed, id_str="csv_io"):
+                self._csv_job.cancel()
+            return
         imgui.same_line()
         if icons.icon_button("##imp", "upload", tooltip="Import CSV"):
             self._import_csv()
@@ -1986,8 +2240,20 @@ class DataEditorPanel(Panel):
         )
         self._status = f"{clone.name!r}: {clone.n_rows()} of {ds.n_rows()} rows"
 
-    def _transform(self, ds: DataSet, name: str, expr: str, target: Optional[str]) -> None:
+    def _transform(
+        self,
+        ds: DataSet,
+        name: str,
+        expr: str,
+        target: Optional[str],
+        *,
+        variables: Optional[Dict[str, float]] = None,
+    ) -> None:
         """Write an expression over the columns into a column, undoably.
+
+        ``variables`` bakes in a parametrized transform's CURRENT slider values (see
+        _draw_transform_params) -- a snapshot, same as pressing "Plot" on the Functions
+        panel: the column is not left live-linked to the sliders afterward.
 
         Validated here, in the draw callback, rather than inside the queued command:
         a bad expression must report itself in the panel's error box, and by the time
@@ -1996,13 +2262,15 @@ class DataEditorPanel(Panel):
         if not self._require_unfiltered("Transform"):
             return
         try:
-            ds.eval_expression(expr)
+            ds.eval_expression(expr, variables=variables)
         except ExpressionError as exc:
             self._error = f"Transform: {exc}"
             return
         self._error = ""
         label = f"{target or name} = {expr}"
-        self._apply_structural(ds, label, lambda: ds.transform_column(name, expr, target=target))
+        self._apply_structural(
+            ds, label, lambda: ds.transform_column(name, expr, target=target, variables=variables)
+        )
 
     def _add_column(self, ds: DataSet, name: str) -> None:
         """Append a zero column."""
@@ -2063,6 +2331,18 @@ class DataEditorPanel(Panel):
         """
         layerops.bind_dataset(ds, layer, x_name, y_name)
 
+    def _resolve_axis_values(self, ds: DataSet, col: str) -> Optional[np.ndarray]:
+        """Resolve an X/Y/Z axis picker value to its data: a real column, or the row index.
+
+        Mirrors the ``_INDEX_OPTION`` handling already used for the colour/size encoding
+        pickers (``_resolve_encoding_arrays``), extended to the actual plotted axes so a
+        table with no natural "against what" column (a bare 2-column x,y series, say) can
+        still be plotted against its row number.
+        """
+        if col == self._INDEX_OPTION:
+            return np.arange(ds.n_rows(), dtype=np.float64)
+        return ds.get(col)
+
     def _plot_dataset(self, ds: DataSet, *, as_new: bool = False) -> None:
         """Render ``ds`` on the scene: **update its bound layer**, or add a new one.
 
@@ -2081,16 +2361,18 @@ class DataEditorPanel(Panel):
         and re-point the binding at the new ``layer_id``).
         """
         names = ds.column_names()
-        if self._plot_x not in names or self._plot_y not in names:
+        xy_options = [self._INDEX_OPTION] + list(names)
+        if self._plot_x not in xy_options or self._plot_y not in xy_options:
             if len(names) < 2:
                 self._error = "Need at least two columns to plot."
                 return
             self._plot_x, self._plot_y = names[0], names[1]
 
-        try:
-            x, y = ds.to_xy(self._plot_x, self._plot_y)
-        except ValueError as exc:
-            self._error = str(exc)
+        x = self._resolve_axis_values(ds, self._plot_x)
+        y = self._resolve_axis_values(ds, self._plot_y)
+        if x is None or y is None:
+            missing = self._plot_x if x is None else self._plot_y
+            self._error = f"Column {missing!r} not found in dataset {ds.name!r}."
             return
 
         target = None if as_new else self._bound_layer(ds)
@@ -2159,6 +2441,10 @@ class DataEditorPanel(Panel):
         options = self._current_options()
         x_name, y_name = self._plot_x, self._plot_y
         label = f"{ds.name}: {y_name}"
+        # Resolved now (while ds is current), exactly as `_add_plot_layer` does -- without
+        # this a "Color by" column picked in the panel would apply on first plot but
+        # silently vanish on the next Update/kind-change re-plot into the same layer.
+        c_enc, s_enc, cmap_enc = self._resolve_encoding_arrays(ds)
 
         old_kind = layerops.layer_kind(layer)
         same_kind = old_kind == kind
@@ -2181,11 +2467,28 @@ class DataEditorPanel(Panel):
             target = layerops.find_layer(plot, ds.layer_id)
             if target is None:
                 new_layer = layerops.add_xy_layer(
-                    plot, x, y, kind=kind, label=label, options=options
+                    plot,
+                    x,
+                    y,
+                    kind=kind,
+                    label=label,
+                    options=options,
+                    c=c_enc,
+                    s=s_enc,
+                    cmap=cmap_enc,
                 )
             else:
                 new_layer = layerops.replot_layer_xy(
-                    plot, hud, target, x, y, kind=kind, label=label, options=options
+                    plot,
+                    hud,
+                    target,
+                    x,
+                    y,
+                    kind=kind,
+                    label=label,
+                    options=options,
+                    c=c_enc,
+                    cmap=cmap_enc,
                 )
             created["layer_id"] = getattr(new_layer, "layer_id", None)
             self._bind(ds, new_layer, x_name, y_name)
@@ -2238,33 +2541,131 @@ class DataEditorPanel(Panel):
 
     # -- csv -------------------------------------------------------------------
 
+    def _async_enabled(self) -> bool:
+        """See MathLabPanel._async_enabled -- identical reasoning and default, kept as
+        an independent method (not shared) for the same "panels stay self-contained"
+        reason as the rest of this file's own local helpers."""
+        if self._force_async:
+            return True
+        return not getattr(self.plot, "_is_test_mode", True)
+
     def _import_csv(self) -> None:
-        """Read the CSV at the path field into a new dataset."""
+        """Read the CSV at the path field into a new dataset.
+
+        Backgrounded against a real, live plot (see _async_enabled): the read+parse of
+        an arbitrarily large file must not freeze the interface, exactly the reasoning
+        Math Lab's compute and Pipeline's chain were both backgrounded for -- see
+        glplot/gui/background.py. _dataset_from_table (the part that actually
+        registers the dataset) still only ever runs on the main thread, either inline
+        here (sync path) or from _poll_csv_job once the background read+parse settles.
+        """
+        if self._csv_job is not None:
+            return  # a CSV job is already in flight; the buttons are hidden meanwhile
         path = self._csv_path.strip()
-        try:
-            with open(path, "r", encoding="utf-8-sig", newline="") as handle:
-                text = handle.read()
-        except OSError as exc:
-            self._error = f"Could not read {path!r}: {exc}"
+        if not self._async_enabled():
+            try:
+                headers, data = _read_csv_table(path)
+            except RuntimeError as exc:
+                self._error = str(exc)
+                return
+            self._finish_csv_import(path, headers, data)
             return
-        try:
-            headers, data = clipboard.parse_table(text)
-        except ValueError as exc:
-            self._error = f"{path!r}: {exc}"
-            return
+        self._csv_job_kind = "import"
+        self._csv_job_path = path
+        self._csv_job = BackgroundJob(lambda: _read_csv_table(path))
+
+    def _finish_csv_import(self, path: str, headers: List[str], data: np.ndarray) -> None:
+        """The synchronous half of an import: register the dataset. Always runs on the
+        main thread -- see _dataset_from_table's own CONTRACT-1.1-adjacent note."""
         base = os.path.splitext(os.path.basename(path))[0] or "Imported"
         ds = self._dataset_from_table(headers, data, base)
         ds.source = "manual"
         self._status = f"Imported {ds.n_rows()} x {ds.n_cols()} from {base}"
 
     def _export_csv(self, ds: DataSet) -> None:
-        """Write the current dataset to the path field as CSV."""
-        path = self._csv_path.strip()
-        try:
-            text = clipboard.format_table(ds.column_names(), ds.to_array(), delimiter=",")
-            with open(path, "w", encoding="utf-8", newline="") as handle:
-                handle.write(text)
-        except (OSError, ValueError) as exc:
-            self._error = f"Could not write {path!r}: {exc}"
+        """Write the current dataset to the path field as CSV. Backgrounded against a
+        real, live plot -- same reasoning as _import_csv."""
+        if self._csv_job is not None:
             return
-        self._status = f"Exported {ds.n_rows()} rows to {path}"
+        path = self._csv_path.strip()
+        headers = ds.column_names()
+        array = ds.to_array()
+        n_rows = ds.n_rows()
+        if not self._async_enabled():
+            try:
+                _write_csv_table(path, headers, array)
+            except RuntimeError as exc:
+                self._error = str(exc)
+                return
+            self._status = f"Exported {n_rows} rows to {path}"
+            return
+        self._csv_job_kind = "export"
+        self._csv_job_path = path
+        self._csv_job_rows = n_rows
+        self._csv_job = BackgroundJob(lambda: _write_csv_table(path, headers, array))
+
+    def _poll_csv_job(self) -> None:
+        """Check the in-flight CSV import/export job, if any, and apply it once
+        settled. Called every frame from _draw_io_section -- cheap when nothing is
+        pending (one non-blocking poll() call, see background.py).
+        """
+        job = self._csv_job
+        if job is None:
+            return
+        status = job.poll()
+        if status.state == "running":
+            return
+        self._csv_job = None
+        kind, path = self._csv_job_kind, self._csv_job_path
+        self._csv_job_kind = ""
+        if status.state == "cancelled":
+            return
+        if status.state == "error":
+            self._error = status.error or "CSV operation failed"
+            if status.elapsed >= _ASYNC_NOTIFY_THRESHOLD_SECONDS:
+                verb = "Import" if kind == "import" else "Export"
+                notifications.push(f"{verb} failed: {status.error}", kind="error")
+            return
+        if kind == "import":
+            headers, data = status.result
+            self._finish_csv_import(path, headers, data)
+            if status.elapsed >= _ASYNC_NOTIFY_THRESHOLD_SECONDS:
+                notifications.push(f"{self._status} ({status.elapsed:.1f}s)", kind="success")
+        else:
+            self._status = f"Exported {self._csv_job_rows} rows to {path}"
+            if status.elapsed >= _ASYNC_NOTIFY_THRESHOLD_SECONDS:
+                notifications.push(f"{self._status} ({status.elapsed:.1f}s)", kind="success")
+
+
+# ----------------------------------------------------------------------------------
+# CSV read/write (module-level and pure: no ``self``, safe to run on a background
+# thread -- see BackgroundJob's own docstring on why. Each raises a RuntimeError whose
+# message is already fully formatted, matching exactly what _import_csv/_export_csv
+# showed synchronously before either was backgrounded: BackgroundJob only stringifies
+# whatever it catches, so the OSError-vs-ValueError distinction has to be baked into
+# the message here, not reconstructed by the poller.)
+# ----------------------------------------------------------------------------------
+
+
+def _read_csv_table(path: str) -> Tuple[List[str], np.ndarray]:
+    """Read and parse the CSV at ``path``. Raises RuntimeError on any failure."""
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+            text = handle.read()
+    except OSError as exc:
+        raise RuntimeError(f"Could not read {path!r}: {exc}") from exc
+    try:
+        return clipboard.parse_table(text)
+    except ValueError as exc:
+        raise RuntimeError(f"{path!r}: {exc}") from exc
+
+
+def _write_csv_table(path: str, headers: List[str], array: np.ndarray) -> None:
+    """Format ``(headers, array)`` as CSV and write it to ``path``. Raises
+    RuntimeError on any failure."""
+    try:
+        text = clipboard.format_table(headers, array, delimiter=",")
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Could not write {path!r}: {exc}") from exc

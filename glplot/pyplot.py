@@ -1978,19 +1978,19 @@ def subplots(
 
 #: The scale names matplotlib's `xscale`/`yscale` take. "linear", "log", "symlog",
 #: "asinh", and "logit" are real: each transforms a layer's data at GPU-upload time
-#: (never `layer.pts` itself, so the Data panel and CSV export keep reporting real
-#: values), leaving the shared ortho projection, `screen_to_world`, and the GPU density
-#: accumulator untouched -- they just operate on transformed "world" coordinates without
-#: knowing it. `plot()`/`scatter()`/`bar()`/`barh()`/`imshow()`/`contourf()`/`matshow()`
-#: all reach that upload hook directly; `contour()`'s live lines and `streamplot()` reach
-#: it too since both draw through `add_line_strip()`, and `hist2d()` reaches it since it
-#: draws its bin centres through `scatter()` -- none of those three needed their own
-#: code, they just already used a primitive this session had already fixed.
+#: (never `layer.pts`/`layer.vertices` themselves, so the Data panel and CSV export keep
+#: reporting real values), leaving the shared ortho projection, `screen_to_world`, and the
+#: GPU density accumulator untouched -- they just operate on transformed "world"
+#: coordinates without knowing it. `plot()`/`scatter()`/`bar()`/`barh()`/`imshow()`/
+#: `contourf()`/`matshow()` all reach that upload hook directly; `contour()`'s live lines
+#: and `streamplot()` reach it too since both draw through `add_line_strip()`. `hist2d()`
+#: reaches it since it is a patch (`renderers/patch.py` has the identical hook) -- and
+#: because the transform is per-*vertex*, every cell's own corners are scale-aware, not
+#: just a bin-centre marker standing in for the cell: the rendered tiles still tile with
+#: no gaps or overlap under a log/symlog/asinh axis, exactly as under a linear one.
 #: `function`/`functionlog` (arbitrary user-supplied transform functions) are not real
 #: yet -- accepted and warned about, a deliberately separate round. Real scale support
-#: does not extend to the analytic "line_family" plots or any 3D layer -- those still
-#: warn. `hist2d()`'s bin *edges* also stay linearly spaced even under a log axis (only
-#: the bin-centre marker positions are scale-aware) -- a real but separable enhancement.
+#: does not extend to the analytic "line_family" plots or any 3D layer -- those still warn.
 _SCALE_NAMES = ("linear", "log", "symlog", "logit", "function", "functionlog", "asinh")
 _REAL_SCALE_NAMES = ("linear", "log", "symlog", "asinh", "logit")
 
@@ -3181,7 +3181,9 @@ def _resolve_colorbar_mapping(mappable: Optional[Any]) -> Tuple[str, Any]:
                 scale_cls = mscale._scale_mapping[norm]
             except KeyError:
                 known = ", ".join(repr(k) for k in sorted(mscale._scale_mapping))
-                raise ValueError(f"colorbar(): unsupported norm scale {norm!r}. Expected one of {known}.") from None
+                raise ValueError(
+                    f"colorbar(): unsupported norm scale {norm!r}. Expected one of {known}."
+                ) from None
             norm = mcolors.make_norm_from_scale(scale_cls)(mcolors.Normalize)()
         else:
             norm = copy.copy(norm)
@@ -3381,7 +3383,7 @@ def colorbar(
         },
     )
 
-    host_panel = (ax.panel if ax is not None else _active_axes(fig).panel)
+    host_panel = ax.panel if ax is not None else _active_axes(fig).panel
     x0, y0, w, h = host_panel.rect_frac
     frac = float(fraction)
     if inset:
@@ -7376,6 +7378,14 @@ def hexbin(
     # `cvalues` is what the Scene panel's colormap picker re-maps from, exactly as for a
     # colormapped scatter -- without it the cmap becomes undoable decoration.
     layer.metadata.update({"artist": "hexbin", "counts": counts[keep], "cvalues": values})
+    # A hexagon is only regular -- not a stretched parallelogram -- when x and y share
+    # the same world-units-per-pixel; `_hexagon_geometry` computes rx/ry assuming exactly
+    # that. `autoscale()` first makes the fit synchronous (equalising against whatever the
+    # camera happened to be showing before this call, e.g. an empty default view, would
+    # equalise the wrong numbers): same reasoning `_add_fractal` already applies for
+    # mandelbrot()/julia(), which are equally meaningless off-square.
+    plot_obj.autoscale()
+    _apply_equal_aspect(plot_obj)
     _set_dirty(plot_obj)
     return _set_current_mappable(layer)
 
@@ -7543,6 +7553,30 @@ def eventplot(
     return layers
 
 
+def _hist2d_rect_geometry(
+    x0: np.ndarray, x1: np.ndarray, y0: np.ndarray, y1: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """``(vertices, indices)`` drawing one axis-aligned quad per cell as ``GL_TRIANGLES``.
+
+    One layer for every surviving cell, the same one-mesh-not-one-layer-per-shape
+    approach ``_hexagon_geometry`` uses for hexbin -- a histogram at any real bin count
+    would otherwise be hundreds of separate patch layers, the way ``bar()`` spends one
+    per bar. The four inputs are each the cell's own edge on that side, so this needs no
+    lattice/lookup logic at all: `histogram2d` already handed back exactly this shape.
+    """
+    n = len(x0)
+    verts = np.empty((4 * n, 2), dtype=np.float32)
+    verts[0::4, 0], verts[0::4, 1] = x0, y0
+    verts[1::4, 0], verts[1::4, 1] = x1, y0
+    verts[2::4, 0], verts[2::4, 1] = x1, y1
+    verts[3::4, 0], verts[3::4, 1] = x0, y1
+
+    base = (np.arange(n, dtype=np.uint32) * 4).reshape(n, 1)
+    quad = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32).reshape(1, 6)
+    indices = np.ascontiguousarray((base + quad).reshape(-1), dtype=np.uint32)
+    return verts, indices
+
+
 def hist2d(
     x,
     y,
@@ -7580,8 +7614,9 @@ def hist2d(
         cmin (float, optional): Cells holding less than this are not drawn.
         cmax (float, optional): Cells holding more than this are not drawn.
         cmap (str, optional): Colormap name. Defaults to 'magma'.
-        s (float, optional): Point size for display. Auto-computed if None.
-            Defaults to None.
+        s (float, optional): Accepted for backward compatibility; has no effect. Cells
+            draw as a filled rectangular mesh now, not sized point markers -- see the
+            module changelog if you are looking for the old point-cloud rendering.
         label (str, optional): Legend label. Defaults to None.
         data (indexable, optional): If given, ``x``, ``y`` and ``weights`` may be
             keys into it (a DataFrame, dict, structured array, ...).
@@ -7596,7 +7631,7 @@ def hist2d(
             - counts: 2D histogram counts (shape: (nbins_x, nbins_y))
             - xedges: N+1 x-axis bin edges
             - yedges: M+1 y-axis bin edges
-            - layer: The scatter layer rendering the heatmap
+            - layer: The patch layer rendering the heatmap, one filled quad per cell
 
     Examples:
         Simple 2D histogram:
@@ -7622,10 +7657,18 @@ def hist2d(
     counts, xedges, yedges = np.histogram2d(
         x_arr, y_arr, bins=bins, range=range, density=density, weights=w_arr
     )
-    xc = 0.5 * (xedges[:-1] + xedges[1:])
-    yc = 0.5 * (yedges[:-1] + yedges[1:])
-    xx, yy = np.meshgrid(xc, yc, indexing="ij")
+    _warn_unsupported(
+        "hist2d",
+        {"s": s},
+        {
+            "s": "has no effect: cells are now a filled rectangular mesh, not sized point "
+            "markers, so there is no marker size left to set"
+        },
+    )
+    nx, ny = counts.shape
+    ix_all, iy_all = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
     values = counts.ravel()
+    ix_flat, iy_flat = ix_all.ravel(), iy_all.ravel()
     # An empty cell is left out whatever cmin says: matplotlib does the same, and drawing
     # it would colour "nothing landed here" as the colormap's low end -- indistinguishable
     # from a cell that got the fewest hits.
@@ -7634,20 +7677,40 @@ def hist2d(
         mask &= values >= float(cmin)
     if cmax is not None:
         mask &= values <= float(cmax)
-    layer = scatter(
-        xx.ravel()[mask],
-        yy.ravel()[mask],
-        c=values[mask],
-        # Resolved here rather than left to `scatter`, whose own last resort is viridis:
-        # a hist2d that names no colormap has always been magma, and must stay magma.
-        cmap=_resolve_cmap(cmap, "magma"),
-        s=s or max(2.0, 9000.0 / max(len(values), 1)),
-        marker="s",
+    ix, iy = ix_flat[mask], iy_flat[mask]
+    verts, indices = _hist2d_rect_geometry(xedges[ix], xedges[ix + 1], yedges[iy], yedges[iy + 1])
+
+    plot_obj = _get_or_create_plot()
+    # Four colour rows per cell (one per corner), all its own colour -- the same
+    # "paint through the shared helper so clim()/set_cmap() can repaint it" pattern
+    # hexbin uses, so a hist2d responds to both exactly like a hexbin does.
+    per_vertex = np.repeat(values[mask], 4)
+    add_patch(
+        verts,
+        indices=indices,
+        mode="triangles",
+        colors=np.zeros((len(verts), 4), dtype=np.float32),
         label=label,
     )
+    layer = plot_obj.scene.layers[-1]
+    # Resolved here rather than left to `_paint_patch_mappable`'s own last resort
+    # (viridis): a hist2d that names no colormap has always been magma, and must stay
+    # magma.
+    _paint_patch_mappable(layer, per_vertex, _resolve_cmap(cmap, "magma"), None, None, None, None)
     layer.metadata.update(
-        {"artist": "hist2d", "counts": counts, "xedges": xedges, "yedges": yedges}
+        {
+            "artist": "hist2d",
+            "counts": counts,
+            "xedges": xedges,
+            "yedges": yedges,
+            # `pyplot`'s own retainer, matching hexbin -- see `_tag_colormapped`'s
+            # docstring on why every colormapped layer keeps its source scalars beside
+            # its colours regardless of whether today's GUI picker reads them back.
+            "cvalues": values[mask],
+        }
     )
+    _set_dirty(plot_obj)
+    _set_current_mappable(layer)
     return counts, xedges, yedges, layer
 
 
@@ -12843,10 +12906,22 @@ def tick_params(axis: str = "both", **kwargs: Any) -> None:
         >>> gplt.tick_params(axis='both', length=6)
     """
     plot = _get_or_create_plot()
-    supported = {"length", "labelsize", "which", "direction", "labelbottom", "labelleft"}
+    supported = {
+        "length",
+        "labelsize",
+        "labelcolor",
+        "which",
+        "direction",
+        "labelbottom",
+        "labelleft",
+    }
     if "length" in kwargs:
         plot.options.axis_tick_len_px = float(kwargs["length"])
         plot.options.axis_show_ticks = True
+    if "labelsize" in kwargs:
+        plot.options.axis_tick_fontsize = float(kwargs["labelsize"])
+    if "labelcolor" in kwargs:
+        plot.options.axis_tick_color = kwargs["labelcolor"]
     unsupported = {k: v for k, v in kwargs.items() if k not in supported}
     _warn_unsupported("tick_params", unsupported)
     _set_dirty(plot)

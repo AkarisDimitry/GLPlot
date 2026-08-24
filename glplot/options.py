@@ -228,6 +228,13 @@ class EngineOptions:
     axis_ylabel_fontsize: Optional[float] = None
     axis_ylabel_color: Optional[ColorOption] = None
 
+    # Tick label styling, from `gplt.tick_params(labelsize=..., labelcolor=...)` or the GUI.
+    # Same "None means unset" convention as the annotation styling above: unscaled, automatic
+    # light-on-dark ink. `axis_tick_fontsize` is matplotlib POINTS, resolved the same way as
+    # `axis_xlabel_fontsize` -- see `AxisRenderer._font_scale`.
+    axis_tick_fontsize: Optional[float] = None
+    axis_tick_color: Optional[ColorOption] = None
+
     # Axis scale mode, from `gplt.xscale()`/`yscale()`. "linear", "log", "symlog", and
     # "asinh" are real -- see `glplot.utils.scale`. Every layer's GPU buffer is built from
     # this at upload time; `layer.pts` itself is never transformed, so the Data panel and CSV

@@ -579,7 +579,8 @@ _KIND_DEFAULT_OPTIONS: Dict[str, Dict[str, Any]] = {
     "bar": {"baseline": 0.0, "bar_width": 0.0, "align": "center"},
     "hist": {"bins": 0, "baseline": 0.0, "density": False, "cumulative": False},
     "boxplot": {"whis": 1.5, "box_width": 0.0},
-    "hist2d": {"bins": 0, "cmap": "magma"},
+    "hist2d": {"bins": 0, "mincnt": 0, "pad": 0.0, "cmap": "magma"},
+    "hexbin": {"gridsize": 0, "mincnt": 0, "pad": 0.0, "cmap": "viridis"},
     # The span each line is drawn across. Unlike every other kind's options these are not
     # a styling choice -- they are half the geometry, since a slope and an intercept do
     # not say where the line starts or stops. `layer_kind_options` recovers the real pair
@@ -875,14 +876,42 @@ def _boxplot_geometry(xs: np.ndarray, ys: np.ndarray, whis: float, box_width: fl
     return np.ascontiguousarray(path, dtype=np.float32)
 
 
-def _hist2d_geometry(xs: np.ndarray, ys: np.ndarray, bins: int) -> Tuple[np.ndarray, np.ndarray]:
-    """The joint density of ``(xs, ys)`` as ``(cell centres, counts)``.
+#: The floor a cell's ``pad`` scale factor is clamped to, regardless of what the UI slider
+#: allows: a scale of exactly 0 collapses every rectangle/hexagon to a single point (a
+#: degenerate, invisible triangle), and a negative one inverts its winding. Both are worse
+#: failures than "the shrink went further than the slider's own -90% floor suggested."
+_MIN_CELL_SCALE = 0.02
 
-    Mirrors ``pyplot.hist2d`` (``pyplot.py:1638-1652``) exactly -- same ``histogram2d``,
-    same centres, same "drop the empty cells" mask -- so the two draw the same picture
-    from the same numbers. This is the one heat map a two-column table can express: it is
-    a *density of the rows*, not an image. An image needs a 2-D grid, and no table shape
+
+def _hist2d_geometry(
+    xs: np.ndarray, ys: np.ndarray, bins: int, mincnt: int = 0, pad: float = 0.0
+) -> Tuple[np.ndarray, np.ndarray, str, np.ndarray]:
+    """The joint density of ``(xs, ys)`` as a filled grid: ``(vertices, indices, mode,
+    per-cell count)`` -- one rectangular tile per surviving cell, built with the same
+    :func:`_rect_geometry` a bar chart's own rectangles go through.
+
+    Mirrors ``pyplot.hist2d`` (``pyplot.py:7570+``) exactly -- same ``histogram2d``, same
+    cell edges, same "drop the empty cells" mask -- so the two draw the same picture from
+    the same numbers. This is the one heat map a two-column table can express: it is a
+    *density of the rows*, not an image. An image needs a 2-D grid, and no table shape
     means that (see :data:`UNSUPPORTED_KINDS`).
+
+    A real tiled mesh, not a scatter of one sized point per cell centre: a point's pixel
+    size cannot track the actual bin width (it neither shrinks to close gaps at a coarse
+    grid nor grows to avoid overlap at a fine one, and cannot represent a non-square cell
+    at all), so what used to draw as a loose cloud of coloured dots now draws as the
+    continuous, correctly-tiled heat map the name promises.
+
+    ``mincnt`` drops any surviving cell holding fewer than this many points, the GUI's own
+    name for what ``pyplot.hist2d``'s ``cmin`` already does -- 0 (the default) keeps every
+    non-empty cell, exactly today's behaviour.
+
+    ``pad`` is a percentage adjustment to every cell's own half-size around its own centre:
+    0 (the default) is the exact edge-to-edge fit this function always produced before the
+    parameter existed; positive values grow each cell (deliberate overlap, useful for
+    closing a hairline seam some GL drivers' antialiasing leaves along an exactly-shared
+    edge); negative values shrink it (a visible gap between cells, a common heat map
+    style). Clamped so the scale factor never reaches :data:`_MIN_CELL_SCALE`.
 
     Empty cells are dropped rather than drawn at zero: a full grid of mostly-zero squares
     paints the background solid at the colormap's low end and hides the data.
@@ -894,17 +923,150 @@ def _hist2d_geometry(xs: np.ndarray, ys: np.ndarray, bins: int) -> Tuple[np.ndar
     keep = np.isfinite(xa) & np.isfinite(ya)
     xa, ya = xa[keep], ya[keep]
     if len(xa) == 0:
-        return np.zeros((0, 2), dtype=np.float32), np.zeros(0, dtype=np.float64)
+        return (
+            np.zeros((0, 2), dtype=np.float32),
+            np.zeros(0, dtype=np.uint32),
+            "triangles",
+            np.zeros(0, dtype=np.float64),
+        )
 
     n = _hist_bin_count(len(xa), bins)
     counts, xedges, yedges = np.histogram2d(xa, ya, bins=n)
-    xc = 0.5 * (xedges[:-1] + xedges[1:])
-    yc = 0.5 * (yedges[:-1] + yedges[1:])
-    xx, yy = np.meshgrid(xc, yc, indexing="ij")
+    nx, ny = counts.shape
+    ix_all, iy_all = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
     values = counts.ravel()
     mask = values > 0
-    pts = np.ascontiguousarray(np.column_stack([xx.ravel()[mask], yy.ravel()[mask]]), np.float32)
-    return pts, values[mask]
+    if mincnt > 0:
+        mask &= values >= mincnt
+    ix, iy = ix_all.ravel()[mask], iy_all.ravel()[mask]
+
+    x0, x1 = xedges[ix], xedges[ix + 1]
+    y0, y1 = yedges[iy], yedges[iy + 1]
+    scale = max(_MIN_CELL_SCALE, 1.0 + float(pad) / 100.0)
+    if scale != 1.0:
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        hw, hh = (x1 - x0) / 2.0 * scale, (y1 - y0) / 2.0 * scale
+        x0, x1, y0, y1 = cx - hw, cx + hw, cy - hh, cy + hh
+
+    verts, indices = _rect_geometry(x0, x1, y0, y1)
+    return verts, indices, "triangles", values[mask]
+
+
+def _hexbin_geometry(
+    xs: np.ndarray, ys: np.ndarray, gridsize: int, mincnt: int = 0, pad: float = 0.0
+) -> Tuple[np.ndarray, np.ndarray, str, np.ndarray]:
+    """The hexagonally-binned density of ``(xs, ys)``, as a triangle-fan mesh:
+    ``(vertices, indices, mode, per-hexagon count)``.
+
+    Reimplements ``pyplot.hexbin``'s own lattice-assignment and hexagon-mesh code
+    (``pyplot.py:7112-7187``) rather than importing it: ``pyplot.py`` imports FROM
+    this module (colormap helpers, mostly), so the reverse import would cycle -- the
+    same reason :func:`_hist2d_geometry` above independently reimplements
+    ``pyplot.hist2d``'s binning instead of calling it. Verified numerically identical
+    to ``pyplot.hexbin``'s own hexagon centres/counts before trusting it (see the
+    test suite).
+
+    A hexagonal lattice is two rectangular lattices, the second offset by half a cell
+    in both directions; a point belongs to whichever centre is nearer, which *is* the
+    hex tessellation and needs no polygon test. ``gridsize`` is resolved through the
+    same auto-heuristic ``hist2d`` uses for its bin count (0 = auto).
+
+    ``mincnt`` drops any hexagon holding fewer than this many points, the same name and
+    semantics ``pyplot.hexbin``'s own ``mincnt`` already has -- 0 (the default) keeps
+    every non-empty hexagon.
+
+    ``pad`` scales every hexagon's own radius (both its own ``rx``/``ry``) by
+    ``1 + pad/100`` around its own centre -- see :func:`_hist2d_geometry`'s docstring for
+    the full rationale (0 = today's exact edge-to-edge fit, positive = deliberate
+    overlap, negative = a visible gap). Clamped the same way, to :data:`_MIN_CELL_SCALE`.
+
+    Rows where either column is non-finite are dropped -- the lattice assignment
+    cannot bin them. Unlike a histogram grid there is no "empty cell" to filter out
+    afterward: only hexagons that actually received at least one point exist at all.
+    """
+    xa = np.asarray(xs, dtype=np.float64)
+    ya = np.asarray(ys, dtype=np.float64)
+    keep = np.isfinite(xa) & np.isfinite(ya)
+    xa, ya = xa[keep], ya[keep]
+    if len(xa) == 0:
+        return (
+            np.zeros((0, 2), dtype=np.float32),
+            np.zeros(0, dtype=np.uint32),
+            "triangles",
+            np.zeros(0, dtype=np.float64),
+        )
+
+    nx = _hist_bin_count(len(xa), gridsize)
+    ny = max(1, int(round(nx / np.sqrt(3.0))))
+
+    xmin, xmax = float(np.min(xa)), float(np.max(xa))
+    ymin, ymax = float(np.min(ya)), float(np.max(ya))
+    if xmax - xmin < 1e-12:
+        xmin, xmax = xmin - 0.5, xmax + 0.5
+    if ymax - ymin < 1e-12:
+        ymin, ymax = ymin - 0.5, ymax + 0.5
+    dx = (xmax - xmin) / nx
+    dy = (ymax - ymin) / ny
+
+    ix1 = np.clip(np.floor((xa - xmin) / dx).astype(np.int64), 0, nx - 1)
+    iy1 = np.clip(np.floor((ya - ymin) / dy).astype(np.int64), 0, ny - 1)
+    ix2 = np.clip(np.floor((xa - xmin - dx / 2.0) / dx).astype(np.int64), 0, nx - 2)
+    iy2 = np.clip(np.floor((ya - ymin - dy / 2.0) / dy).astype(np.int64), 0, ny - 2)
+
+    cx1 = xmin + (ix1 + 0.5) * dx
+    cy1 = ymin + (iy1 + 0.5) * dy
+    cx2 = xmin + (ix2 + 1.0) * dx
+    cy2 = ymin + (iy2 + 1.0) * dy
+
+    # Compared in *cell* units, not world units: an anisotropic extent would otherwise
+    # let one axis dominate the distance and the lattice would shear into stripes.
+    d1 = ((xa - cx1) / dx) ** 2 + ((ya - cy1) / dy) ** 2
+    d2 = ((xa - cx2) / dx) ** 2 + ((ya - cy2) / dy) ** 2
+    use_second = d2 < d1
+
+    centres_x = np.where(use_second, cx2, cx1)
+    centres_y = np.where(use_second, cy2, cy1)
+    # One integer id per distinct hexagon, so the counts reduce with bincount rather
+    # than a Python dict keyed on a float pair.
+    ident = (
+        np.where(use_second, 1, 0) * (nx * ny)
+        + np.where(use_second, iy2, iy1) * nx
+        + np.where(use_second, ix2, ix1)
+    )
+
+    unique, inverse = np.unique(ident, return_inverse=True)
+    counts = np.bincount(inverse).astype(np.float64)
+    centres = np.empty((len(unique), 2), dtype=np.float64)
+    centres[:, 0] = np.bincount(inverse, weights=centres_x) / counts
+    centres[:, 1] = np.bincount(inverse, weights=centres_y) / counts
+
+    if mincnt > 0:
+        survive = counts >= mincnt
+        counts, centres = counts[survive], centres[survive]
+
+    # A flat-topped hexagon (hub + six corners) around each centre, as a triangle fan
+    # -- the lattice's own proportions, so the hexagons tile the extent they were
+    # binned on rather than being round in a window that is not.
+    angles = np.deg2rad(np.array([0.0, 60.0, 120.0, 180.0, 240.0, 300.0], dtype=np.float64))
+    scale = max(_MIN_CELL_SCALE, 1.0 + float(pad) / 100.0)
+    rx, ry = dx / 2.0 * scale, dy / np.sqrt(3.0) * scale
+    offx, offy = rx * np.cos(angles), ry * np.sin(angles)
+
+    n = len(centres)
+    verts = np.empty((n * 7, 2), dtype=np.float32)
+    verts[0::7] = centres
+    for k in range(6):
+        verts[k + 1 :: 7, 0] = centres[:, 0] + offx[k]
+        verts[k + 1 :: 7, 1] = centres[:, 1] + offy[k]
+
+    base = np.arange(n, dtype=np.uint32) * 7
+    fan = np.empty((n, 18), dtype=np.uint32)
+    for k in range(6):
+        fan[:, 3 * k] = base
+        fan[:, 3 * k + 1] = base + 1 + k
+        fan[:, 3 * k + 2] = base + 1 + ((k + 1) % 6)
+
+    return verts, fan.ravel(), "triangles", counts
 
 
 def colormap_colors(
@@ -1057,16 +1219,47 @@ _KIND_REGISTRY: Dict[str, PlotKind] = {
     "hist2d": PlotKind(
         key="hist2d",
         label="heat map (hist2d)",
-        layer_type="scatter",
+        layer_type="patch",
         derived=True,
         icon="chart_scatter",
         colormapped=True,
-        geom=lambda xs, ys, opts: _hist2d_geometry(xs, ys, int(opts.get("bins", 0))),
+        geom=lambda xs, ys, opts: _hist2d_geometry(
+            xs,
+            ys,
+            int(opts.get("bins", 0)),
+            int(opts.get("mincnt", 0)),
+            float(opts.get("pad", 0.0)),
+        ),
         description="Bin the rows onto a 2-D grid and colour each cell by how many "
         "landed in it. Empty cells are not drawn, and the cells do not line up with the "
-        "table's rows. Cells draw as round points sized in pixels (the engine has no "
-        "marker shapes), so they read as a dot grid rather than a tiled image, and Point "
-        "size — not the bin count — is what closes the gaps at a given zoom.",
+        "table's rows. Cells are a real filled rectangular mesh, tiling solidly with no "
+        "gaps or overlap at any zoom -- the bin count is what controls resolution, not "
+        "a point-size knob to fight with. Mincnt hides any surviving cell below that "
+        "count (0 = show every non-empty cell). Pad grows or shrinks every cell around "
+        "its own centre by that percentage (0 = exact edge-to-edge fit).",
+    ),
+    "hexbin": PlotKind(
+        key="hexbin",
+        label="hex density (hexbin)",
+        layer_type="patch",
+        derived=True,
+        icon="chart_scatter",
+        colormapped=True,
+        geom=lambda xs, ys, opts: _hexbin_geometry(
+            xs,
+            ys,
+            int(opts.get("gridsize", 0)),
+            int(opts.get("mincnt", 0)),
+            float(opts.get("pad", 0.0)),
+        ),
+        description="Bin the rows onto a hexagonal lattice and colour each hexagon by "
+        "how many landed in it. A hexagonal tiling has no rows/columns to draw the "
+        "eye's attention where none exists in the data, unlike a square grid -- the "
+        "honest alternative to hist2d for a genuinely dense scatter. Hexagons are a "
+        "real filled mesh (not points), so unlike hist2d they tile solidly with no "
+        "point-size knob to fight with. Gridsize 0 = auto. Mincnt hides any surviving "
+        "hexagon below that count (0 = show every non-empty one). Pad grows or shrinks "
+        "every hexagon around its own centre by that percentage (0 = exact fit).",
     ),
 }
 
@@ -1228,13 +1421,29 @@ def add_xy_layer(
             label=str(label),
         )
     else:
-        verts, indices, mode = geometry
-        # Colour-by-column for bars: one value per bar mapped through the colormap, then
-        # broadcast to that bar's vertices (bars are a fixed number of verts each, so the
-        # repeat factor is len(verts) / len(values)). Only ``bar`` -- a histogram's bins do
-        # not line up with an input column, and a fill band is one shape, not one-per-row.
+        # A colormapped patch kind (hexbin) hands geometry back as (verts, indices,
+        # mode, values) -- unpack the values here so the colour source below (the
+        # kind's own values, an explicit bar ``c``, or a flat colour) all see the
+        # same verts/indices/mode, mirroring how the scatter branch above unpacks a
+        # colormapped kind's (points, values) before its own colour-source check.
+        if spec.colormapped:
+            verts, indices, mode, kind_values = geometry
+        else:
+            verts, indices, mode = geometry
+            kind_values = None
+        # Colour-by-column: a colormapped kind's own per-hexagon/per-cell values, or
+        # (bar only) one value per bar from an explicit ``c``, mapped through the
+        # colormap and broadcast to that shape's vertices (a fixed count each, so the
+        # repeat factor is len(verts) / len(values)). Everything else -- a histogram's
+        # bins, a fill band -- has no per-row values to colour by at all.
         face_colors = None
-        if c is not None and spec.key == "bar":
+        if spec.colormapped and kind_values is not None:
+            cvalues = np.asarray(kind_values, dtype=np.float64)
+            patch_colors = colormap_colors(cvalues, str(opts.get("cmap", "viridis")))
+            rep = len(verts) // max(len(patch_colors), 1)
+            if rep >= 1 and rep * len(patch_colors) == len(verts):
+                face_colors = np.repeat(patch_colors, rep, axis=0).astype(np.float32)
+        elif c is not None and spec.key == "bar":
             bar_vals = np.asarray(c, dtype=np.float64).ravel()
             bar_colors = colormap_colors(bar_vals, str(cmap))
             rep = len(verts) // max(len(bar_colors), 1)
@@ -1451,12 +1660,22 @@ def update_layer_kind_data(
     *,
     kind: str,
     options: Optional[Dict[str, Any]] = None,
+    c: Optional[Any] = None,
+    cmap: Optional[str] = None,
 ) -> bool:
     """Re-derive ``layer``'s geometry for ``kind`` from ``x``/``y``, in place.
 
     **Queued commands only.** This is what makes a bar chart or a histogram follow a
     cell edit: the geometry is recomputed by the same :attr:`PlotKind.geom` that built
     it, so the live link cannot diverge from what Plot would draw.
+
+    ``c``/``cmap`` are the same data-driven colour encoding :func:`add_xy_layer` takes —
+    a per-row column mapped through ``cmap`` for a plain scatter/line/bar kind (a
+    colormapped kind ignores them; its colours are its own values, handled below). This
+    is what lets a kind switch or a cell edit carry the encoding forward instead of
+    silently dropping back to a flat colour: see :func:`replot_layer_xy`, which is the
+    only caller and resolves ``c``/``cmap`` from the layer's own retained metadata when
+    the caller does not supply an explicit override.
 
     Returns False — having changed nothing — when the layer cannot absorb the new
     geometry, in which case the caller must rebuild it. The one case that matters is a
@@ -1473,26 +1692,54 @@ def update_layer_kind_data(
     opts = _resolve_options(spec.key, options)
     geometry = spec.geom(xs, ys, opts)
 
-    if spec.colormapped:
+    if spec.colormapped and spec.layer_type == "scatter":
         # The colours are the data here, so they are re-derived with the points: a bin
         # count change moves every cell and rescales every count, and `_swap_pts`'s
         # colour re-fit only ever stretches the old array to the new length -- it would
         # leave the previous grid's colours on the new grid's cells.
         pts, values = geometry
         _swap_pts(plot, layer, np.ascontiguousarray(pts, dtype=np.float32))
-        cmap = str(opts.get("cmap", "viridis"))
-        layer.colors = colormap_colors(values, cmap)
-        _tag_colormapped(layer, values, cmap)
+        kind_cmap = str(opts.get("cmap", "viridis"))
+        layer.colors = colormap_colors(values, kind_cmap)
+        _tag_colormapped(layer, values, kind_cmap)
     elif spec.layer_type in ("scatter", "polyline"):
         _swap_pts(plot, layer, np.ascontiguousarray(geometry, dtype=np.float32))
+        if c is not None:
+            cvals = np.asarray(c, dtype=np.float64).ravel()
+            if len(cvals) == len(geometry):
+                c_cmap = cmap or "viridis"
+                layer.colors = colormap_colors(cvals, c_cmap)
+                _tag_colormapped(layer, cvals, c_cmap)
     else:
-        verts, indices, mode = geometry
+        # A colormapped patch kind (hexbin) hands back a 4th element -- the per-hexagon
+        # counts -- alongside verts/indices/mode, same as `add_xy_layer`'s patch branch.
+        if spec.colormapped:
+            verts, indices, mode, values = geometry
+        else:
+            verts, indices, mode = geometry
+            values = None
         if (getattr(layer, "indices", None) is None) != (indices is None):
             return False
         layer.vertices = np.ascontiguousarray(verts, dtype=np.float32)
         if indices is not None:
             layer.indices = np.ascontiguousarray(indices, dtype=np.uint32)
         layer.mode = mode
+        if values is not None:
+            kind_cmap = str(opts.get("cmap", "viridis"))
+            cvalues = np.asarray(values, dtype=np.float64)
+            patch_colors = colormap_colors(cvalues, kind_cmap)
+            rep = len(layer.vertices) // max(len(patch_colors), 1)
+            if rep >= 1 and rep * len(patch_colors) == len(layer.vertices):
+                layer.colors = np.repeat(patch_colors, rep, axis=0).astype(np.float32)
+            _tag_colormapped(layer, cvalues, kind_cmap)
+        elif c is not None and spec.key == "bar":
+            bar_vals = np.asarray(c, dtype=np.float64).ravel()
+            bar_cmap = cmap or "viridis"
+            bar_colors = colormap_colors(bar_vals, bar_cmap)
+            rep = len(layer.vertices) // max(len(bar_colors), 1)
+            if rep >= 1 and rep * len(bar_colors) == len(layer.vertices):
+                layer.colors = np.repeat(bar_colors, rep, axis=0).astype(np.float32)
+                _tag_colormapped(layer, bar_vals, bar_cmap)
 
     tag_layer_kind(layer, spec.key, options=opts, source_xy=(xs, ys) if spec.derived else None)
     layer.dirty.gpu_dirty = True
@@ -1679,14 +1926,16 @@ _LEGACY_KIND_LAYER_TYPES: dict[str, tuple[str, ...]] = {
 #: The ``pyplot`` artists whose geometry *is* the x/y the caller plotted, and so are the
 #: only ones :data:`_LEGACY_KIND_LAYER_TYPES` may speak for. A whitelist, not a blacklist:
 #: ``layer_type`` is far too coarse to infer a kind from on its own, because ``imshow``,
-#: ``pcolormesh``, ``hist2d`` and ``contour`` all render as a ``scatter`` of one point per
-#: cell -- that is how the engine draws a field, not a plot of rows. Reading those as the
-#: plain ``scatter`` kind offers the user a type change that throws the picture away and
-#: cannot put it back: rebuilt "as a scatter" they return as bare points, the colormap and
-#: the grid gone. ``axhline``/``axvline`` are guides that span the view rather than lines
-#: through data. An artist that is not named here has no kind, the type menu greys out,
-#: and the layer keeps working -- which is why the list must stay a whitelist: a new
-#: artist is unknown until someone confirms it belongs, rather than silently misread.
+#: ``pcolormesh`` and ``contour`` all render as a ``scatter`` of one point per cell, and
+#: ``hist2d`` renders as a ``patch`` mesh of one filled tile per cell -- neither is how
+#: the engine draws a plot of rows. Reading any of them as the plain ``scatter``/``bar``
+#: kind their ``layer_type`` happens to share offers the user a type change that throws
+#: the picture away and cannot put it back: rebuilt "as a scatter" they return as bare
+#: points, the colormap and the grid gone. ``axhline``/``axvline`` are guides that span
+#: the view rather than lines through data. An artist that is not named here has no
+#: kind, the type menu greys out, and the layer keeps working -- which is why the list
+#: must stay a whitelist: a new artist is unknown until someone confirms it belongs,
+#: rather than silently misread.
 _PLAIN_XY_ARTISTS: frozenset = frozenset({"line", "scatter", "marker", "step", None})
 
 #: Style fields carried across a kind change. ``color``/``line_width``/``point_size``
@@ -1918,6 +2167,8 @@ def replot_layer_xy(
     kind: str,
     label: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
+    c: Optional[Any] = None,
+    cmap: Optional[str] = None,
 ) -> Any:
     """Re-plot ``x``/``y`` **into** ``layer``, and return the layer now holding them.
 
@@ -1943,11 +2194,43 @@ def replot_layer_xy(
     A same-kind layer that cannot absorb the geometry (see
     :func:`update_layer_kind_data`) falls through to the rebuild path rather than
     failing: rebuilding is always correct, only more expensive.
+
+    ``c``/``cmap`` are an explicit data-driven colour encoding, exactly
+    :func:`add_xy_layer`'s. When the caller does not supply ``c`` this instead falls
+    back to whatever the *old* layer's colours were mapped from
+    (``metadata["cvalues"]``/``["cmap"]``, the same retainer :func:`replot_layer_xyz`
+    already reads) — otherwise a Style-panel plot-type change or a Data-panel replot
+    would quietly flatten a ``scatter(c=...)``/colour-by-column encoding to a single
+    solid colour on every kind switch, which is exactly the mapping the picker still
+    shows as selected. Never for a colormapped *target* kind (hist2d, hexbin): those own
+    their colours outright, so recovery would paint their bins with the previous kind's
+    per-row values instead of the new kind's own density/counts. Row count is the other
+    guard: a colormapped kind's own grid/bin values are never row-count-sized, so they
+    never get mistaken for a reusable per-row encoding when switching away from one, and
+    an edit that changed the row count safely degrades to no mapping rather than
+    colouring the wrong rows.
     """
     kind_key = str(kind).strip().lower()
+    xs_for_color, _ = _coerce_xy(x, y)
+
+    resolved_c = c
+    resolved_cmap = cmap
+    if resolved_c is None and not kind_spec(kind_key).colormapped:
+        metadata = getattr(layer, "metadata", None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        stored_values = metadata.get("cvalues")
+        if stored_values is not None:
+            candidate = np.asarray(stored_values, dtype=np.float64).ravel()
+            if candidate.size == xs_for_color.size:
+                resolved_c = candidate
+                if resolved_cmap is None:
+                    stored_cmap = metadata.get("cmap")
+                    resolved_cmap = str(stored_cmap) if stored_cmap else None
+    if resolved_cmap is None:
+        resolved_cmap = "viridis"
 
     if layer_matches_kind(layer, kind_key) and update_layer_kind_data(
-        plot, layer, x, y, kind=kind_key, options=options
+        plot, layer, x, y, kind=kind_key, options=options, c=resolved_c, cmap=resolved_cmap
     ):
         if label and getattr(layer, "label", None) != str(label):
             layer.label = str(label)
@@ -1978,6 +2261,8 @@ def replot_layer_xy(
         width=float(getattr(old_style, "line_width", 1.0)),
         size=float(getattr(old_style, "point_size", 6.0)),
         options=options,
+        c=resolved_c,
+        cmap=resolved_cmap,
     )
 
     if old_style is not None:

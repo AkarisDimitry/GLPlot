@@ -215,3 +215,83 @@ class TestUmapEmbed:
         cols = [rng.normal(0.0, 1.0, 20) for _ in range(3)]
         res = mathopsnd.umap_embed(cols, n_neighbors=5, seed=0)
         assert res["embedding"].shape == (20, 2)
+
+
+class TestPcaOutOfSample:
+    """Phase 1: pca()'s new mean_/scale_stats_ keys, and pca_transform() -- the
+    out-of-sample half a held-out val/test split needs."""
+
+    def test_pca_return_dict_includes_mean_and_scale_stats(self):
+        rng = np.random.default_rng(30)
+        cols = [rng.normal(0.0, 1.0, 100) for _ in range(3)]
+        res = mathopsnd.pca(cols, n_components=2, scale="zscore")
+        assert res["mean_"].shape == (3,)
+        assert set(res["scale_stats_"].keys()) == {"mean", "std"}
+        assert res["scale_stats_"]["mean"].shape == (3,)
+
+    def test_pca_transform_matches_pcas_own_scores_on_the_same_call(self):
+        rng = np.random.default_rng(31)
+        cols = [rng.normal(0.0, 1.0, 150) for _ in range(4)]
+        cols[1] = cols[0] * 2.0 + rng.normal(0.0, 0.05, 150)
+        res = mathopsnd.pca(cols, n_components=3, scale="zscore")
+        scores = mathopsnd.pca_transform(
+            cols,
+            mean_=res["mean_"],
+            components_=res["components"],
+            scale_stats=res["scale_stats_"],
+            scale="zscore",
+        )
+        assert np.allclose(scores, res["scores"], atol=1e-8)
+
+    def test_scale_columns_stats_and_apply_scale_round_trip_scale_columns(self):
+        rng = np.random.default_rng(32)
+        m = np.column_stack([rng.normal(5.0, 2.0, 80), rng.normal(-1.0, 6.0, 80)])
+        for mode in mathopsnd.SCALE_MODES:
+            expected = mathopsnd.scale_columns(m, mode=mode)
+            stats = mathopsnd.scale_columns_stats(m, mode=mode)
+            got = mathopsnd.apply_scale(m, stats, mode=mode)
+            assert np.array_equal(got, expected)
+
+    def test_pca_transform_uses_the_fitted_stats_not_a_fresh_refit(self):
+        rng = np.random.default_rng(33)
+        # Fit on data centered around 0.
+        fit_cols = [rng.normal(0.0, 1.0, 200) for _ in range(3)]
+        res = mathopsnd.pca(fit_cols, n_components=2, scale="zscore")
+
+        # Transform data with a WILDLY different mean/scale -- if pca_transform re-fit
+        # its own stats from this new data instead of using the passed-in ones, the
+        # result would be centered near 0 (its own mean subtracted). Using the FITTED
+        # stats instead leaves the huge offset largely intact after centering.
+        far_cols = [np.full(10, 500.0), np.full(10, 500.0), np.full(10, 500.0)]
+        scores = mathopsnd.pca_transform(
+            far_cols,
+            mean_=res["mean_"],
+            components_=res["components"],
+            scale_stats=res["scale_stats_"],
+            scale="zscore",
+        )
+        assert np.all(np.abs(scores) > 50.0)
+
+
+class TestUmapOutOfSample:
+    """Phase 1: umap_embed()'s new reducer/scale_stats_ keys -- the out-of-sample half
+    a held-out val/test split or a later phase's transfer needs."""
+
+    def test_umap_embed_returns_a_reducer_with_a_working_transform(self):
+        pytest.importorskip("umap")
+        rng = np.random.default_rng(34)
+        cols = [rng.normal(0.0, 1.0, 60) for _ in range(3)]
+        res = mathopsnd.umap_embed(cols, n_components=2, n_neighbors=10, seed=0)
+        assert hasattr(res["reducer"], "transform")
+        assert set(res["scale_stats_"].keys()) == {"mean", "std"}
+
+    def test_reducer_transform_on_held_out_rows_has_the_right_shape(self):
+        pytest.importorskip("umap")
+        rng = np.random.default_rng(35)
+        cols = [rng.normal(0.0, 1.0, 60) for _ in range(3)]
+        res = mathopsnd.umap_embed(cols, n_components=2, n_neighbors=10, seed=0)
+
+        holdout = np.column_stack([rng.normal(0.0, 1.0, 12) for _ in range(3)])
+        scaled_holdout = mathopsnd.apply_scale(holdout, res["scale_stats_"], mode="zscore")
+        projected = res["reducer"].transform(scaled_holdout)
+        assert projected.shape == (12, 2)

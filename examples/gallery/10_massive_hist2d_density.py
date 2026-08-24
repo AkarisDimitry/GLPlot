@@ -19,11 +19,10 @@ plt.figure("Gallery - Detector Impact Density", figsize=(8, 6))
 # large-angle outliers stretch that to +/-150 mm): this is the "zoom in" the
 # populated core needs, and it keeps every displayed cell backed by enough of
 # the 10M hits to read as a continuous density field instead of a halo of
-# isolated single-count dots. `s` is sized to the resulting bin pitch on the
-# canvas so neighboring cells overlap slightly and no grid of gaps shows
-# between them (the previous s=2.0 was far smaller than the cell pitch, which
-# is what made the headless render look like a hatched grid instead of a
-# density map).
+# isolated single-count cells. hist2d() draws a real filled rectangular mesh
+# (one tile per bin, sized exactly to the bin pitch), so unlike the old
+# point-marker rendering there is no separate size knob to tune for gap-free
+# tiling -- it tiles solidly by construction at any bin count.
 lim = 45.0
 plt.hist2d(
     x,
@@ -31,7 +30,6 @@ plt.hist2d(
     bins=170,
     range=[[-lim, lim], [-lim, lim]],
     cmap="plasma",
-    s=40.0,
     label=f"{n:,} hits",
 )
 plt.title(f"{n:,}-hit density map on a detector plane after multiple Coulomb scattering")

@@ -14,14 +14,20 @@ stale forever.
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pytest
 
 import glplot.pyplot as gplt
 from glplot.engine import GPULinePlot
-from glplot.gui import layerops
+from glplot.gui import layerops, notifications
 from glplot.gui.datasets import Column, DataSet
-from glplot.gui.panels.data_editor import _can_replot_into
+from glplot.gui.panels.data_editor import (
+    _can_replot_into,
+    _read_csv_table,
+    _write_csv_table,
+)
 from glplot.gui.panels.scene import _can_change_kind
 
 
@@ -44,6 +50,20 @@ def _panel():
 def _dataset(ws, name="t", n=5):
     """A bound-able x/y dataset registered in the workspace store."""
     ds = DataSet(name, [Column("x", np.arange(float(n))), Column("y", np.arange(float(n)) ** 2)])
+    ws.store.add(ds)
+    return ds
+
+
+def _dataset_with_color(ws, name="t", n=8):
+    """An x/y dataset plus a third column meant for a "Color by" encoding."""
+    ds = DataSet(
+        name,
+        [
+            Column("x", np.arange(float(n))),
+            Column("y", np.arange(float(n)) ** 2),
+            Column("c", np.linspace(0.0, 1.0, n)),
+        ],
+    )
     ws.store.add(ds)
     return ds
 
@@ -194,6 +214,59 @@ class TestPlotKindChange:
         assert ds.layer_id == layer.layer_id
 
 
+class TestColorEncodingSurvivesPanelKindChange:
+    """The "Color by" column must survive a Kind change and re-Plot, not just the first
+    Plot press -- and the panel must be able to say which column it is, so the Data
+    panel reflects what the scene is actually showing rather than only what the "Color
+    by" combo happens to have selected at that moment.
+    """
+
+    def test_kind_change_keeps_the_colour_by_column(self):
+        plot, ws, panel = _panel()
+        ds = _dataset_with_color(ws)
+        panel._select(ds)
+        panel._plot_x, panel._plot_y, panel._plot_kind = "x", "y", "scatter"
+        panel._plot_c = "c"
+        panel._plot_dataset(ds)
+        ws.queue.drain(plot)
+
+        layer = plot.scene.layers[0]
+        assert layer.metadata.get("cvalues") is not None
+        assert np.asarray(layer.metadata["cvalues"]) == pytest.approx(ds.get("c"), abs=1e-3)
+
+        panel._plot_kind = "bar"
+        panel._plot_dataset(ds)
+        ws.queue.drain(plot)
+
+        layer = plot.scene.layers[0]
+        assert layer.layer_type != "scatter"
+        assert layer.metadata.get("cvalues") is not None
+        assert np.asarray(layer.metadata["cvalues"]) == pytest.approx(ds.get("c"), abs=1e-3)
+        # A real per-bar mapping, not every bar painted the same flat colour.
+        assert len(np.unique(layer.colors, axis=0)) > 1
+
+    def test_status_line_reports_the_colour_column(self):
+        plot, ws, panel = _panel()
+        ds = _dataset_with_color(ws)
+        panel._select(ds)
+        panel._plot_x, panel._plot_y, panel._plot_kind = "x", "y", "scatter"
+        panel._plot_c = "c"
+        panel._plot_dataset(ds)
+        ws.queue.drain(plot)
+
+        layer = plot.scene.layers[0]
+        assert panel._layer_color_column(ds, layer) == "c"
+
+    def test_no_colour_encoding_reports_no_column(self):
+        plot, ws, panel = _panel()
+        ds = _dataset_with_color(ws)
+        panel._select(ds)
+        _plot_once(ws, panel, ds, kind="scatter")
+
+        layer = plot.scene.layers[0]
+        assert panel._layer_color_column(ds, layer) is None
+
+
 class TestReplotRefusesToStrandALayer:
     """The Data panel must not offer a re-plot that nothing can undo.
 
@@ -236,10 +309,14 @@ class TestReplotRefusesToStrandALayer:
     @pytest.mark.parametrize(
         "name, make_layer",
         [
-            # Fields: the engine draws every one of these as a scatter of cells, which is
-            # exactly why `from_layer` binds them and `layer_type` cannot be trusted.
+            # A field: the engine draws it as a scatter of one point per cell, which is
+            # exactly why `from_layer` binds it and `layer_type` cannot be trusted. Note
+            # `hist2d` is *not* here despite being a field too -- it is a `patch` now
+            # (a real filled mesh, not a scatter of points; see `TestHist2dParity`), and
+            # `DataSet.from_layer` refuses every patch outright (no editable tabular
+            # form -- `test_patch_layer_has_no_tabular_form` in test_gui_datasets.py), so
+            # it never reaches this "bound but must still refuse" scenario at all.
             ("imshow", lambda p: gplt.imshow(np.random.default_rng(0).random((8, 8)))),
-            ("hist2d", lambda p: gplt.hist2d(np.linspace(0, 1, 40), np.linspace(0, 1, 40))),
             # A guide spans the view rather than passing through data.
             ("axhline", lambda p: gplt.axhline(0.5)),
             # 3-D: bindable (its vertices are x/y/z columns) and no 2-D kind rebuilds it.
@@ -249,6 +326,22 @@ class TestReplotRefusesToStrandALayer:
     def test_the_button_is_refused_on_a_kindless_layer(self, name, make_layer):
         plot, ws, panel, ds, layer = self._kindless_bound(make_layer)
         assert _can_replot_into(layer) is False, f"{name} would still be replotted away"
+
+    def test_hist2d_cannot_even_be_bound_as_a_dataset(self):
+        """Confirms the real, integration-level fact ``_kindless_bound``'s assertion
+        would otherwise mask: ``hist2d`` moved from "bindable field, must still refuse
+        replot" to "not bindable at all" the moment it became a ``patch`` (a real filled
+        mesh) rather than a ``scatter`` of one sized point per cell. Same rule every
+        patch already follows (``test_patch_layer_has_no_tabular_form`` in
+        test_gui_datasets.py), checked here against the real artist, not a synthetic
+        ``PatchLayer``, so a future change to ``hist2d``'s geometry cannot silently
+        make it bindable again without this catching it.
+        """
+        gplt.figure("hist2d binding probe")
+        gplt.hist2d(np.linspace(0.0, 1.0, 40), np.linspace(0.0, 1.0, 40))
+        layer = gplt.gcf().scene.layers[-1]
+        assert layer.layer_type == "patch"
+        assert DataSet.from_layer(layer) is None
 
     @pytest.mark.parametrize(
         "name, make_layer",
@@ -835,3 +928,908 @@ class TestKindRegistry:
         layer = layerops.add_xy_layer(plot, [0.0, 1.0], [np.nan, np.nan], kind="hist", label="h")
         assert len(layer.vertices) == 0
         assert layer.get_intrinsic_bounds() is None
+
+
+# ----------------------------------------------------------------------------------
+# CSV import/export: read/write correctness, then background dispatch/poll/cancel.
+# Backgrounded so an arbitrarily large file does not freeze the interface (see
+# glplot/gui/panels/data_editor.py's _import_csv/_export_csv docstrings and
+# glplot/gui/background.py). This was an untested gap before -- no prior test in this
+# file exercised _import_csv/_export_csv at all.
+# ----------------------------------------------------------------------------------
+
+
+def _wait_until(predicate, *, timeout=2.0, interval=0.005):
+    """Poll ``predicate`` until it's truthy or ``timeout`` seconds have elapsed --
+    robust against scheduler jitter, matching test_gui_mathlab.py's helper of the same
+    shape. Unlike that one, no _draw_frame is driven here: _import_csv/_export_csv/
+    _poll_csv_job are plain methods, not imgui draw code (see this file's own
+    established convention of calling panel action methods directly)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(interval)
+    raise AssertionError(f"condition not met within {timeout}s")
+
+
+class TestReadWriteCsvTable:
+    """_read_csv_table/_write_csv_table: pure, module-level, safe to background."""
+
+    def test_round_trips_a_table(self, tmp_path):
+        path = str(tmp_path / "out.csv")
+        headers = ["x", "y"]
+        array = np.array([[0.0, 1.0], [2.0, 4.0], [3.0, 9.0]])
+        _write_csv_table(path, headers, array)
+        read_headers, read_array = _read_csv_table(path)
+        assert read_headers == headers
+        assert np.allclose(read_array, array)
+
+    def test_missing_file_raises_a_could_not_read_message(self, tmp_path):
+        path = str(tmp_path / "does_not_exist.csv")
+        with pytest.raises(RuntimeError, match="Could not read"):
+            _read_csv_table(path)
+
+    def test_unwritable_directory_raises_a_could_not_write_message(self, tmp_path):
+        path = str(tmp_path / "no_such_dir" / "out.csv")
+        with pytest.raises(RuntimeError, match="Could not write"):
+            _write_csv_table(path, ["x"], np.array([[1.0]]))
+
+    def test_malformed_content_raises_with_the_path_named(self, tmp_path):
+        """An empty file has no header/body at all -- parse_table's own ValueError,
+        surfaced with the offending path named, not just its bare message."""
+        path = str(tmp_path / "empty.csv")
+        with open(path, "w") as fh:
+            fh.write("")
+        with pytest.raises(RuntimeError, match=r"empty\.csv"):
+            _read_csv_table(path)
+
+
+class TestCsvImportExportSync:
+    """panel._import_csv()/_export_csv(): the synchronous path, unchanged behavior."""
+
+    def _sync_panel(self):
+        plot, ws, panel = _panel()
+        plot._is_test_mode = True  # deterministic: same-call-returns-final-state
+        return plot, ws, panel
+
+    def test_import_creates_a_dataset_from_the_path_field(self, tmp_path):
+        path = tmp_path / "data.csv"
+        path.write_text("x,y\n1,2\n3,4\n")
+        _plot, ws, panel = self._sync_panel()
+        panel._csv_path = str(path)
+
+        panel._import_csv()
+
+        assert "data" in ws.store.names()
+        ds = ws.store.get("data")
+        assert ds.n_rows() == 2
+        assert ds.n_cols() == 2
+        assert panel._error == ""
+        assert "Imported" in panel._status
+
+    def test_import_of_a_missing_file_sets_error_not_a_dataset(self, tmp_path):
+        _plot, ws, panel = self._sync_panel()
+        panel._csv_path = str(tmp_path / "nope.csv")
+        before = set(ws.store.names())
+
+        panel._import_csv()
+
+        assert set(ws.store.names()) == before
+        assert "Could not read" in panel._error
+
+    def test_export_writes_the_current_dataset(self, tmp_path):
+        path = tmp_path / "out.csv"
+        _plot, ws, panel = self._sync_panel()
+        ds = _dataset(ws, name="e")
+        panel._csv_path = str(path)
+
+        panel._export_csv(ds)
+
+        assert path.exists()
+        headers, array = _read_csv_table(str(path))
+        assert headers == ["x", "y"]
+        assert array.shape[0] == ds.n_rows()
+        assert "Exported" in panel._status
+
+    def test_export_to_an_unwritable_path_sets_error(self, tmp_path):
+        _plot, ws, panel = self._sync_panel()
+        ds = _dataset(ws, name="e2")
+        panel._csv_path = str(tmp_path / "missing_dir" / "out.csv")
+
+        panel._export_csv(ds)
+
+        assert "Could not write" in panel._error
+
+
+class TestCsvAsyncEnabled:
+    """_async_enabled(): identical contract to MathLabPanel's/PipelinePanel's."""
+
+    def test_default_is_asynchronous_under_a_real_plot(self):
+        """Unlike Math Lab/Pipeline's _FakePlot-based tests, this file's own
+        convention is a REAL GPULinePlot -- confirms _async_enabled works against the
+        real engine class, not just a mock that happens to lack the attribute."""
+        _plot, _ws, panel = _panel()
+        assert panel._async_enabled() is True
+
+    def test_is_test_mode_true_is_synchronous(self):
+        plot, _ws, panel = _panel()
+        plot._is_test_mode = True
+        assert panel._async_enabled() is False
+
+    def test_force_async_overrides_is_test_mode(self):
+        plot, _ws, panel = _panel()
+        plot._is_test_mode = True
+        panel._force_async = True
+        assert panel._async_enabled() is True
+
+
+class TestCsvAsyncCompute:
+    """Background CSV import/export: dispatch/poll/settle/cancel/retry/notify.
+
+    _import_csv/_export_csv/_poll_csv_job are plain methods (imgui only enters through
+    _draw_io_section's buttons/busy-row, tested separately below), so these are driven
+    by calling them directly -- matching this file's own established convention -- and
+    waited on via _wait_until's poll-until-condition loop, never a fixed sleep.
+    """
+
+    def _async_panel(self):
+        plot, ws, panel = _panel()
+        plot._is_test_mode = True  # belt-and-suspenders; _force_async is authoritative
+        panel._force_async = True
+        return plot, ws, panel
+
+    def test_import_is_pending_not_blocking_then_settles(self, tmp_path, monkeypatch):
+        path = tmp_path / "data.csv"
+        path.write_text("x,y\n1,2\n3,4\n")
+        _plot, ws, panel = self._async_panel()
+        panel._csv_path = str(path)
+        monkeypatch.setattr(
+            "glplot.gui.panels.data_editor._read_csv_table",
+            lambda p: (time.sleep(0.05), _read_csv_table(p))[1],
+        )
+
+        start = time.monotonic()
+        panel._import_csv()
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.1, "dispatching a background import must not block"
+        assert panel._csv_job is not None
+        assert "data" not in ws.store.names()
+
+        _wait_until(lambda: (panel._poll_csv_job(), "data" in ws.store.names())[1])
+        assert panel._csv_job is None
+        ds = ws.store.get("data")
+        assert ds.n_rows() == 2
+
+    def test_second_import_click_while_pending_is_ignored(self, tmp_path, monkeypatch):
+        path = tmp_path / "big.csv"
+        path.write_text("x,y\n1,2\n")
+        _plot, ws, panel = self._async_panel()
+        panel._csv_path = str(path)
+        monkeypatch.setattr(
+            "glplot.gui.panels.data_editor._read_csv_table",
+            lambda p: (time.sleep(0.2), _read_csv_table(p))[1],
+        )
+        panel._import_csv()
+        job = panel._csv_job
+        panel._import_csv()  # must not replace the in-flight job
+        assert panel._csv_job is job
+
+    def test_export_settles_and_writes_the_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "out.csv"
+        _plot, ws, panel = self._async_panel()
+        ds = _dataset(ws, name="e")
+        panel._csv_path = str(path)
+        monkeypatch.setattr(
+            "glplot.gui.panels.data_editor._write_csv_table",
+            lambda p, h, a: (time.sleep(0.05), _write_csv_table(p, h, a))[1],
+        )
+
+        panel._export_csv(ds)
+        assert not path.exists()  # not yet -- still running in the background
+
+        _wait_until(lambda: (panel._poll_csv_job(), path.exists())[1])
+        assert "Exported" in panel._status
+
+    def test_import_failure_surfaces_via_poll(self, tmp_path):
+        _plot, ws, panel = self._async_panel()
+        panel._csv_path = str(tmp_path / "missing.csv")
+
+        panel._import_csv()
+        _wait_until(lambda: (panel._poll_csv_job(), panel._error != "")[1])
+        assert "Could not read" in panel._error
+
+    def test_cancel_stops_waiting_immediately(self, tmp_path, monkeypatch):
+        path = tmp_path / "big.csv"
+        path.write_text("x,y\n1,2\n")
+        _plot, ws, panel = self._async_panel()
+        panel._csv_path = str(path)
+        monkeypatch.setattr(
+            "glplot.gui.panels.data_editor._read_csv_table",
+            lambda p: (time.sleep(0.3), _read_csv_table(p))[1],
+        )
+        panel._import_csv()
+        job = panel._csv_job
+        job.cancel()
+
+        panel._poll_csv_job()
+        assert panel._csv_job is None
+        assert "data" not in ws.store.names()
+        assert job.poll().state == "cancelled"
+
+    def test_notification_pushed_for_a_slow_import(self, tmp_path, monkeypatch):
+        path = tmp_path / "data.csv"
+        path.write_text("x,y\n1,2\n")
+        _plot, ws, panel = self._async_panel()
+        panel._csv_path = str(path)
+        monkeypatch.setattr("glplot.gui.panels.data_editor._ASYNC_NOTIFY_THRESHOLD_SECONDS", 0.0)
+        notifications.clear()
+
+        panel._import_csv()
+        _wait_until(lambda: (panel._poll_csv_job(), "data" in ws.store.names())[1])
+
+        toasts = notifications.active()
+        assert len(toasts) == 1
+        assert toasts[0].kind == "success"
+        notifications.clear()
+
+    def test_no_notification_below_the_threshold(self, tmp_path, monkeypatch):
+        path = tmp_path / "data.csv"
+        path.write_text("x,y\n1,2\n")
+        _plot, ws, panel = self._async_panel()
+        panel._csv_path = str(path)
+        monkeypatch.setattr("glplot.gui.panels.data_editor._ASYNC_NOTIFY_THRESHOLD_SECONDS", 999.0)
+        notifications.clear()
+
+        panel._import_csv()
+        _wait_until(lambda: (panel._poll_csv_job(), "data" in ws.store.names())[1])
+        assert notifications.active() == []
+        notifications.clear()
+
+
+class TestCsvAsyncUiIntegration:
+    """_draw_io_section's busy row and Cancel button, driven through a real headless
+    imgui frame -- a lighter-weight harness than the rest of this file's, scoped to
+    just this method (which is all that touches imgui in the CSV import/export path)."""
+
+    @pytest.fixture
+    def imgui_context(self):
+        imgui_bundle = pytest.importorskip("imgui_bundle")
+        imgui = imgui_bundle.imgui
+        ctx = imgui.create_context()
+        io = imgui.get_io()
+        io.display_size = 800, 600
+        io.delta_time = 1 / 60.0
+        io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+        yield io
+        imgui.destroy_context(ctx)
+
+    def _draw_io(self, panel, ds):
+        from imgui_bundle import imgui
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((0.0, 0.0))
+        imgui.set_next_window_size((400.0, 200.0))
+        imgui.begin("##test")
+        panel._draw_io_section(ds)
+        imgui.end()
+        imgui.render()
+
+    def test_busy_row_appears_while_pending(self, imgui_context, tmp_path, monkeypatch):
+        from imgui_bundle import imgui
+
+        path = tmp_path / "big.csv"
+        path.write_text("x,y\n1,2\n")
+        _plot, ws, panel = _panel()
+        panel._force_async = True
+        panel._csv_path = str(path)
+        monkeypatch.setattr(
+            "glplot.gui.panels.data_editor._read_csv_table",
+            lambda p: (time.sleep(0.2), _read_csv_table(p))[1],
+        )
+        ds = _dataset(ws, name="d")
+        panel._import_csv()
+
+        texts = []
+        real_text = imgui.text
+
+        def spy_text(s, *a, **k):
+            texts.append(str(s))
+            return real_text(s, *a, **k)
+
+        monkeypatch.setattr(imgui, "text", spy_text)
+        self._draw_io(panel, ds)
+        assert any("Importing" in t for t in texts)
+
+    def test_cancel_button_click_reaches_the_job(self, imgui_context, tmp_path, monkeypatch):
+        from imgui_bundle import imgui
+
+        path = tmp_path / "big.csv"
+        path.write_text("x,y\n1,2\n")
+        _plot, ws, panel = _panel()
+        panel._force_async = True
+        panel._csv_path = str(path)
+        monkeypatch.setattr(
+            "glplot.gui.panels.data_editor._read_csv_table",
+            lambda p: (time.sleep(0.3), _read_csv_table(p))[1],
+        )
+        ds = _dataset(ws, name="d")
+        panel._import_csv()
+        job = panel._csv_job
+        assert job is not None
+
+        real_button = imgui.button
+
+        def spy_button(label, *a, **k):
+            if label.startswith("Cancel##"):
+                return True
+            return real_button(label, *a, **k)
+
+        monkeypatch.setattr(imgui, "button", spy_button)
+        self._draw_io(panel, ds)
+
+        assert job.poll().state == "cancelled"
+
+    def test_import_export_buttons_hidden_while_pending(self, imgui_context, tmp_path, monkeypatch):
+        path = tmp_path / "big.csv"
+        path.write_text("x,y\n1,2\n")
+        _plot, ws, panel = _panel()
+        panel._force_async = True
+        panel._csv_path = str(path)
+        monkeypatch.setattr(
+            "glplot.gui.panels.data_editor._read_csv_table",
+            lambda p: (time.sleep(0.2), _read_csv_table(p))[1],
+        )
+        ds = _dataset(ws, name="d")
+        panel._import_csv()
+
+        tooltips = []
+        real_icon_button = None
+        from glplot.gui import icons as icons_module
+
+        real_icon_button = icons_module.icon_button
+
+        def spy_icon_button(id_str, shape, *a, **k):
+            tooltips.append(k.get("tooltip"))
+            return real_icon_button(id_str, shape, *a, **k)
+
+        monkeypatch.setattr(icons_module, "icon_button", spy_icon_button)
+        self._draw_io(panel, ds)
+        assert "Import CSV" not in tooltips
+        assert "Export CSV" not in tooltips
+
+
+# ----------------------------------------------------------------------------------
+# Transform-section parameter sliders + live preview -- "excel + desmos": free
+# variables in a Transform expression (a*x + b) become sliders (glplot/gui/
+# expressions.py's free_variables(), already built for panels/functions.py's
+# identical Desmos-style slider feature), and the resulting column is previewed live
+# before Apply bakes the current slider values in (see DataEditorPanel._transform's
+# own docstring on why this is a snapshot, not a live link).
+# ----------------------------------------------------------------------------------
+
+
+def _dataset_xy(ws, name="t", n=5):
+    ds = DataSet(name, [Column("x", np.arange(float(n))), Column("y", np.arange(float(n)) * 2.0)])
+    ws.store.add(ds)
+    return ds
+
+
+class TestSyncTransformParams:
+    """_sync_transform_params(): auto-detecting sliders from the expression text."""
+
+    def test_detects_free_variables_excluding_columns(self):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * x + b"
+        panel._sync_transform_params(ds)
+        assert panel._transform_param_order == ["a", "b"]
+        assert set(panel._transform_params) == {"a", "b"}
+
+    def test_column_names_are_never_treated_as_parameters(self):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "x + y"
+        panel._sync_transform_params(ds)
+        assert panel._transform_param_order == []
+
+    def test_new_params_default_to_one(self):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "k * x"
+        panel._sync_transform_params(ds)
+        assert panel._transform_params["k"].value == 1.0
+
+    def test_is_gated_on_the_expression_text_changing(self):
+        """Test that re-syncing the SAME text is a no-op -- a per-frame call must not
+        re-detect (and potentially reset) sliders every single frame."""
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        panel._transform_params["a"].value = 7.0
+        panel._sync_transform_params(ds)  # same text again
+        assert panel._transform_params["a"].value == 7.0
+
+    def test_an_existing_slider_value_survives_editing_the_expression_further(self):
+        """Test that tweaking a already has a dialled-in value that a*x -> a*x+b keeps."""
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        panel._transform_params["a"].value = 3.0
+        panel._transform_expr = "a * x + b"
+        panel._sync_transform_params(ds)
+        assert panel._transform_params["a"].value == 3.0
+        assert panel._transform_params["b"].value == 1.0
+
+    def test_a_dropped_parameter_stays_remembered_but_leaves_the_order(self):
+        """Test that removing 'b' from the text drops it from what's DRAWN, but the
+        slider state itself is not discarded -- typing it back restores the value."""
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * x + b"
+        panel._sync_transform_params(ds)
+        panel._transform_params["b"].value = 9.0
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        assert panel._transform_param_order == ["a"]
+        assert panel._transform_params["b"].value == 9.0
+
+    def test_an_invalid_expression_leaves_the_previous_sliders_in_place(self):
+        """Test that a mid-typing/hostile expression does not yank sliders away."""
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        panel._transform_expr = "a * x +"  # incomplete -- invalid
+        panel._sync_transform_params(ds)
+        assert panel._transform_param_order == ["a"]
+
+    def test_hash_never_becomes_a_parameter(self):
+        """Test that '#' (the auto-bound row index) is excluded, same as it is for
+        panels/functions.py's identical slider feature."""
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * # + b"
+        panel._sync_transform_params(ds)
+        assert panel._transform_param_order == ["a", "b"]
+
+    def test_caps_remembered_parameters(self):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        from glplot.gui.panels.data_editor import _MAX_REMEMBERED_PARAMS
+
+        for i in range(_MAX_REMEMBERED_PARAMS + 5):
+            panel._transform_expr = f"p{i}"
+            panel._sync_transform_params(ds)
+        assert len(panel._transform_params) <= _MAX_REMEMBERED_PARAMS
+
+
+class TestTransformPreview:
+    """_draw_transform_preview(): a live, cached preview of the transform's output."""
+
+    @pytest.fixture
+    def imgui_context(self):
+        imgui_bundle = pytest.importorskip("imgui_bundle")
+        imgui = imgui_bundle.imgui
+        ctx = imgui.create_context()
+        io = imgui.get_io()
+        io.display_size = 800, 600
+        io.delta_time = 1 / 60.0
+        io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+        yield io
+        imgui.destroy_context(ctx)
+
+    def _draw(self, panel, fn):
+        from imgui_bundle import imgui
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((0.0, 0.0))
+        imgui.set_next_window_size((400.0, 300.0))
+        imgui.begin("##test")
+        fn()
+        imgui.end()
+        imgui.render()
+
+    def test_computes_the_expected_values(self, imgui_context):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * x + b"
+        panel._sync_transform_params(ds)
+        panel._transform_params["a"].value = 2.0
+        panel._transform_params["b"].value = 1.0
+
+        self._draw(panel, lambda: panel._draw_transform_preview(ds))
+
+        assert panel._transform_preview_error == ""
+        assert np.allclose(panel._transform_preview_values, 2.0 * ds.get("x") + 1.0)
+
+    def test_recomputes_when_a_slider_moves(self, imgui_context):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        self._draw(panel, lambda: panel._draw_transform_preview(ds))
+        first = panel._transform_preview_values.copy()
+
+        panel._transform_params["a"].value = 5.0
+        self._draw(panel, lambda: panel._draw_transform_preview(ds))
+        assert not np.allclose(first, panel._transform_preview_values)
+        assert np.allclose(panel._transform_preview_values, 5.0 * ds.get("x"))
+
+    def test_does_not_recompute_when_nothing_changed(self, imgui_context, monkeypatch):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        self._draw(panel, lambda: panel._draw_transform_preview(ds))
+
+        calls = []
+        real_eval = DataSet.eval_expression
+
+        def spy_eval(self, expr, **kwargs):
+            calls.append(expr)
+            return real_eval(self, expr, **kwargs)
+
+        monkeypatch.setattr(DataSet, "eval_expression", spy_eval)
+        self._draw(panel, lambda: panel._draw_transform_preview(ds))
+        assert calls == []
+
+    def test_a_bad_expression_shows_an_error_not_a_crash(self, imgui_context):
+        """'x.real' -- attribute access -- is rejected by the AST allowlist itself
+        (unlike 'x + nope', where 'nope' just becomes a new parameter, not an error:
+        that is the whole point of this feature, so it is not a case that can test
+        error handling)."""
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_expr = "x.real"
+        panel._sync_transform_params(ds)
+        self._draw(panel, lambda: panel._draw_transform_preview(ds))
+        assert panel._transform_preview_error != ""
+        assert panel._transform_preview_values is None
+
+    def test_a_row_count_change_invalidates_the_cache(self, imgui_context):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws, n=5)
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        self._draw(panel, lambda: panel._draw_transform_preview(ds))
+        assert panel._transform_preview_values.size == 5
+
+        ds.add_column("z")  # does not change n_rows, but exercises the key regardless
+        ds.insert_row(0)
+        self._draw(panel, lambda: panel._draw_transform_preview(ds))
+        assert panel._transform_preview_values.size == 6
+
+
+class TestTransformApplyWithSliders:
+    """The panel-level "Apply" path: bakes in the CURRENT slider values."""
+
+    def test_apply_bakes_in_the_slider_values(self):
+        plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._select(ds)
+        panel._transform_expr = "a * x + b"
+        panel._sync_transform_params(ds)
+        panel._transform_params["a"].value = 3.0
+        panel._transform_params["b"].value = 2.0
+
+        variables = {n: p.value for n, p in panel._transform_params.items()}
+        panel._transform(ds, "y", "a * x + b", None, variables=variables)
+        ws.queue.drain(plot)
+
+        assert np.allclose(ds.get("y"), 3.0 * ds.get("x") + 2.0)
+
+    def test_apply_into_a_new_column_with_sliders(self):
+        plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._select(ds)
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        panel._transform_params["a"].value = 10.0
+
+        variables = {n: p.value for n, p in panel._transform_params.items()}
+        panel._transform(ds, "y", "a * x", "scaled", variables=variables)
+        ws.queue.drain(plot)
+
+        assert "scaled" in ds.column_names()
+        assert np.allclose(ds.get("scaled"), 10.0 * ds.get("x"))
+
+    def test_apply_is_undoable_with_sliders(self):
+        plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._select(ds)
+        before = ds.get("y").copy()
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        panel._transform_params["a"].value = 100.0
+
+        variables = {n: p.value for n, p in panel._transform_params.items()}
+        panel._transform(ds, "y", "a * x", None, variables=variables)
+        ws.queue.drain(plot)
+        assert np.allclose(ds.get("y"), 100.0 * ds.get("x"))
+
+        ws.undo.undo()
+        ws.queue.drain(plot)
+        assert np.allclose(ds.get("y"), before)
+
+    def test_slider_values_are_a_one_time_snapshot_not_a_live_link(self):
+        """The recommended, user-confirmed design: Apply bakes in today's slider
+        values; the column does NOT keep recomputing when the slider moves again
+        afterward (that would need a wholly different, live-reactive column concept
+        this codebase deliberately does not have -- see the memory on this decision)."""
+        plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._select(ds)
+        panel._transform_expr = "a * x"
+        panel._sync_transform_params(ds)
+        panel._transform_params["a"].value = 2.0
+
+        variables = {n: p.value for n, p in panel._transform_params.items()}
+        panel._transform(ds, "y", "a * x", "scaled", variables=variables)
+        ws.queue.drain(plot)
+        first = ds.get("scaled").copy()
+
+        panel._transform_params["a"].value = 999.0  # moving the slider afterward...
+        assert np.array_equal(ds.get("scaled"), first)  # ...must not touch the column
+
+
+class TestTransformSliderUiIntegration:
+    """Driven through the real headless imgui harness (_draw_filter_section directly
+    -- it lives inside a collapsed-by-default section in the real panel tree, so
+    tests call it directly rather than fighting that collapse state, matching this
+    file's existing conventions elsewhere in this class)."""
+
+    @pytest.fixture
+    def imgui_context(self):
+        imgui_bundle = pytest.importorskip("imgui_bundle")
+        imgui = imgui_bundle.imgui
+        ctx = imgui.create_context()
+        io = imgui.get_io()
+        io.display_size = 800, 700
+        io.delta_time = 1 / 60.0
+        io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+        yield io
+        imgui.destroy_context(ctx)
+
+    def _draw(self, panel, ds):
+        from imgui_bundle import imgui
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((0.0, 0.0))
+        imgui.set_next_window_size((500.0, 700.0))
+        imgui.begin("##test")
+        panel._draw_filter_section(ds)
+        imgui.end()
+        imgui.render()
+
+    def test_sliders_appear_for_a_parametrized_expression(self, imgui_context, monkeypatch):
+        """A real imgui.slider_float call is drawn per detected parameter -- checked
+        by spying on the widget itself, not on 'Parameters' (that text is imgui's own
+        collapsing_header label, drawn internally, never through a plain imgui.text()
+        call a Python-level spy could ever observe)."""
+        from imgui_bundle import imgui
+
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_col = "y"
+        panel._transform_expr = "a * x + b"
+
+        labels = []
+        real_slider = imgui.slider_float
+
+        def spy_slider(label, *a, **k):
+            labels.append(label)
+            return real_slider(label, *a, **k)
+
+        monkeypatch.setattr(imgui, "slider_float", spy_slider)
+        for _ in range(3):
+            labels.clear()
+            self._draw(panel, ds)
+
+        assert labels == ["a", "b"]
+
+    def test_full_flow_type_drag_apply(self, imgui_context, monkeypatch):
+        """Type an expression, drag a slider (simulated directly, imgui sliders are
+        not scriptable via synthetic mouse events in this headless harness), click
+        Apply, and confirm the committed column used the dragged value."""
+        from imgui_bundle import imgui
+
+        plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._select(ds)
+        panel._transform_col = "y"
+        panel._transform_expr = "a * x"
+        panel._transform_to_new = True
+        panel._transform_target = "scaled"
+
+        for _ in range(2):
+            self._draw(panel, ds)
+        assert "a" in panel._transform_params
+        panel._transform_params["a"].value = 4.0
+
+        real_button = imgui.button
+
+        def spy_button(label, *a, **k):
+            if label == "Apply":
+                return True
+            return real_button(label, *a, **k)
+
+        monkeypatch.setattr(imgui, "button", spy_button)
+        self._draw(panel, ds)
+        ws.queue.drain(plot)
+
+        assert "scaled" in ds.column_names()
+        assert np.allclose(ds.get("scaled"), 4.0 * ds.get("x"))
+
+    def test_reset_button_resets_the_parameter_to_one(self, imgui_context, monkeypatch):
+        _plot, ws, panel = _panel()
+        ds = _dataset_xy(ws)
+        panel._transform_col = "y"
+        panel._transform_expr = "a * x"
+        for _ in range(2):
+            self._draw(panel, ds)
+        panel._transform_params["a"].value = 42.0
+
+        def spy_icon_button(id_str, shape, *a, **k):
+            if shape == "refresh":
+                return True
+            return False
+
+        from glplot.gui import icons as icons_module
+
+        monkeypatch.setattr(icons_module, "icon_button", spy_icon_button)
+        self._draw(panel, ds)
+
+        assert panel._transform_params["a"].value == 1.0
+
+
+class TestIndexAxisOption:
+    """ "(index)" as a real X/Y/Z axis pick, not just a colour/size encoding.
+
+    A table with no natural "against what" column (a bare 2-column x,y series, say)
+    can be plotted against its own row number, mirroring the "Color by"/"Size by"
+    pickers' pre-existing ``_INDEX_OPTION`` handling (see ``_resolve_encoding_arrays``).
+    """
+
+    @pytest.fixture
+    def imgui_context(self):
+        imgui_bundle = pytest.importorskip("imgui_bundle")
+        imgui = imgui_bundle.imgui
+        ctx = imgui.create_context()
+        io = imgui.get_io()
+        io.display_size = 800, 600
+        io.delta_time = 1 / 60.0
+        io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+        yield io
+        imgui.destroy_context(ctx)
+
+    def _draw_2d(self, panel, ds):
+        from imgui_bundle import imgui
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((0.0, 0.0))
+        imgui.set_next_window_size((400.0, 400.0))
+        imgui.begin("##test")
+        panel._draw_plot_section(ds)
+        imgui.end()
+        imgui.render()
+
+    def _draw_3d(self, panel, ds, names):
+        from imgui_bundle import imgui
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((0.0, 0.0))
+        imgui.set_next_window_size((400.0, 400.0))
+        imgui.begin("##test")
+        panel._draw_plot_section_3d(ds, names)
+        imgui.end()
+        imgui.render()
+
+    # -- picker offers the option -------------------------------------------------
+
+    def test_index_option_is_selectable_as_2d_x_column(self):
+        plot, ws, panel = _panel()
+        ds = _dataset(ws)
+        panel._plot_x, panel._plot_y = panel._INDEX_OPTION, "y"
+        panel._plot_kind = "line"
+        # A stale-pick reset would clobber this back to a real column; confirm the
+        # validity list widened to include the sentinel keeps it in place.
+        names = ds.column_names()
+        options = [panel._INDEX_OPTION] + list(names)
+        assert panel._plot_x in options
+
+    def test_index_option_is_selectable_as_2d_y_column(self):
+        plot, ws, panel = _panel()
+        ds = _dataset(ws)
+        panel._plot_x, panel._plot_y = "x", panel._INDEX_OPTION
+        names = ds.column_names()
+        options = [panel._INDEX_OPTION] + list(names)
+        assert panel._plot_y in options
+
+    # -- plotting synthesizes arange data ------------------------------------------
+
+    def test_plotting_with_index_x_produces_arange_data(self):
+        plot, ws, panel = _panel()
+        ds = _dataset(ws, n=6)
+        panel._select(ds)
+        panel._plot_x, panel._plot_y, panel._plot_kind = panel._INDEX_OPTION, "y", "line"
+        panel._plot_dataset(ds)
+        ws.queue.drain(plot)
+
+        layer = plot.scene.layers[0]
+        assert np.allclose(layer.pts[:, 0], np.arange(6, dtype=np.float64))
+        assert np.allclose(layer.pts[:, 1], ds.get("y"))
+
+    def test_plotting_with_index_y_produces_arange_data(self):
+        plot, ws, panel = _panel()
+        ds = _dataset(ws, n=6)
+        panel._select(ds)
+        panel._plot_x, panel._plot_y, panel._plot_kind = "x", panel._INDEX_OPTION, "line"
+        panel._plot_dataset(ds)
+        ws.queue.drain(plot)
+
+        layer = plot.scene.layers[0]
+        assert np.allclose(layer.pts[:, 0], ds.get("x"))
+        assert np.allclose(layer.pts[:, 1], np.arange(6, dtype=np.float64))
+
+    def test_index_option_is_selectable_as_3d_z_column(self):
+        plot, ws, panel = _panel()
+        ds = _dataset_with_color(ws, n=6)
+        panel._select(ds)
+        panel._plot_x, panel._plot_y, panel._plot_z = "x", "c", panel._INDEX_OPTION
+        panel._plot_kind3d = "scatter3d"
+        panel._plot_dataset_3d(ds)
+        ws.queue.drain(plot)
+
+        layer = next(ly for ly in plot.scene.layers if ly.layer_type == "scatter3d")
+        pts = np.asarray(layer.vertices)
+        assert np.allclose(pts[:, 0], ds.get("x"))
+        assert np.allclose(pts[:, 1], ds.get("c"))
+        assert np.allclose(pts[:, 2], np.arange(6, dtype=np.float64))
+
+    def test_index_option_is_selectable_as_3d_x_column(self):
+        plot, ws, panel = _panel()
+        ds = _dataset_with_color(ws, n=6)
+        panel._select(ds)
+        panel._plot_x, panel._plot_y, panel._plot_z = panel._INDEX_OPTION, "x", "c"
+        panel._plot_kind3d = "scatter3d"
+        panel._plot_dataset_3d(ds)
+        ws.queue.drain(plot)
+
+        layer = next(ly for ly in plot.scene.layers if ly.layer_type == "scatter3d")
+        pts = np.asarray(layer.vertices)
+        assert np.allclose(pts[:, 0], np.arange(6, dtype=np.float64))
+        assert np.allclose(pts[:, 1], ds.get("x"))
+        assert np.allclose(pts[:, 2], ds.get("c"))
+
+    # -- stale-pick validity check does not silently discard the sentinel ---------
+
+    def test_index_pick_survives_a_redraw_without_being_reset_to_a_real_column(self, imgui_context):
+        plot, ws, panel = _panel()
+        ds = _dataset(ws)
+        panel._select(ds)
+        panel._plot_x = panel._INDEX_OPTION
+        panel._plot_y = "y"
+
+        for _ in range(3):
+            self._draw_2d(panel, ds)
+
+        assert panel._plot_x == panel._INDEX_OPTION
+
+    def test_index_pick_survives_a_3d_redraw_without_being_reset(self, imgui_context):
+        plot, ws, panel = _panel()
+        ds = _dataset_with_color(ws, n=6)
+        panel._select(ds)
+        panel._plot_ndim = 3
+        panel._ndim_touched = True
+        panel._plot_x = "x"
+        panel._plot_y = "c"
+        panel._plot_z = panel._INDEX_OPTION
+        names = ds.column_names()
+
+        for _ in range(3):
+            self._draw_3d(panel, ds, names)
+
+        assert panel._plot_z == panel._INDEX_OPTION

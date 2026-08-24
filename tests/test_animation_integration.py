@@ -15,8 +15,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import glplot.animation as animation
 from glplot.engine import GPULinePlot
 from glplot.gui import layerops, layerops3d
+
+#: Several tests below build a ``FuncAnimation`` without binding it (they only care about
+#: what it did to ``fig.active_panel.timeline``), so it warns about being deleted without
+#: rendering at an arbitrary later GC point -- possibly attributed to an unrelated test.
+#: Same call as ``test_animation_api.py``'s module-level one, and for the same reason.
+pytestmark = pytest.mark.filterwarnings("ignore:Animation was deleted without rendering")
 
 
 @pytest.fixture
@@ -80,6 +87,178 @@ class TestFrameCallbacks:
         fig.add_frame_callback(lambda t: None)
         fig._run_frame_callbacks(1.0)
         assert fig.frame.dirty_scene is True
+
+
+def _engine_frame(fig, t: float) -> None:
+    """Simulate one iteration of ``GPULinePlot.run()``'s loop body, headless.
+
+    The real loop calls both in this order every frame (``engine.py``): the timeline moves
+    first, the frame callbacks read wherever it landed second. A test that only drives
+    ``_run_frame_callbacks`` never moves ``fig.active_panel.timeline.time`` at all, since
+    that is ``_advance_timelines``'s job alone now that a bound ``FuncAnimation`` reads the
+    timeline instead of keeping its own clock.
+    """
+    fig._advance_timelines(t)
+    fig._run_frame_callbacks(t)
+
+
+class TestFuncAnimationLivePlayback:
+    """``glplot.animation.TimedAnimation`` bound to ``fig.active_panel.timeline``.
+
+    A ``FuncAnimation`` built against a live GLPlot figure hands its frames to the same
+    playhead the GUI's Timeline panel already has transport controls for (see
+    :meth:`glplot.animation.TimedAnimation._start_live_playback`), rather than keeping an
+    independent clock the panel cannot reach. Driven headless via :func:`_engine_frame` --
+    no window, no GL needed.
+    """
+
+    def test_registers_exactly_one_frame_callback(self):
+        fig = GPULinePlot()
+        animation.FuncAnimation(fig, lambda i: None, frames=3, interval=10)
+        assert len(fig._frame_callbacks) == 1
+
+    def test_construction_configures_and_plays_the_panel_timeline(self):
+        fig = GPULinePlot()
+        animation.FuncAnimation(fig, lambda i: None, frames=5, interval=20, repeat=True)
+        timeline = fig.active_panel.timeline
+        assert timeline.playing is True
+        assert timeline.loop == "loop"
+        # 5 frames at 20ms apart span 80ms; an untouched fresh timeline may as well match
+        # exactly rather than leave the scrub bar longer than the animation.
+        assert timeline.duration == pytest.approx(0.08)
+
+    def test_non_repeating_sets_loop_mode_once(self):
+        fig = GPULinePlot()
+        animation.FuncAnimation(fig, lambda i: None, frames=5, interval=20, repeat=False)
+        assert fig.active_panel.timeline.loop == "once"
+
+    def test_existing_keyframes_are_not_truncated(self):
+        """A timeline with hand-authored content keeps its own (longer) length."""
+        fig = GPULinePlot()
+        timeline = fig.active_panel.timeline
+        timeline.key("camera3d", "elev", 0.0, time=0.0)
+        timeline.key("camera3d", "elev", 30.0, time=10.0)
+        timeline.fit_duration()
+        assert timeline.duration >= 10.0
+        animation.FuncAnimation(fig, lambda i: None, frames=3, interval=20)
+        assert timeline.duration >= 10.0
+
+    def test_steps_forward_as_the_timeline_plays(self):
+        fig = GPULinePlot()
+        seen = []
+        animation.FuncAnimation(
+            fig, lambda i: seen.append(i), frames=100, interval=10, repeat=False
+        )
+        t = 0.0
+        _engine_frame(fig, t)  # seeds the clock and draws frame 0
+        for _ in range(30):
+            t += 0.01  # exactly one animation frame of wall time per tick
+            _engine_frame(fig, t)
+        assert seen == sorted(seen), "frame index must never move backward while playing forward"
+        assert seen[0] == 0
+        assert seen[-1] >= 10
+
+    def test_repeat_true_replays_frame_zero(self):
+        fig = GPULinePlot()
+        seen = []
+        animation.FuncAnimation(fig, lambda i: seen.append(i), frames=3, interval=10, repeat=True)
+        t = 0.0
+        _engine_frame(fig, t)
+        for _ in range(60):
+            t += 0.007  # a stride that does not line up with the loop boundary
+            _engine_frame(fig, t)
+        assert seen[0] == 0
+        assert seen.count(0) > 1, "a looping animation must replay frame 0"
+
+    def test_repeat_false_stops_advancing_after_the_last_frame(self):
+        fig = GPULinePlot()
+        seen = []
+        animation.FuncAnimation(fig, lambda i: seen.append(i), frames=2, interval=10, repeat=False)
+        t = 0.0
+        _engine_frame(fig, t)
+        for _ in range(50):
+            t += 0.01
+            _engine_frame(fig, t)
+        assert seen == [0, 1]
+        assert fig.active_panel.timeline.playing is False, "'once' must stop at the last frame"
+
+    def test_pause_freezes_playback_and_resume_continues_it(self):
+        fig = GPULinePlot()
+        seen = []
+        ani = animation.FuncAnimation(
+            fig, lambda i: seen.append(i), frames=200, interval=10, repeat=False
+        )
+        t = 0.0
+        _engine_frame(fig, t)
+        t += 0.03
+        _engine_frame(fig, t)
+        ani.pause()
+        assert fig.active_panel.timeline.playing is False
+        frozen_at = len(seen)
+        assert 0 < frozen_at < 200, "test setup should leave frames both seen and remaining"
+        for _ in range(5):
+            t += 0.05
+            _engine_frame(fig, t)
+        assert len(seen) == frozen_at, "a paused animation must not advance"
+        ani.resume()
+        assert fig.active_panel.timeline.playing is True
+        t += 0.05
+        _engine_frame(fig, t)
+        assert len(seen) > frozen_at, "resuming must let it advance again"
+
+    def test_the_timeline_panels_own_transport_controls_it(self):
+        """Play/Pause/Stop/seek as the GUI's Timeline panel actually invokes them.
+
+        No independent knowledge of ``ani`` is used here on purpose: this is exactly what
+        pressing the panel's buttons and dragging its scrub bar does (see
+        ``gui/panels/timeline.py``'s ``_toggle_play``/``_stop``/``_seek``), proving the
+        animation is genuinely driven by the shared playhead, not by anything private to it.
+        """
+        fig = GPULinePlot()
+        seen = []
+        animation.FuncAnimation(fig, lambda i: seen.append(i), frames=50, interval=10, repeat=True)
+        timeline = fig.active_panel.timeline
+
+        t = 0.0
+        _engine_frame(fig, t)
+        for _ in range(10):
+            t += 0.01
+            _engine_frame(fig, t)
+        assert len(seen) > 1
+
+        timeline.toggle()  # the panel's Play/Pause button
+        assert timeline.playing is False
+        frozen_at = len(seen)
+        for _ in range(5):
+            t += 0.01
+            _engine_frame(fig, t)
+        assert len(seen) == frozen_at
+
+        timeline.seek(0.2)  # dragging the scrub bar while paused
+        _engine_frame(fig, t)
+        assert seen[-1] == timeline.frame_index()
+
+        timeline.stop()  # the panel's Stop button: pause + rewind
+        _engine_frame(fig, t)
+        assert seen[-1] == 0
+        assert timeline.playing is False
+
+    def test_a_real_matplotlib_figure_gets_no_frame_callback(self):
+        """The dual-path guarantee: a real canvas keeps using its own timer, untouched."""
+        matplotlib = pytest.importorskip("matplotlib")
+        matplotlib.use("Agg", force=False)
+        import matplotlib.pyplot as mpl_plt
+
+        fig, ax = mpl_plt.subplots()
+        ani = animation.FuncAnimation(fig, lambda i: None, frames=3, interval=10)
+        try:
+            assert not hasattr(fig, "_frame_callbacks")
+            assert ani.event_source is not None
+        finally:
+            # Suppress the unrelated "deleted without rendering" warning: this test never
+            # drives the animation, real or otherwise, on purpose.
+            ani._draw_was_started = True
+            mpl_plt.close(fig)
 
 
 class TestTimelinePlayback:

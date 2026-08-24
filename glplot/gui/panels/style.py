@@ -120,6 +120,13 @@ ALPHA_DEAD_TYPES = frozenset({"text"})
 #: module level and importing it here would break headless import (CONTRACT §5.1).
 AUTO_GRID_COLOR = (0.2, 0.2, 0.2)
 
+#: Paired with ``renderers/axis.py``'s ``_MPL_DEFAULT_TITLE_PT``/``_MPL_DEFAULT_LABEL_PT``:
+#: the matplotlib point size a tick/label/title's ``fontsize`` option is scaled against, so
+#: the slider default lands on "unscaled" rather than an arbitrary pixel count. Duplicated
+#: for the same headless-import reason as ``AUTO_GRID_COLOR`` above.
+_MPL_DEFAULT_TITLE_PT = 12.0
+_MPL_DEFAULT_LABEL_PT = 10.0
+
 #: The colour a patch fill is seeded with when the user enables it on a layer whose
 #: ``face_color`` is None (which is how ``add_patch`` leaves it).
 DEFAULT_FACE_COLOR = (0.30, 0.55, 0.90, 1.0)
@@ -2474,6 +2481,49 @@ class StylePanel(Panel):
 
         self._draw_axis_gutters(options)
 
+    def _draw_text_style_controls(
+        self,
+        options: Any,
+        label: str,
+        fontsize_attr: str,
+        color_attr: str,
+        default_pt: float,
+    ) -> None:
+        """Font size + colour for one text element (a tick, x/y-label, or the title).
+
+        Mirrors the Grid Color idiom above: font size is unset (auto, matching the stock
+        look) until touched, and colour defaults to "Auto Contrast" -- the luminance-derived
+        ink the renderer has always used, so a plot with a dark background does not go blind
+        the moment this tab is opened. Turning Auto Contrast off seeds black, the matplotlib
+        default and what a caller asking for "colour, black by default" actually wants.
+        """
+        changed, value = widgets.labeled_slider_float(
+            f"{label} Font Size##{fontsize_attr}",
+            float(getattr(options, fontsize_attr, None) or default_pt),
+            6.0,
+            48.0,
+            fmt="%.0f pt",
+        )
+        if changed:
+            self._set(options, fontsize_attr, value)
+
+        color = getattr(options, color_attr, None)
+        auto = color is None
+        changed, new_auto = imgui.checkbox(f"{label} Auto Color##{color_attr}", auto)
+        if changed:
+            self._set(options, color_attr, None if new_auto else (0.0, 0.0, 0.0))
+        imgui.same_line()
+        widgets.help_marker(
+            "On: picks dark or light ink from the background luminance, same as always. "
+            "Off: uses the color below (black by default)."
+        )
+
+        if not auto:
+            rgba = _as_rgba(color, (0.0, 0.0, 0.0, 1.0))
+            changed, new_color = imgui.color_edit3(f"{label} Color##{color_attr}", rgba[:3])
+            if changed:
+                self._set(options, color_attr, tuple(new_color))
+
     def _draw_axis_annotation(self, options: Any) -> None:
         """The x-label, y-label and plot title.
 
@@ -2484,9 +2534,9 @@ class StylePanel(Panel):
         if not widgets.section("Labels"):
             return
 
-        for label, option_name, attr_name in (
-            ("X Label", "axis_xlabel", "xlabel"),
-            ("Y Label", "axis_ylabel", "ylabel"),
+        for label, option_name, attr_name, fontsize_attr, color_attr in (
+            ("X Label", "axis_xlabel", "xlabel", "axis_xlabel_fontsize", "axis_xlabel_color"),
+            ("Y Label", "axis_ylabel", "ylabel", "axis_ylabel_fontsize", "axis_ylabel_color"),
         ):
             current = str(getattr(options, option_name, "") or "") or str(
                 getattr(self.plot, attr_name, "") or ""
@@ -2494,6 +2544,9 @@ class StylePanel(Panel):
             changed, value = imgui.input_text(label, current)
             if changed:
                 self._set(options, option_name, value)
+            self._draw_text_style_controls(
+                options, label, fontsize_attr, color_attr, _MPL_DEFAULT_LABEL_PT
+            )
 
         current_title = str(getattr(options, "axis_title", "") or "") or _plot_title(self.plot)
         changed, value = imgui.input_text("Title", current_title)
@@ -2504,6 +2557,9 @@ class StylePanel(Panel):
             "The title drawn above the frame. Separate from the OS window caption, which "
             "is what gplt.title() sets -- an untitled window is not captioned on the plot."
         )
+        self._draw_text_style_controls(
+            options, "Title", "axis_title_fontsize", "axis_title_color", _MPL_DEFAULT_TITLE_PT
+        )
 
         widgets.help_marker(
             "gplt.xlabel() / gplt.ylabel() write these too. The Y label is drawn rotated, "
@@ -2512,9 +2568,13 @@ class StylePanel(Panel):
         )
 
     def _draw_axis_ticks(self, options: Any) -> None:
-        """Tick density, spacing, subdivision, marks and label format."""
+        """Tick density, spacing, subdivision, marks, label format, font and colour."""
         if not widgets.section("Ticks", default_open=False):
             return
+
+        self._draw_text_style_controls(
+            options, "Tick Label", "axis_tick_fontsize", "axis_tick_color", _MPL_DEFAULT_LABEL_PT
+        )
 
         # 0 == auto for all four. Exposed as ints/floats with an explicit "Auto" caption
         # rather than a checkbox pair, because 0 is already the engine's sentinel.

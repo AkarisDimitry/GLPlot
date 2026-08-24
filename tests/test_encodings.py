@@ -194,3 +194,22 @@ class TestDataPanelEncodings:
         ws.queue.drain(plot)
         scatters = [ly for ly in plot.scene.layers if ly.layer_type == "scatter"]
         assert scatters and scatters[-1].sizes is None
+
+    def test_index_color_resolves_to_row_position(self):
+        plot, ws, panel = self._panel()
+        ds = self._dataset(ws, n=6)
+        panel._plot_kind = "scatter"
+        panel._plot_c = panel._INDEX_OPTION
+        c, _, _ = panel._resolve_encoding_arrays(ds)
+        assert c is not None and np.allclose(np.asarray(c), np.arange(6))
+
+    def test_index_size_normalises_like_a_real_column(self):
+        plot, ws, panel = self._panel()
+        ds = self._dataset(ws, n=6)
+        panel._plot_kind = "scatter"
+        panel._plot_s = panel._INDEX_OPTION
+        _, s, _ = panel._resolve_encoding_arrays(ds)
+        lo, hi = panel._SIZE_PX_RANGE
+        assert s is not None
+        assert float(np.min(s)) == pytest.approx(lo, abs=1e-3)
+        assert float(np.max(s)) == pytest.approx(hi, abs=1e-3)

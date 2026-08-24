@@ -22,7 +22,11 @@ import pytest
 
 import glplot.pyplot as gplt
 from glplot.options import EngineOptions
-from glplot.utils.shaders import WIDE_SEGMENT_INSTANCED_VS
+from glplot.utils.shaders import (
+    DENSITY_POINTS_VS,
+    SCATTER_VS,
+    WIDE_SEGMENT_INSTANCED_VS,
+)
 
 # ---------------------------------------------------------------------------
 # Shared fixture: reset pyplot state around every test
@@ -360,6 +364,39 @@ class TestShaderClipDistanceWrites:
             assert (
                 "u_window" in line or "-1.0" in line
             ), f"Clip distance assignment should use u_window or be a NaN-guard: {line}"
+
+
+class TestScatterShaderClipDistanceWrites:
+    """SCATTER_VS and DENSITY_POINTS_VS must declare u_window and unconditionally write
+    all 4 gl_ClipDistance values, same contract as WIDE_SEGMENT_INSTANCED_VS above.
+
+    Without this, GL_CLIP_DISTANCE0-3 (enabled globally whenever
+    ``enable_clipping_optimization`` is on) leaves these shaders' clip distances
+    undefined, so a scatter point outside the current camera view -- any pan/zoom that
+    crops the data range, which is the common case, not an edge case -- is not clipped
+    at the axis content box and instead draws straight through the tick-label margins
+    and out to the window edge.
+    """
+
+    @pytest.mark.parametrize("shader", [SCATTER_VS, DENSITY_POINTS_VS])
+    def test_u_window_uniform_declared(self, shader):
+        assert "uniform vec4  u_window;" in shader, "u_window must be declared as a vec4 uniform"
+
+    @pytest.mark.parametrize("shader", [SCATTER_VS, DENSITY_POINTS_VS])
+    def test_all_four_clip_distances_written(self, shader):
+        for i in range(4):
+            assert (
+                f"gl_ClipDistance[{i}]" in shader
+            ), f"gl_ClipDistance[{i}] must be written in the vertex shader"
+
+    @pytest.mark.parametrize("shader", [SCATTER_VS, DENSITY_POINTS_VS])
+    def test_clip_distances_use_u_window_components(self, shader):
+        lines_with_clip = [
+            line for line in shader.splitlines() if "gl_ClipDistance[" in line and "=" in line
+        ]
+        assert len(lines_with_clip) >= 4
+        for line in lines_with_clip:
+            assert "u_window" in line, f"Clip distance assignment should use u_window: {line}"
 
 
 # ---------------------------------------------------------------------------

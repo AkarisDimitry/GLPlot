@@ -523,6 +523,9 @@ class AxisRenderer:
         else:
             color = imgui.get_color_u32((0.85, 0.85, 0.85, 1.0))
 
+        tick_color = self._ink("axis_tick_color", color)
+        tick_scale = self._font_scale("axis_tick_fontsize", _MPL_DEFAULT_LABEL_PT)
+
         win = ctx.window_world
 
         # Helper to project world to screen. px_offset shifts panel-local pixels into
@@ -548,7 +551,10 @@ class AxisRenderer:
         for val, label in zip(axis.ticks_x.major, axis.ticks_x.labels):
             sx, sy = project(val, win[2])
             # Offset labels slightly below the spine
-            draw_list.add_text((sx - imgui.calc_text_size(label)[0] * 0.5, sy + 5), color, label)
+            w = imgui.calc_text_size(label)[0] * tick_scale
+            draw_text_scaled(
+                imgui, draw_list, label, tick_color, (sx - w * 0.5, sy + 5), tick_scale
+            )
 
         # Y-Axis Labels (along left).
         #
@@ -561,9 +567,16 @@ class AxisRenderer:
         widest_tick = 0.0
         for val, label in zip(axis.ticks_y.major, axis.ticks_y.labels):
             sx, sy = project(win[0], val)
-            text_w = imgui.calc_text_size(label)[0]
+            text_w = imgui.calc_text_size(label)[0] * tick_scale
             widest_tick = max(widest_tick, text_w)
-            draw_list.add_text((sx - _TICK_LABEL_GAP - text_w, sy - 7), color, label)
+            draw_text_scaled(
+                imgui,
+                draw_list,
+                label,
+                tick_color,
+                (sx - _TICK_LABEL_GAP - text_w, sy - 7),
+                tick_scale,
+            )
 
         self._draw_annotations(imgui, draw_list, axis, ctx, project, color, widest_tick)
 

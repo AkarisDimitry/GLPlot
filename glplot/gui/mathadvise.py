@@ -135,7 +135,10 @@ def _peaks_recommendations(x: np.ndarray, y: np.ndarray) -> List[Recommendation]
     if count <= 6:
         out.append(
             Recommendation(
-                "fit", "Fit (multi-peak)", reason + " A sum-of-peaks fit may separate them.", score * 0.85
+                "fit",
+                "Fit (multi-peak)",
+                reason + " A sum-of-peaks fit may separate them.",
+                score * 0.85,
             )
         )
     return out
@@ -295,7 +298,9 @@ def _compare_recommendation(x: np.ndarray, y: np.ndarray) -> List[Recommendation
     ]
 
 
-def _multivariate_recommendations(x: np.ndarray, y: np.ndarray, n_columns: int) -> List[Recommendation]:
+def _multivariate_recommendations(
+    x: np.ndarray, y: np.ndarray, n_columns: int
+) -> List[Recommendation]:
     """A quiet, constant-score nudge toward PCA/UMAP -- only offered when the source has
     a dataset with enough OTHER columns to make dimensionality reduction meaningful (see
     ``recommend``'s ``n_columns``). Two columns is just the plotted (x, y) itself; three

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from ..commands import CommandQueue
     from ..datasets import DataStore
     from ..history import Command, UndoStack
+    from ..models import ModelStore
     from ..workspace import Workspace
 
 
@@ -79,6 +80,11 @@ class Panel:
     def store(self) -> DataStore:
         """The shared :class:`~glplot.gui.datasets.DataStore`."""
         return self._ws.store
+
+    @property
+    def models(self) -> ModelStore:
+        """The shared :class:`~glplot.gui.models.ModelStore`."""
+        return self._ws.models
 
     @property
     def undo(self) -> UndoStack:

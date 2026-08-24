@@ -3624,9 +3624,9 @@ def confidence_band(
     n_params = p.size
 
     with np.errstate(all="ignore"):
-        base = np.broadcast_to(
-            np.asarray(fn(xa, *p), dtype=np.float64), xa.shape
-        ).astype(np.float64, copy=True)
+        base = np.broadcast_to(np.asarray(fn(xa, *p), dtype=np.float64), xa.shape).astype(
+            np.float64, copy=True
+        )
 
     if cov.shape != (n_params, n_params) or not np.all(np.isfinite(cov)):
         nan = np.full(xa.shape, np.nan, dtype=np.float64)
@@ -3734,7 +3734,13 @@ def confidence_interval_correlation(x: Any, y: Any, *, level: float = 0.95) -> D
         r = float(np.cov(xg, yg, ddof=0)[0, 1] / (std_x * std_y))
 
     if not np.isfinite(r):
-        return {"n": float(n), "r": r, "lower": float("nan"), "upper": float("nan"), "level": float(level)}
+        return {
+            "n": float(n),
+            "r": r,
+            "lower": float("nan"),
+            "upper": float("nan"),
+            "level": float(level),
+        }
 
     r_clamped = max(-0.9999999, min(0.9999999, r))
     z = np.arctanh(r_clamped)

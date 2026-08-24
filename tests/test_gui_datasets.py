@@ -859,6 +859,39 @@ class TestExpressions:
             ds.row_mask("(y > 0) and (x < 10)")
         assert "'&' and '|'" in str(excinfo.value)
 
+    def test_eval_expression_binds_extra_variables(self):
+        """Test that ``variables`` lets a name absent from the table resolve, for a
+        Data Editor Transform-section slider parameter."""
+        ds = _dataset()
+        out = ds.eval_expression("a * x + b", variables={"a": 2.0, "b": 1.0})
+        assert np.allclose(out, [1.0, 3.0, 5.0])
+
+    def test_eval_expression_without_variables_is_unchanged(self):
+        """Test that omitting ``variables`` behaves exactly as before it existed."""
+        ds = _dataset()
+        assert np.allclose(ds.eval_expression("x + y"), ds.eval_expression("x + y", variables=None))
+
+    def test_eval_expression_a_column_wins_over_a_same_named_variable(self):
+        """Test that real data always beats a stale/colliding parameter name."""
+        ds = _dataset()
+        out = ds.eval_expression("x", variables={"x": 999.0})
+        assert np.allclose(out, [0.0, 1.0, 2.0])
+
+    def test_eval_expression_variables_do_not_leak_into_a_call_without_them(self):
+        """Test that one call's variables cannot bleed into a later, unrelated call."""
+        ds = _dataset()
+        ds.eval_expression("a", variables={"a": 5.0})
+        with pytest.raises(ExpressionError):
+            ds.eval_expression("a")
+
+    def test_eval_expression_rejects_an_invalid_variable_name(self):
+        """Test that a bad key in variables (not the caller's fault to guess) still
+        raises ExpressionError, not some other exception, matching every other
+        documented failure mode of this method."""
+        ds = _dataset()
+        with pytest.raises(ExpressionError):
+            ds.eval_expression("x", variables={"not an identifier": 1.0})
+
 
 class TestTransformColumn:
     """Test transforming a column with an expression."""
@@ -909,6 +942,21 @@ class TestTransformColumn:
         ds = _dataset()
         with pytest.raises(ValueError):
             ds.transform_column("nope", "1")
+
+    def test_transform_bakes_in_the_given_variables(self):
+        """Test that a parametrized transform (a*x+b) commits with the CURRENT slider
+        values -- the "Apply" of Data Editor's Transform-section sliders."""
+        ds = _dataset()
+        column = ds.transform_column("y", "a * x + b", variables={"a": 2.0, "b": 1.0})
+        assert np.allclose(column.values, [1.0, 3.0, 5.0])
+
+    def test_transform_variables_do_not_persist_across_calls(self):
+        """Test that re-running without variables is an unknown-name error again --
+        a baked-in value is a one-time snapshot, not a remembered binding."""
+        ds = _dataset()
+        ds.transform_column("y", "a", target="d", variables={"a": 5.0})
+        with pytest.raises(ExpressionError):
+            ds.transform_column("y", "a", target="d2")
 
 
 class TestDerivedBinding:

@@ -271,4 +271,6 @@ def _draw_one(imgui, draw_list, anchor, text, px, w, h, ink, clear) -> None:
     """Clear a patch of background, then seat the number in it, centred on ``anchor``."""
     x0, y0, x1, y1 = _label_rect(anchor, w, h)
     draw_list.add_rect_filled((x0, y0), (x1, y1), clear)
-    draw_list.add_text(imgui.get_font(), px, (x0 + _CLEAR_PAD_X_PX, y0 + _CLEAR_PAD_Y_PX), ink, text)
+    draw_list.add_text(
+        imgui.get_font(), px, (x0 + _CLEAR_PAD_X_PX, y0 + _CLEAR_PAD_Y_PX), ink, text
+    )

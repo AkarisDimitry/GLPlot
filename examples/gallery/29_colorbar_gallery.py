@@ -81,17 +81,37 @@ temp_hi = float(max(disc_temp.max(), bulge_temp.max(), halo_temp.max()))
 # Halo first, disc over it, bulge last: painter's order, faintest population behind.
 # Each gets its own marker so the three are separable even where they overlap, and one
 # shared vmin/vmax so a colour means the same temperature in all three (and on the bar).
-axs[0, 0].scatter(halo_x, halo_y, c=halo_temp, cmap="viridis", s=6.0, alpha=0.40,
-                  marker="^", vmin=temp_lo, vmax=temp_hi)
-axs[0, 0].scatter(disc_x, disc_y, c=disc_temp, cmap="viridis", s=2.4, alpha=0.70,
-                  vmin=temp_lo, vmax=temp_hi)
-axs[0, 0].scatter(bulge_x, bulge_y, c=bulge_temp, cmap="viridis", s=3.2, alpha=0.60,
-                  marker="s", vmin=temp_lo, vmax=temp_hi)
+axs[0, 0].scatter(
+    halo_x,
+    halo_y,
+    c=halo_temp,
+    cmap="viridis",
+    s=6.0,
+    alpha=0.40,
+    marker="^",
+    vmin=temp_lo,
+    vmax=temp_hi,
+)
+axs[0, 0].scatter(
+    disc_x, disc_y, c=disc_temp, cmap="viridis", s=2.4, alpha=0.70, vmin=temp_lo, vmax=temp_hi
+)
+axs[0, 0].scatter(
+    bulge_x,
+    bulge_y,
+    c=bulge_temp,
+    cmap="viridis",
+    s=3.2,
+    alpha=0.60,
+    marker="s",
+    vmin=temp_lo,
+    vmax=temp_hi,
+)
 axs[0, 0].set_xlabel("Galactic X (kpc)")
 axs[0, 0].set_ylabel("Galactic Y (kpc)")
 axs[0, 0].set_title("Stellar field | linear, bottom", fontsize=TITLE_SIZE)
-plt.colorbar(ax=axs[0, 0], location="bottom", fraction=BAR_FRACTION, pad=0.17,
-             shrink=0.85).set_label("Surface temperature (K)")
+plt.colorbar(
+    ax=axs[0, 0], location="bottom", fraction=BAR_FRACTION, pad=0.17, shrink=0.85
+).set_label("Surface temperature (K)")
 
 # ---- Panel B: radioactive decay bench, log scale, bar on the left ----------
 # Thirteen isotopes whose half-lives span two decades, each simulated as a real
@@ -117,8 +137,9 @@ axs[0, 1].set_ylabel("Surviving fraction")
 axs[0, 1].set_title("Decay bench | log, left", fontsize=TITLE_SIZE)
 # A generous `pad` here is not cosmetic: it is the gap this panel's own y-name has to
 # fit into, since the bar took the side the name is drawn on.
-plt.colorbar(decay_sm, ax=axs[0, 1], location="left", fraction=BAR_FRACTION, pad=0.20,
-             shrink=0.85).set_label("Half-life (s)")
+plt.colorbar(
+    decay_sm, ax=axs[0, 1], location="left", fraction=BAR_FRACTION, pad=0.20, shrink=0.85
+).set_label("Half-life (s)")
 
 # ---- Panel C: electrostatic dipole, symlog scale, default (right) bar ------
 # A dipole's potential is strongly positive at one charge, strongly negative at the
@@ -150,21 +171,27 @@ n_probes = 2_600
 probe_x = rng.uniform(-3.0, 3.0, n_probes)
 probe_y = rng.uniform(-3.0, 3.0, n_probes)
 probe_v = _dipole_potential(probe_x, probe_y) + rng.normal(0.0, 0.06, n_probes)
-axs[1, 0].scatter(probe_x, probe_y, c=probe_v, cmap="RdBu_r", norm=dipole_norm,
-                  s=14.0, alpha=0.65, marker="x")
+axs[1, 0].scatter(
+    probe_x, probe_y, c=probe_v, cmap="RdBu_r", norm=dipole_norm, s=14.0, alpha=0.65, marker="x"
+)
 
 level_magnitudes = np.array([0.15, 0.3, 0.5, 0.8, 1.2, 1.8, 2.6, 3.8, 5.5, 8.0])
 cs = axs[1, 0].contour(
-    GX, GY, potential,
+    GX,
+    GY,
+    potential,
     levels=np.concatenate([-level_magnitudes[::-1], level_magnitudes]),
-    cmap="RdBu_r", norm=dipole_norm, linewidths=1.8,
+    cmap="RdBu_r",
+    norm=dipole_norm,
+    linewidths=1.8,
 )
 axs[1, 0].clabel(cs, inline=True, fontsize=11, fmt=lambda v: f"{v:.2g}")
 axs[1, 0].set_xlabel("x (m)")
 axs[1, 0].set_ylabel("y (m)")
 axs[1, 0].set_title("Dipole field | symlog, right", fontsize=TITLE_SIZE)
-plt.colorbar(cs, ax=axs[1, 0], fraction=BAR_FRACTION, pad=0.03,
-             shrink=0.9).set_label("Potential (a.u.)")
+plt.colorbar(cs, ax=axs[1, 0], fraction=BAR_FRACTION, pad=0.03, shrink=0.9).set_label(
+    "Potential (a.u.)"
+)
 
 # ---- Panel D: speckled diffraction frame, power norm, inset bar on top -----
 # A CCD frame from a diffraction experiment: an Airy-like pattern, multiplied by
@@ -191,7 +218,9 @@ for _ in range(28):  # cosmic-ray hits: a few saturated pixels, as any real CCD 
     intensity[cy, cx] = intensity.max() * rng.uniform(0.6, 1.0)
 
 im = axs[1, 1].imshow(
-    intensity, extent=[-6.0, 6.0, -6.0, 6.0], cmap="inferno",
+    intensity,
+    extent=[-6.0, 6.0, -6.0, 6.0],
+    cmap="inferno",
     norm=PowerNorm(gamma=0.4, vmin=float(intensity.min()), vmax=float(intensity.max())),
 )
 axs[1, 1].set_xlabel("Detector x (mm)")
@@ -199,8 +228,15 @@ axs[1, 1].set_ylabel("Detector y (mm)")
 axs[1, 1].set_title("Speckle CCD | power, inset", fontsize=TITLE_SIZE)
 # Explicit ticks: a PowerNorm bar auto-locates evenly in *data* space, which the gamma
 # then bunches together toward the bright end -- unreadable on a bar this short.
-plt.colorbar(im, ax=axs[1, 1], location="top", inset=True, fraction=0.035, shrink=0.62,
-             ticks=[0.0, 0.5, 1.5, 3.0]).set_label("Intensity (a.u.)")
+plt.colorbar(
+    im,
+    ax=axs[1, 1],
+    location="top",
+    inset=True,
+    fraction=0.035,
+    shrink=0.62,
+    ticks=[0.0, 0.5, 1.5, 3.0],
+).set_label("Intensity (a.u.)")
 
 # plt.show()
 plt.savefig("examples/gallery/results/29_colorbar_gallery.png")

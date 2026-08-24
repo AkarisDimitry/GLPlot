@@ -856,6 +856,7 @@ uniform mat4  u_mvp;
 uniform float u_size;
 uniform float u_alpha;
 uniform vec2  u_layer_offset;
+uniform vec4  u_window;   // (xmin, xmax, ymin, ymax) world space
 
 // ---- outline / silhouette (LayerStyle.outline_*) --------------------------------
 // The general outline: the same analytic ring GEOMETRY3D_VS/FS draw around a 3D point.
@@ -878,7 +879,16 @@ out vec4 v_col;
 // which is what keeps the fragment arithmetic identical to the pre-outline shader.
 out float v_fill_frac;
 void main() {
-    gl_Position = u_mvp * vec4(a_pos + u_layer_offset, 0.0, 1.0);
+    vec2 world_pos = a_pos + u_layer_offset;
+    gl_Position = u_mvp * vec4(world_pos, 0.0, 1.0);
+    // Must always write gl_ClipDistance when GL_CLIP_DISTANCE0-3 are enabled (see PATCH_VS);
+    // leaving it undefined is what let markers spill past the axis margins into the tick
+    // label gutters -- and beyond, to the window edge -- whenever the camera view is a crop
+    // of the data range (any zoom/pan) instead of an exact fit around it.
+    gl_ClipDistance[0] = world_pos.x - u_window.x;
+    gl_ClipDistance[1] = u_window.y - world_pos.x;
+    gl_ClipDistance[2] = world_pos.y - u_window.z;
+    gl_ClipDistance[3] = u_window.w - world_pos.y;
     // a_size lets marker size be a data-driven dimension. The buffer holds 1.0 for every
     // point when no per-point sizes were given, so gl_PointSize == u_size as before.
     float fill = u_size * a_size;
@@ -1369,14 +1379,22 @@ uniform mat4  u_mvp;
 uniform float u_size;
 uniform float u_alpha;
 uniform vec2  u_layer_offset;
+uniform vec4  u_window;   // (xmin, xmax, ymin, ymax) world space
 out float v_alpha;
 // The marker's own colour, carried so the accumulation can average it (see
 // DENSITY_WEIGHT_TO_RGBA). Only the alpha used to make it this far, back when the density
 // buffer was a single channel and a scatter's colour could not survive the pass.
 out vec3 v_rgb;
 void main() {
-    gl_Position = u_mvp * vec4(a_pos + u_layer_offset, 0.0, 1.0);
+    vec2 world_pos = a_pos + u_layer_offset;
+    gl_Position = u_mvp * vec4(world_pos, 0.0, 1.0);
     gl_PointSize = u_size;
+    // See SCATTER_VS: must always write gl_ClipDistance when GL_CLIP_DISTANCE0-3 are
+    // enabled (DensityRenderer.begin_accum turns them on for this pass too).
+    gl_ClipDistance[0] = world_pos.x - u_window.x;
+    gl_ClipDistance[1] = u_window.y - world_pos.x;
+    gl_ClipDistance[2] = world_pos.y - u_window.z;
+    gl_ClipDistance[3] = u_window.w - world_pos.y;
     v_alpha = a_col.a * u_alpha;
     v_rgb = a_col.rgb;
 }

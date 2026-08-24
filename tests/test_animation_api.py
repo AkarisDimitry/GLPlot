@@ -376,6 +376,25 @@ class TestHeadlessRendering:
         with pytest.raises(RuntimeError, match="Cannot grab a frame from"):
             animation.figure_to_rgb(object())
 
+    def test_headless_frames_touch_no_temporary_files(self, sine_figure, monkeypatch):
+        """Regression guard: a headless frame used to round-trip through a temp PNG
+        (encode, write, read back), profiled at ~35% of one frame's total cost for no
+        benefit to a caller that only ever wanted the pixel array. ``figure_to_rgb()`` now
+        calls ``render_preview_array()`` directly for this case -- if a future change
+        reintroduces the file round trip, ``tempfile.TemporaryDirectory`` fires and this
+        fails loudly instead of just getting slower again unnoticed.
+        """
+        import tempfile as tempfile_module
+
+        figure, _ = sine_figure
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("headless figure_to_rgb() should not create a temp directory")
+
+        monkeypatch.setattr(tempfile_module, "TemporaryDirectory", _fail)
+        frame = animation.figure_to_rgb(figure)
+        assert frame.ndim == 3 and frame.shape[2] == 3
+
 
 class TestSave:
     """End-to-end saving, headless, with the output reopened and counted."""

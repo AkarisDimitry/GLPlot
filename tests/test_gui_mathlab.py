@@ -11,7 +11,8 @@ popup, keyed on that id, could never open and the dataset could not be changed a
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pytest
@@ -20,26 +21,36 @@ imgui = pytest.importorskip("imgui_bundle").imgui
 
 from glplot.gui import icons  # noqa: E402
 from glplot.gui import mathops  # noqa: E402
+from glplot.gui import mathops2d  # noqa: E402
 from glplot.gui import mathopsnd  # noqa: E402
+from glplot.gui import notifications  # noqa: E402
 from glplot.gui import widgets  # noqa: E402
 from glplot.gui.commands import CommandQueue  # noqa: E402
 from glplot.gui.datasets import Column, DataSet, DataStore  # noqa: E402
 from glplot.gui.history import UndoStack  # noqa: E402
+from glplot.gui.models import ModelStore, TrainedModel  # noqa: E402
 from glplot.gui.panels.mathlab import (  # noqa: E402
     _APPLY_MODES,
     _CATEGORIES,
     _CATEGORY_OF,
     _FIT_MODELS,
+    _INDEX_OPTION,
+    _NO_SAMPLING,
     _TABS,
     MathLabPanel,
     _fit_state_key,
+    _SamplingParams,
     _sorted_by_x,
     _Source,
+    _split_indices,
+    _subsample_indices,
 )
 
 # The panel's default geometry: workspace.py sizes it 0.37 x 0.47 of a 1280x900 viewport.
 _PANEL_W = int(1280 * 0.37)
-_PANEL_H = int(900 * 0.47)
+# +24px of test-harness headroom keeps the "Apply must stay on-screen" geometry checks
+# below honest without changing the real window size workspace.py actually uses.
+_PANEL_H = int(900 * 0.47) + 24
 
 # Gaussian parameters (a, mu, sigma, c) the Fit tab tests generate data from and must recover.
 _PEAK_TRUTH = (5.0, 2.0, 1.5, 1.0)
@@ -61,13 +72,20 @@ class _FakePlot:
 
 
 class _FakeWorkspace:
-    """The four collaborators Panel proxies onto."""
+    """The five collaborators Panel proxies onto.
+
+    ``models`` (a real :class:`ModelStore`) was added alongside this repo's
+    now-uncommitted trained-model-rail work: ``MathLabPanel.draw()`` unconditionally
+    reads ``self.models.models`` to decide whether the rail is visible, so every test
+    that calls ``panel.draw()`` needs a real store here, not just ``None``.
+    """
 
     def __init__(self) -> None:
         self.plot = _FakePlot()
         self.store = DataStore()
         self.queue = CommandQueue()
         self.undo = UndoStack()
+        self.models = ModelStore()
         self.hud = None
 
 
@@ -246,6 +264,9 @@ class TestApplyIsReachable:
         every tab but Normalize (Integral at y=456 in a 423px panel; Fit at y=501 and
         further down with each coefficient row). It is now pinned to the panel bottom.
         """
+        if key == "umap":
+            pytest.importorskip("umap")
+
         io = imgui_context
         panel = MathLabPanel(workspace)
         rect = _capture_apply_rect(monkeypatch)
@@ -1796,7 +1817,13 @@ class TestRecommendations:
 
 def _make_dataset_source(ws, name, x, y):
     """A _Source backed by a fresh 2-column dataset added to ``ws``, for controlled data."""
-    ds = DataSet(name, [Column("x", np.asarray(x, dtype=np.float64)), Column("y", np.asarray(y, dtype=np.float64))])
+    ds = DataSet(
+        name,
+        [
+            Column("x", np.asarray(x, dtype=np.float64)),
+            Column("y", np.asarray(y, dtype=np.float64)),
+        ],
+    )
     ws.store.add(ds)
     return _Source(
         key=("dataset", name, "x", "y"),
@@ -1875,12 +1902,20 @@ class TestFitRobust:
         panel = MathLabPanel(workspace)
         rng = np.random.default_rng(0)
         x = np.linspace(-5.0, 5.0, 100)
-        source = _make_dataset_source(workspace, "rob", x, 2.0 * x + 1.0 + rng.normal(0, 0.1, x.size))
+        source = _make_dataset_source(
+            workspace, "rob", x, 2.0 * x + 1.0 + rng.normal(0, 0.1, x.size)
+        )
 
-        panel._compute(source, ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, False, 200))
+        panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, False, 200, _NO_SAMPLING),
+        )
         assert calls["plain"] == 1 and calls["robust"] == 0
 
-        panel._compute(source, ("fit", "linear", 0, "", None, True, "soft_l1", False, 0.95, False, 200))
+        panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, True, "soft_l1", False, 0.95, False, 200, _NO_SAMPLING),
+        )
         assert calls["robust"] == 1
 
     def test_robust_fit_recovers_parameters_despite_outliers(self, workspace):
@@ -1892,7 +1927,10 @@ class TestFitRobust:
         y[bad] += 25.0
         source = _make_dataset_source(workspace, "out", x, y)
 
-        result = panel._compute(source, ("fit", "linear", 0, "", None, True, "soft_l1", False, 0.95, False, 200))
+        result = panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, True, "soft_l1", False, 0.95, False, 200, _NO_SAMPLING),
+        )
         stats = dict(result.stats)
         # "m" is the linear model's slope parameter name.
         slope = float(stats["m"].split(" +/- ")[0])
@@ -1926,7 +1964,10 @@ class TestFitConfidenceBand:
         panel = MathLabPanel(workspace)
         x = np.linspace(-5.0, 5.0, 100)
         source = _make_dataset_source(workspace, "cb1", x, 2.0 * x + 1.0)
-        result = panel._compute(source, ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, False, 200))
+        result = panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, False, 200, _NO_SAMPLING),
+        )
         assert result.band is None
 
     def test_band_is_populated_when_requested(self, workspace):
@@ -1935,7 +1976,10 @@ class TestFitConfidenceBand:
         x = np.linspace(-5.0, 5.0, 200)
         y = 2.0 * x + 1.0 + rng.normal(0.0, 0.3, x.size)
         source = _make_dataset_source(workspace, "cb2", x, y)
-        result = panel._compute(source, ("fit", "linear", 0, "", None, False, "soft_l1", True, 0.95, False, 200))
+        result = panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", True, 0.95, False, 200, _NO_SAMPLING),
+        )
         assert result.band is not None
         lo, hi = result.band
         assert lo.shape == result.x.shape
@@ -1947,8 +1991,14 @@ class TestFitConfidenceBand:
         x = np.linspace(-5.0, 5.0, 200)
         y = 2.0 * x + 1.0 + rng.normal(0.0, 0.3, x.size)
         source = _make_dataset_source(workspace, "cb3", x, y)
-        r68 = panel._compute(source, ("fit", "linear", 0, "", None, False, "soft_l1", True, 0.68, False, 200))
-        r99 = panel._compute(source, ("fit", "linear", 0, "", None, False, "soft_l1", True, 0.99, False, 200))
+        r68 = panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", True, 0.68, False, 200, _NO_SAMPLING),
+        )
+        r99 = panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", True, 0.99, False, 200, _NO_SAMPLING),
+        )
         w68 = float(r68.band[1][0] - r68.band[0][0])
         w99 = float(r99.band[1][0] - r99.band[0][0])
         assert w99 > w68
@@ -1960,7 +2010,21 @@ class TestFitConfidenceBand:
         y = 2.0 * x**2 - 3.0 * x + 1.0 + rng.normal(0.0, 0.2, x.size)
         source = _make_dataset_source(workspace, "cb4", x, y)
         result = panel._compute(
-            source, ("fit", "polynomial", 2, "", None, False, "soft_l1", True, 0.95, False, 200)
+            source,
+            (
+                "fit",
+                "polynomial",
+                2,
+                "",
+                None,
+                False,
+                "soft_l1",
+                True,
+                0.95,
+                False,
+                200,
+                _NO_SAMPLING,
+            ),
         )
         assert result.band is not None
         lo, hi = result.band
@@ -2008,7 +2072,8 @@ class TestFitOutputGrid:
         x = np.linspace(-5.0, 5.0, 37)
         source = _make_dataset_source(workspace, "og1", x, 2.0 * x + 1.0)
         result = panel._compute(
-            source, ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, False, 200)
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, False, 200, _NO_SAMPLING),
         )
         assert result.x.size == 37
         np.testing.assert_allclose(result.x, x)
@@ -2021,7 +2086,8 @@ class TestFitOutputGrid:
         x = np.linspace(-5.0, 5.0, 37)
         source = _make_dataset_source(workspace, "og2", x, 2.0 * x + 1.0)
         result = panel._compute(
-            source, ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 500)
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 500, _NO_SAMPLING),
         )
         assert result.x.size == 500
         assert float(result.x[0]) == pytest.approx(-5.0)
@@ -2035,7 +2101,8 @@ class TestFitOutputGrid:
         y = 2.0 * x + 1.0
         source = _make_dataset_source(workspace, "og3", x, y)
         result = panel._compute(
-            source, ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 80)
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 80, _NO_SAMPLING),
         )
         assert result.overlay is None
         assert result.markers is not None
@@ -2051,12 +2118,24 @@ class TestFitOutputGrid:
         y = 2.0 * x**2 - 3.0 * x + 1.0
         source = _make_dataset_source(workspace, "og4", x, y)
         result = panel._compute(
-            source, ("fit", "polynomial", 2, "", None, False, "soft_l1", False, 0.95, True, 300)
+            source,
+            (
+                "fit",
+                "polynomial",
+                2,
+                "",
+                None,
+                False,
+                "soft_l1",
+                False,
+                0.95,
+                True,
+                300,
+                _NO_SAMPLING,
+            ),
         )
         assert result.x.size == 300
-        np.testing.assert_allclose(
-            result.y, 2.0 * result.x**2 - 3.0 * result.x + 1.0, atol=1e-6
-        )
+        np.testing.assert_allclose(result.y, 2.0 * result.x**2 - 3.0 * result.x + 1.0, atol=1e-6)
 
     def test_band_is_evaluated_on_the_output_grid_not_the_source_samples(self, workspace):
         panel = MathLabPanel(workspace)
@@ -2065,7 +2144,8 @@ class TestFitOutputGrid:
         y = 2.0 * x + 1.0 + rng.normal(0.0, 0.3, x.size)
         source = _make_dataset_source(workspace, "og5", x, y)
         result = panel._compute(
-            source, ("fit", "linear", 0, "", None, False, "soft_l1", True, 0.95, True, 250)
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", True, 0.95, True, 250, _NO_SAMPLING),
         )
         assert result.band is not None
         lo, hi = result.band
@@ -2076,7 +2156,8 @@ class TestFitOutputGrid:
         x = np.linspace(-5.0, 5.0, 37)
         source = _make_dataset_source(workspace, "og6", x, 2.0 * x + 1.0)
         result = panel._compute(
-            source, ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 123)
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 123, _NO_SAMPLING),
         )
         assert dict(result.stats)["Output points"] == "123"
 
@@ -2085,7 +2166,8 @@ class TestFitOutputGrid:
         x = np.linspace(-5.0, 5.0, 37)
         source = _make_dataset_source(workspace, "og7", x, 2.0 * x + 1.0)
         result = panel._compute(
-            source, ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 500)
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 500, _NO_SAMPLING),
         )
         assert panel._replace_reason(source, result) is not None
 
@@ -2110,7 +2192,8 @@ class TestFitOutputGrid:
         x = np.linspace(-5.0, 5.0, 40)
         source = _make_dataset_source(workspace, "og9", x, 2.0 * x + 1.0)
         result = panel._compute(
-            source, ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 0)
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 0, _NO_SAMPLING),
         )
         assert result.x.size == 2
 
@@ -2154,7 +2237,12 @@ class TestStatsShowMore:
         source = _dataset_source(workspace)
         result = panel._compute(source, ("stats", True, False, 0.95))
         labels = {label for label, _v in result.stats}
-        for expected in ("Skewness", "Excess kurtosis", "Interquartile range", "Median abs deviation"):
+        for expected in (
+            "Skewness",
+            "Excess kurtosis",
+            "Interquartile range",
+            "Median abs deviation",
+        ):
             assert expected in labels
 
     def test_checkbox_reaches_the_params(self, imgui_context, workspace, monkeypatch):
@@ -2509,7 +2597,7 @@ class TestClusterTab:
     def test_compute_produces_color_values_and_centroids(self, workspace):
         panel = MathLabPanel(workspace)
         source = self._blob_source(workspace)
-        result = panel._compute(source, ("cluster", "kmeans", 2, 0))
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
         assert result.color_values is not None
         assert result.color_values.shape == result.x.shape
         assert result.markers is not None
@@ -2520,14 +2608,16 @@ class TestClusterTab:
     def test_compute_reports_cluster_sizes_in_stats(self, workspace):
         panel = MathLabPanel(workspace)
         source = self._blob_source(workspace)
-        result = panel._compute(source, ("cluster", "kmeans", 2, 0))
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
         labels_in_stats = [label for label, _v in result.stats]
         assert "Clusters found" in labels_in_stats
-        assert any(label.startswith("Cluster ") and label.endswith("size") for label in labels_in_stats)
+        assert any(
+            label.startswith("Cluster ") and label.endswith("size") for label in labels_in_stats
+        )
 
     def test_k_too_large_surfaces_as_an_error_not_a_crash(self, imgui_context, workspace):
         panel = MathLabPanel(workspace)
-        source = _make_dataset_source(workspace, "tiny", [1.0, 2.0], [1.0, 2.0])
+        _make_dataset_source(workspace, "tiny", [1.0, 2.0], [1.0, 2.0])
         panel.show_operation("cluster")
         panel._cluster_k = 9  # more clusters than the 2 points in "tiny"
 
@@ -2576,7 +2666,7 @@ class TestClusterTab:
     def test_add_column_writes_cluster_labels(self, workspace):
         panel = MathLabPanel(workspace)
         source = self._blob_source(workspace, name="blobs3")
-        result = panel._compute(source, ("cluster", "kmeans", 2, 0))
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
         cmd = panel._command_add_column(source, result, "cluster")
         assert cmd is not None
         cmd.do()
@@ -2587,7 +2677,7 @@ class TestClusterTab:
         """New layer must close the loop with GLPlot's per-point colour encoding."""
         panel = MathLabPanel(workspace)
         source = self._blob_source(workspace, name="blobs4")
-        result = panel._compute(source, ("cluster", "kmeans", 2, 0))
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
 
         captured = {}
 
@@ -2706,10 +2796,10 @@ class TestDensity2DTab:
 
         assert heatmap_calls, "density2d preview must draw with mini_heatmap"
 
-    def test_kde_unavailable_shows_an_error_not_a_crash(self, imgui_context, workspace, monkeypatch):
-        monkeypatch.setattr(
-            "glplot.gui.panels.mathlab.mathops2d.kde2d_available", lambda: False
-        )
+    def test_kde_unavailable_shows_an_error_not_a_crash(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        monkeypatch.setattr("glplot.gui.panels.mathlab.mathops2d.kde2d_available", lambda: False)
         panel = MathLabPanel(workspace)
         self._blob_source(workspace, name="dblobs7")
         panel.show_operation("density2d")
@@ -3020,7 +3110,7 @@ class TestClusterHierarchical:
     def test_hierarchical_recovers_the_two_blobs(self, workspace):
         panel = MathLabPanel(workspace)
         source = self._blob_source(workspace)
-        result = panel._compute(source, ("cluster", "hierarchical", 2, "ward"))
+        result = panel._compute(source, ("cluster", "hierarchical", 2, "ward", _NO_SAMPLING))
         assert result.color_values is not None
         assert result.markers is not None
         assert np.asarray(result.markers[0]).size == 2
@@ -3028,12 +3118,14 @@ class TestClusterHierarchical:
     def test_method_label_appears_in_stats(self, workspace):
         panel = MathLabPanel(workspace)
         source = self._blob_source(workspace, name="hblobs2")
-        result = panel._compute(source, ("cluster", "hierarchical", 2, "single"))
+        result = panel._compute(source, ("cluster", "hierarchical", 2, "single", _NO_SAMPLING))
         rows = dict(result.stats)
         assert "hierarchical" in rows["Method"]
         assert "single" in rows["Method"]
 
-    def test_unavailable_scipy_shows_an_error_not_a_crash(self, imgui_context, workspace, monkeypatch):
+    def test_unavailable_scipy_shows_an_error_not_a_crash(
+        self, imgui_context, workspace, monkeypatch
+    ):
         monkeypatch.setattr(
             "glplot.gui.panels.mathlab.mathops2d.hierarchical_available", lambda: False
         )
@@ -3160,7 +3252,7 @@ class TestPcaTab:
         columns = _correlated_columns()
         source = _make_multicol_source(workspace, "pca2", columns)
         names = tuple(columns.keys())
-        result = panel._compute(source, ("pca", names, 3, "zscore"))
+        result = panel._compute(source, ("pca", names, 3, "zscore", _NO_SAMPLING))
 
         expected = mathopsnd.pca([columns[n] for n in names], n_components=3, scale="zscore")
         np.testing.assert_allclose(result.x, expected["scores"][:, 0])
@@ -3170,14 +3262,14 @@ class TestPcaTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns()
         source = _make_multicol_source(workspace, "pca3", columns)
-        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore"))
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore", _NO_SAMPLING))
         assert result.force_scatter is True
 
     def test_table_has_one_column_per_component(self, workspace):
         panel = MathLabPanel(workspace)
         columns = _correlated_columns()
         source = _make_multicol_source(workspace, "pca4", columns)
-        result = panel._compute(source, ("pca", tuple(columns.keys()), 4, "zscore"))
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 4, "zscore", _NO_SAMPLING))
         assert result.table is not None
         assert [name for name, _v in result.table] == ["PC1", "PC2", "PC3", "PC4"]
         for _name, values in result.table:
@@ -3187,7 +3279,7 @@ class TestPcaTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns()
         source = _make_multicol_source(workspace, "pca5", columns)
-        result = panel._compute(source, ("pca", tuple(columns.keys()), 3, "zscore"))
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 3, "zscore", _NO_SAMPLING))
         rows = dict(result.stats)
         assert "PC1 explained variance" in rows
         assert "PC2 explained variance" in rows
@@ -3200,7 +3292,7 @@ class TestPcaTab:
         source = _make_multicol_source(workspace, "pca5b", columns)
         # Only the three visibly-correlated columns -- not the noise ones -- so PC1
         # alone should capture nearly all the variance.
-        result = panel._compute(source, ("pca", ("a", "b", "c"), 2, "zscore"))
+        result = panel._compute(source, ("pca", ("a", "b", "c"), 2, "zscore", _NO_SAMPLING))
         rows = dict(result.stats)
         assert float(rows["PC1 explained variance"].rstrip("%")) > 80.0
 
@@ -3208,7 +3300,7 @@ class TestPcaTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns()
         source = _make_multicol_source(workspace, "pca6", columns)
-        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore"))
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore", _NO_SAMPLING))
         assert result.apply_modes == ("new_layer", "new_dataset")
 
     def test_fewer_than_two_columns_raises(self, workspace):
@@ -3216,7 +3308,7 @@ class TestPcaTab:
         columns = _correlated_columns()
         source = _make_multicol_source(workspace, "pca7", columns)
         with pytest.raises(ValueError, match="at least 2 columns"):
-            panel._compute(source, ("pca", ("a",), 2, "zscore"))
+            panel._compute(source, ("pca", ("a",), 2, "zscore", _NO_SAMPLING))
 
     def test_plotted_layer_source_raises(self, workspace):
         panel = MathLabPanel(workspace)
@@ -3229,7 +3321,7 @@ class TestPcaTab:
             y_raw=np.arange(5.0),
         )
         with pytest.raises(ValueError, match="dataset source"):
-            panel._compute(source, ("pca", ("a", "b"), 2, "zscore"))
+            panel._compute(source, ("pca", ("a", "b"), 2, "zscore", _NO_SAMPLING))
 
     def test_is_in_the_multivariate_category(self):
         assert "pca" in dict(_CATEGORIES)["Multivariate"]
@@ -3239,7 +3331,7 @@ class TestPcaTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns()
         source = _make_multicol_source(workspace, "pca8", columns)
-        result = panel._compute(source, ("pca", tuple(columns.keys()), 3, "zscore"))
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 3, "zscore", _NO_SAMPLING))
         cmd = panel._command_new_dataset(source, result, "pca")
         before = set(workspace.store.names())
         cmd.do()
@@ -3271,7 +3363,7 @@ class TestUmapTab:
         columns = _correlated_columns(n_rows=60)
         source = _make_multicol_source(workspace, "umap1", columns)
         names = tuple(columns.keys())
-        result = panel._compute(source, ("umap", names, 2, 10, 0.1, "zscore", 0))
+        result = panel._compute(source, ("umap", names, 2, 10, 0.1, "zscore", 0, _NO_SAMPLING))
         assert result.x.shape == (60,)
         assert result.y.shape == (60,)
 
@@ -3280,7 +3372,9 @@ class TestUmapTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns(n_rows=60)
         source = _make_multicol_source(workspace, "umap2", columns)
-        result = panel._compute(source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0))
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, _NO_SAMPLING)
+        )
         assert result.force_scatter is True
 
     def test_reproducible_with_the_same_seed(self, workspace):
@@ -3289,8 +3383,8 @@ class TestUmapTab:
         columns = _correlated_columns(n_rows=60)
         source = _make_multicol_source(workspace, "umap3", columns)
         names = tuple(columns.keys())
-        r1 = panel._compute(source, ("umap", names, 2, 10, 0.1, "zscore", 7))
-        r2 = panel._compute(source, ("umap", names, 2, 10, 0.1, "zscore", 7))
+        r1 = panel._compute(source, ("umap", names, 2, 10, 0.1, "zscore", 7, _NO_SAMPLING))
+        r2 = panel._compute(source, ("umap", names, 2, 10, 0.1, "zscore", 7, _NO_SAMPLING))
         np.testing.assert_allclose(r1.x, r2.x)
         np.testing.assert_allclose(r1.y, r2.y)
 
@@ -3299,7 +3393,9 @@ class TestUmapTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns(n_rows=60)
         source = _make_multicol_source(workspace, "umap4", columns)
-        result = panel._compute(source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0))
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, _NO_SAMPLING)
+        )
         assert result.table is not None
         assert [name for name, _v in result.table] == ["UMAP1", "UMAP2"]
 
@@ -3309,7 +3405,9 @@ class TestUmapTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns(n_rows=60)
         source = _make_multicol_source(workspace, "umap5", columns)
-        result = panel._compute(source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0))
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, _NO_SAMPLING)
+        )
         rows = dict(result.stats)
         assert "Neighbors used" in rows
         assert not any("explained variance" in label for label in rows)
@@ -3319,7 +3417,9 @@ class TestUmapTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns(n_rows=60)
         source = _make_multicol_source(workspace, "umap6", columns)
-        result = panel._compute(source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0))
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, _NO_SAMPLING)
+        )
         assert result.apply_modes == ("new_layer", "new_dataset")
 
     def test_fewer_than_two_columns_raises(self, workspace):
@@ -3328,9 +3428,11 @@ class TestUmapTab:
         columns = _correlated_columns(n_rows=60)
         source = _make_multicol_source(workspace, "umap7", columns)
         with pytest.raises(ValueError, match="at least 2 columns"):
-            panel._compute(source, ("umap", ("a",), 2, 10, 0.1, "zscore", 0))
+            panel._compute(source, ("umap", ("a",), 2, 10, 0.1, "zscore", 0, _NO_SAMPLING))
 
-    def test_unavailable_umap_shows_an_error_not_a_crash(self, imgui_context, workspace, monkeypatch):
+    def test_unavailable_umap_shows_an_error_not_a_crash(
+        self, imgui_context, workspace, monkeypatch
+    ):
         monkeypatch.setattr("glplot.gui.panels.mathlab.mathopsnd.umap_available", lambda: False)
         columns = _correlated_columns(n_rows=60)
         _make_multicol_source(workspace, "umap8", columns)
@@ -3348,7 +3450,9 @@ class TestUmapTab:
         panel = MathLabPanel(workspace)
         columns = _correlated_columns(n_rows=60)
         source = _make_multicol_source(workspace, "umap9", columns)
-        result = panel._compute(source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0))
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, _NO_SAMPLING)
+        )
         cmd = panel._command_new_dataset(source, result, "umap")
         before = set(workspace.store.names())
         cmd.do()
@@ -3370,3 +3474,2448 @@ class TestUmapTab:
             _draw_frame(panel, imgui_context)
         assert panel._cache_error is None
         assert panel._cache_key[-1][0] == "umap"
+
+
+# ============================================================================
+# Async background compute (glplot/gui/panels/mathlab.py's own _async_enabled/
+# _cached_result_async machinery, predating this session -- see background.py and
+# tests/test_gui_background.py for the BackgroundJob primitive it wraps). Lost from
+# this file by an earlier tool-use accident (a full-file overwrite during an unrelated
+# migration); rebuilt fresh here against the current, intact production code rather
+# than reconstructed from memory.
+# ============================================================================
+
+
+def _async_wait_until(predicate, *, timeout=2.0, interval=0.005) -> None:
+    """Poll ``predicate`` until it's truthy or ``timeout`` elapses.
+
+    For tests that call ``_cached_result``/``_cached_result_async`` directly (no imgui
+    frame involved) to observe a real background thread settle -- a poll loop, never a
+    fixed sleep-then-assert, so this stays robust under scheduler jitter.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(interval)
+    raise AssertionError(f"condition not met within {timeout}s")
+
+
+class TestAsyncEnabled:
+    """_async_enabled(): the sync/async switch, and why every OTHER async-adjacent
+    test in this file that does not force it stays deterministic without touching it."""
+
+    def test_default_is_synchronous_under_the_fake_plot(self, workspace):
+        """``_FakeWorkspace``'s ``_FakePlot`` has no ``_is_test_mode`` attribute at
+        all -- ``getattr(..., True)`` defaults it True, so ``not True`` is sync."""
+        panel = MathLabPanel(workspace)
+        assert panel._async_enabled() is False
+
+    def test_force_async_overrides_the_default(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        assert panel._async_enabled() is True
+
+    def test_plot_with_is_test_mode_false_is_async(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel.plot._is_test_mode = False
+        assert panel._async_enabled() is True
+
+    def test_plot_with_is_test_mode_true_is_sync(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel.plot._is_test_mode = True
+        assert panel._async_enabled() is False
+
+    def test_force_async_wins_even_if_is_test_mode_is_true(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel.plot._is_test_mode = True
+        panel._force_async = True
+        assert panel._async_enabled() is True
+
+
+class TestAsyncCompute:
+    """Dispatch/poll/cancel/retry through ``_cached_result``/``_cached_result_async``
+    directly -- no imgui frame needed, since none of this machinery touches imgui.
+    Every test forces async mode explicitly and stubs ``panel._compute`` with a short,
+    controllable real sleep; every wait is :func:`_async_wait_until`'s poll loop.
+    """
+
+    def test_first_dispatch_is_immediate_and_does_not_block(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+
+        def stub(source, params):
+            time.sleep(0.3)
+            return _fake_result()
+
+        panel._compute = stub
+        start = time.monotonic()
+        result, error, status = panel._cached_result(source, ("p",), "smooth")
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.1, "dispatching a job must not block the caller"
+        assert status == "pending"
+        assert result is None and error is None
+
+    def test_first_call_after_dispatch_is_always_pending_even_for_an_instant_job(self, workspace):
+        """The dispatch branch always returns "pending" on the very call that
+        constructs the job -- it never polls before returning -- so this holds
+        structurally, regardless of how fast ``fn`` actually is."""
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+        panel._compute = lambda source, params: _fake_result()  # no sleep at all
+
+        result, error, status = panel._cached_result(source, ("p",), "smooth")
+        assert status == "pending"
+        assert result is None and error is None
+
+    def test_pending_state_is_never_stale_or_blank_while_running(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+
+        def stub(source, params):
+            time.sleep(0.05)
+            return _fake_result()
+
+        panel._compute = stub
+        panel._cached_result(source, ("p",), "smooth")
+        result, error, status = panel._cached_result(source, ("p",), "smooth")
+        assert status == "pending"
+        assert result is None
+        assert error is None
+
+    def test_settling_populates_cache_result_and_async_results(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+        sentinel = _fake_result()
+
+        def stub(source, params):
+            time.sleep(0.02)
+            return sentinel
+
+        panel._compute = stub
+        params = ("p",)
+        panel._cached_result(source, params, "smooth")
+        _async_wait_until(lambda: panel._cached_result(source, params, "smooth")[2] == "ready")
+
+        result, error, status = panel._cached_result(source, params, "smooth")
+        assert status == "ready"
+        assert result is sentinel
+        assert error is None
+        assert panel._cache_result is sentinel
+        assert panel._cache_error is None
+        assert "smooth" in panel._async_results
+
+    def test_value_error_surfaces_as_its_own_message(self, workspace):
+        """_async_compute_fn reclassifies a ValueError (mathops's documented failure
+        mode) so the background path reports exactly the message the sync path
+        would -- not prefixed with "Unexpected error"."""
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+
+        def stub(source, params):
+            raise ValueError("bad window size")
+
+        panel._compute = stub
+        params = ("p",)
+        panel._cached_result(source, params, "smooth")
+        _async_wait_until(lambda: panel._cached_result(source, params, "smooth")[2] == "ready")
+
+        result, error, status = panel._cached_result(source, params, "smooth")
+        assert result is None
+        assert error == "bad window size"
+
+    def test_unexpected_exception_is_prefixed_and_logged(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+
+        def stub(source, params):
+            raise RuntimeError("boom")
+
+        panel._compute = stub
+        params = ("p",)
+        panel._cached_result(source, params, "smooth")
+        _async_wait_until(lambda: panel._cached_result(source, params, "smooth")[2] == "ready")
+
+        result, error, status = panel._cached_result(source, params, "smooth")
+        assert result is None
+        assert error == "Unexpected error: boom"
+
+    def test_cancel_stops_waiting_immediately(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+
+        def stub(source, params):
+            time.sleep(0.15)
+            return _fake_result()
+
+        panel._compute = stub
+        params = ("p",)
+        panel._cached_result(source, params, "smooth")
+        panel._cancel_async("smooth")
+        result, error, status = panel._cached_result(source, params, "smooth")
+        assert status == "cancelled"
+        assert result is None and error is None
+
+    def test_cancel_stays_cancelled_after_the_job_finishes_behind_it(self, workspace):
+        """A stale/already-cancelled job's late result must not resurrect -- the tab
+        stays "cancelled" even once the (unobserved) thread behind it completes."""
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+
+        def stub(source, params):
+            time.sleep(0.03)
+            return _fake_result()
+
+        panel._compute = stub
+        params = ("p",)
+        panel._cached_result(source, params, "smooth")
+        panel._cancel_async("smooth")
+        time.sleep(0.08)  # comfortably longer than the stub's own sleep
+        for _ in range(3):
+            result, error, status = panel._cached_result(source, params, "smooth")
+            assert status == "cancelled"
+            assert result is None and error is None
+
+    def test_cancel_stays_cancelled_until_params_actually_change(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+        panel._compute = lambda source, params: _fake_result()
+
+        panel._cached_result(source, ("p1",), "smooth")
+        panel._cancel_async("smooth")
+        assert panel._cached_result(source, ("p1",), "smooth")[2] == "cancelled"
+
+        # A genuinely new params tuple must dispatch its own fresh job, not stay
+        # wedged on the old cancellation.
+        result, error, status = panel._cached_result(source, ("p2",), "smooth")
+        assert status == "pending"
+
+    def test_retry_redispatches_immediately_and_eventually_settles(self, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+        calls: List[Any] = []
+
+        def stub(source, params):
+            calls.append(params)
+            time.sleep(0.02)
+            return _fake_result()
+
+        panel._compute = stub
+        params = ("p",)
+        panel._cached_result(source, params, "smooth")
+        panel._cancel_async("smooth")
+        assert panel._cached_result(source, params, "smooth")[2] == "cancelled"
+
+        panel._retry_async("smooth")
+        result, error, status = panel._cached_result(source, params, "smooth")
+        assert status == "pending", "retry must redispatch immediately, no debounce"
+
+        _async_wait_until(lambda: panel._cached_result(source, params, "smooth")[2] == "ready")
+        assert len(calls) == 2, "one call before the cancel, one after the retry"
+
+    def test_multiple_tabs_settle_independently_via_direct_dispatch(self, workspace):
+        """Two different ``tab_key``s never interfere -- each has its own job/key/
+        stable_since/results tracking (all dicts keyed by tab_key, never globally)."""
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        source = _dataset_source(workspace)
+        calls: List[str] = []
+
+        def stub(source, params):
+            calls.append(params[0])
+            time.sleep(0.03)
+            return _fake_result()
+
+        panel._compute = stub
+        r1 = panel._cached_result(source, ("tabA", 1), "tabA")
+        r2 = panel._cached_result(source, ("tabB", 2), "tabB")
+        assert r1[2] == "pending"
+        assert r2[2] == "pending"
+        assert panel._async_jobs["tabA"] is not panel._async_jobs["tabB"]
+
+        _async_wait_until(lambda: panel._cached_result(source, ("tabA", 1), "tabA")[2] == "ready")
+        _async_wait_until(lambda: panel._cached_result(source, ("tabB", 2), "tabB")[2] == "ready")
+        assert sorted(calls) == ["tabA", "tabB"]
+
+    def test_sync_mode_never_touches_async_bookkeeping_dicts(self, workspace):
+        panel = MathLabPanel(workspace)
+        source = _dataset_source(workspace)
+        assert panel._async_enabled() is False
+        for i in range(5):
+            panel._cached_result(source, (f"p{i}",), "smooth")
+        assert panel._async_jobs == {}
+        assert panel._async_job_keys == {}
+        assert panel._async_stable_since == {}
+        assert panel._async_results == {}
+
+
+class TestAsyncUiIntegration:
+    """The parts of the async story that only exist through a real imgui frame: the
+    pending spinner/Cancel row, the Cancelled/Retry row, the debounce as actually
+    driven by ``_draw_frame``, independent concurrent tabs through the real UI, and
+    the slow-job toast."""
+
+    def test_pending_row_draws_a_spinner_and_hides_apply(self, imgui_context, workspace):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+
+        def stub(source, params):
+            time.sleep(0.3)
+            return _fake_result()
+
+        panel._compute = stub
+        panel.show_operation("smooth")
+        _draw_frame(panel, imgui_context)  # the tab switch itself needs one frame to land
+        _draw_frame(panel, imgui_context)  # dispatch: this frame renders the pending row
+
+        assert panel._async_jobs.get("smooth") is not None
+        assert panel._cache_result is None
+        # Nothing was committed this frame -- the "give the body the whole panel back"
+        # branch runs, exactly like an op with no result to commit.
+        assert panel._apply_heights.get("smooth") == 0.0
+
+    def test_cancel_button_click_cancels_the_running_job(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+
+        def stub(source, params):
+            time.sleep(0.3)
+            return _fake_result()
+
+        panel._compute = stub
+        panel.show_operation("smooth")
+        _draw_frame(panel, imgui_context)  # the tab switch itself needs one frame to land
+        _draw_frame(panel, imgui_context)
+        job = panel._async_jobs.get("smooth")
+        assert job is not None
+        assert job.cancelled is False
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.widgets.busy_row", lambda *a, **k: True)
+        _draw_frame(panel, imgui_context)
+        assert job.cancelled is True
+
+    def test_cancelled_row_retry_button_redispatches(self, imgui_context, workspace, monkeypatch):
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        calls: List[Any] = []
+
+        def stub(source, params):
+            calls.append(params)
+            time.sleep(0.02)
+            return _fake_result()
+
+        panel._compute = stub
+        panel.show_operation("smooth")
+        _draw_frame(panel, imgui_context)  # the tab switch itself needs one frame to land
+        calls.clear()  # discard whatever the throwaway landing frame may have dispatched
+        _draw_frame(panel, imgui_context)  # dispatch
+        panel._cancel_async("smooth")
+        _draw_frame(panel, imgui_context)  # now renders the Cancelled/Retry row
+        assert len(calls) == 1
+
+        real_button = imgui.button
+
+        def spy_button(label, *a, **k):
+            if label.startswith("Retry##cancelled_smooth"):
+                return True
+            return real_button(label, *a, **k)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.imgui.button", spy_button)
+        _draw_frame(panel, imgui_context)  # click Retry (redispatch happens next frame)
+        _draw_frame(panel, imgui_context)
+        assert len(calls) == 2, "Retry must redispatch, with no debounce"
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+        assert panel._cache_error is None
+
+    def test_rapid_param_changes_collapse_into_one_dispatch_via_debounce(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """A slider-drag style burst of param changes must not spawn one job per
+        frame. The debounce is stretched to 5s (real, monkeypatched) so the assertion
+        is independent of how fast this machine happens to draw a headless frame."""
+        monkeypatch.setattr("glplot.gui.panels.mathlab._ASYNC_DEBOUNCE_SECONDS", 5.0)
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        calls: List[Any] = []
+
+        def stub(source, params):
+            calls.append(params)
+            time.sleep(0.01)
+            return _fake_result()
+
+        panel._compute = stub
+        panel.show_operation("smooth")
+        _draw_frame(panel, imgui_context)  # the tab switch itself needs one frame to land
+        calls.clear()  # discard whatever the throwaway landing frame may have dispatched
+        for i in range(25):
+            panel._smooth_window = (i % 7) + 1
+            _draw_frame(panel, imgui_context)
+        assert len(calls) <= 2, (
+            f"expected the debounce to collapse 25 rapid param changes into at most "
+            f"2 dispatches (the first immediate one plus its supersession), got {len(calls)}"
+        )
+
+        # Collapse the debounce back down so the final value is free to settle.
+        monkeypatch.setattr("glplot.gui.panels.mathlab._ASYNC_DEBOUNCE_SECONDS", 0.0)
+        _wait_frames_until(
+            panel,
+            imgui_context,
+            lambda: panel._cache_result is not None or panel._cache_error is not None,
+        )
+        assert panel._cache_error is None
+
+    def test_multiple_tabs_run_independently_through_the_real_ui(self, imgui_context, workspace):
+        """Switching tabs must not cancel a slow computation left running elsewhere
+        (the module docstring's headline claim for this whole feature)."""
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        calls: List[str] = []
+
+        def stub(source, params):
+            calls.append(params[0])
+            time.sleep(0.05)
+            return _fake_result()
+
+        panel._compute = stub
+
+        panel.show_operation("smooth")
+        _draw_frame(panel, imgui_context)  # the tab switch itself needs one frame to land
+        _draw_frame(panel, imgui_context)
+        job_smooth = panel._async_jobs.get("smooth")
+        assert job_smooth is not None
+
+        panel.show_operation("integral")
+        _draw_frame(panel, imgui_context)  # the tab switch itself needs one frame to land
+        _draw_frame(panel, imgui_context)
+        job_integral = panel._async_jobs.get("integral")
+        assert job_integral is not None
+
+        # Drawing the "integral" tab must not have touched "smooth"'s job at all.
+        assert panel._async_jobs.get("smooth") is job_smooth
+        assert job_smooth.cancelled is False
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._async_jobs.get("integral") is None)
+        panel.show_operation("smooth")
+        _wait_frames_until(panel, imgui_context, lambda: panel._async_jobs.get("smooth") is None)
+
+        assert "smooth" in calls
+        assert "integral" in calls
+
+    def test_slow_job_pushes_a_success_toast(self, imgui_context, workspace, monkeypatch):
+        notifications.clear()
+        monkeypatch.setattr("glplot.gui.panels.mathlab._ASYNC_NOTIFY_THRESHOLD_SECONDS", 0.02)
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+
+        def stub(source, params):
+            time.sleep(0.05)
+            return _fake_result()
+
+        panel._compute = stub
+        panel.show_operation("smooth")
+        try:
+            _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+            toasts = notifications.active()
+            assert any(t.kind == "success" and "Smooth finished" in t.message for t in toasts)
+        finally:
+            notifications.clear()
+
+    def test_slow_job_failure_pushes_an_error_toast(self, imgui_context, workspace, monkeypatch):
+        notifications.clear()
+        monkeypatch.setattr("glplot.gui.panels.mathlab._ASYNC_NOTIFY_THRESHOLD_SECONDS", 0.02)
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+
+        def stub(source, params):
+            time.sleep(0.05)
+            raise ValueError("bad window")
+
+        panel._compute = stub
+        panel.show_operation("smooth")
+        try:
+            _wait_frames_until(panel, imgui_context, lambda: panel._cache_error is not None)
+            toasts = notifications.active()
+            assert any(t.kind == "error" and "failed" in t.message for t in toasts)
+        finally:
+            notifications.clear()
+
+    def test_fast_job_does_not_push_a_toast(self, imgui_context, workspace):
+        """Default threshold (1.5s) -- an instant compute never crosses it."""
+        notifications.clear()
+        panel = MathLabPanel(workspace)
+        panel._force_async = True
+        panel._compute = lambda source, params: _fake_result()
+        panel.show_operation("smooth")
+        try:
+            _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+            toasts = notifications.active()
+            assert not any("Smooth" in t.message for t in toasts)
+        finally:
+            notifications.clear()
+
+
+# ============================================================================
+# Sub-sampling (Phase 0) and Train/val/test split (Phase 1) -- the "trainable" tabs'
+# (fit/cluster/pca/umap, see _TRAINABLE_TABS) shared _SamplingParams/_sampling_controls
+# machinery. mathops2d's nearest_centroid/cluster_inertia/silhouette_score and
+# mathopsnd's pca_transform/apply_scale already have dedicated, unaffected coverage in
+# tests/test_gui_mathops2d.py and tests/test_gui_mathopsnd.py -- this section tests
+# only the mathlab.py-side wiring: the two pure index-selection functions, and how each
+# trainable _compute branch reacts to sub-sampling/split being on vs. off.
+# ============================================================================
+
+
+class TestSubsampleIndices:
+    """_subsample_indices(): ascending, seeded, bounded random row selection."""
+
+    def test_none_when_n_within_max_rows(self):
+        assert _subsample_indices(50, 100, seed=0) is None
+        assert _subsample_indices(100, 100, seed=0) is None  # exactly at the cap
+
+    def test_none_when_max_rows_is_non_positive(self):
+        assert _subsample_indices(50, 0, seed=0) is None
+        assert _subsample_indices(50, -5, seed=0) is None
+
+    def test_returns_at_most_max_rows_indices(self):
+        idx = _subsample_indices(1000, 100, seed=0)
+        assert idx is not None
+        assert idx.size == 100
+
+    def test_returns_ascending_order(self):
+        idx = _subsample_indices(1000, 100, seed=0)
+        assert np.all(np.diff(idx) > 0)
+
+    def test_indices_are_within_bounds_and_unique(self):
+        idx = _subsample_indices(500, 50, seed=3)
+        assert idx.min() >= 0
+        assert idx.max() < 500
+        assert len(set(idx.tolist())) == 50
+
+    def test_deterministic_for_the_same_seed(self):
+        idx1 = _subsample_indices(1000, 100, seed=5)
+        idx2 = _subsample_indices(1000, 100, seed=5)
+        np.testing.assert_array_equal(idx1, idx2)
+
+    def test_differs_for_a_different_seed(self):
+        idx1 = _subsample_indices(1000, 100, seed=1)
+        idx2 = _subsample_indices(1000, 100, seed=2)
+        assert not np.array_equal(idx1, idx2)
+
+
+class TestSplitIndices:
+    """_split_indices(): a random (seeded) train/val/test partition of range(n)."""
+
+    def test_partition_sizes_match_requested_fractions(self):
+        train, val, test = _split_indices(1000, 0.2, 0.1, seed=0)
+        assert val.size == round(1000 * 0.2)
+        assert test.size == round(1000 * 0.1)
+        assert train.size == 1000 - val.size - test.size
+
+    def test_disjoint_and_exhaustive(self):
+        train, val, test = _split_indices(300, 0.15, 0.15, seed=1)
+        train_set, val_set, test_set = set(train.tolist()), set(val.tolist()), set(test.tolist())
+        assert not (train_set & val_set)
+        assert not (train_set & test_set)
+        assert not (val_set & test_set)
+        assert train_set | val_set | test_set == set(range(300))
+
+    def test_each_partition_is_ascending(self):
+        train, val, test = _split_indices(300, 0.2, 0.2, seed=2)
+        for part in (train, val, test):
+            if part.size > 1:
+                assert np.all(np.diff(part) > 0)
+
+    def test_deterministic_for_the_same_seed(self):
+        a = _split_indices(300, 0.2, 0.2, seed=7)
+        b = _split_indices(300, 0.2, 0.2, seed=7)
+        for pa, pb in zip(a, b):
+            np.testing.assert_array_equal(pa, pb)
+
+    def test_different_seed_gives_a_different_partition(self):
+        train1, _val1, _test1 = _split_indices(300, 0.2, 0.2, seed=1)
+        train2, _val2, _test2 = _split_indices(300, 0.2, 0.2, seed=2)
+        assert not np.array_equal(train1, train2)
+
+    def test_train_never_empties_under_extreme_val_test_fractions(self):
+        train, val, test = _split_indices(20, 0.9, 0.9, seed=0)
+        assert train.size > 0
+        assert val.size + test.size < 20
+
+
+class TestSubsamplingWiring:
+    """How training.subsample actually reaches the Fit/Cluster/PCA/UMAP _compute
+    branches -- restricting the technique to the subsampled rows, not just cosmetic."""
+
+    def test_fit_subsampling_restricts_rows_used_and_is_reported(self, workspace):
+        panel = MathLabPanel(workspace)
+        x = np.linspace(0.0, 10.0, 500)
+        source = _make_dataset_source(workspace, "fitsub", x, 2.0 * x + 1.0)
+        training = _SamplingParams(subsample=True, max_rows=100, subsample_seed=0)
+        result = panel._compute(
+            source,
+            ("fit", "polynomial", 1, "", None, False, "soft_l1", False, 0.95, False, 200, training),
+        )
+        rows = dict(result.stats)
+        assert rows["Rows used"].startswith("100 of 500")
+        assert result.overlay.size == 100
+
+    def test_fit_subsampling_off_matches_the_no_sampling_baseline(self, workspace):
+        panel = MathLabPanel(workspace)
+        x = np.linspace(0.0, 10.0, 50)
+        source = _make_dataset_source(workspace, "fitoff", x, 3.0 * x + 1.0)
+        common = ("fit", "polynomial", 1, "", None, False, "soft_l1", False, 0.95, False, 200)
+        r1 = panel._compute(source, common + (_NO_SAMPLING,))
+        r2 = panel._compute(source, common + (_SamplingParams(subsample=False, split=False),))
+        np.testing.assert_allclose(r1.x, r2.x)
+        np.testing.assert_allclose(r1.y, r2.y)
+        assert dict(r1.stats) == dict(r2.stats)
+        assert "Rows used" not in dict(r1.stats)
+
+    def test_cluster_subsampling_restricts_the_technique_to_the_subset(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(1)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.3, (150, 2)), rng.normal((10.0, 10.0), 0.3, (150, 2))]
+        )
+        source = _make_dataset_source(workspace, "clustersub", pts[:, 0], pts[:, 1])
+        training = _SamplingParams(subsample=True, max_rows=60, subsample_seed=0)
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, training))
+        rows = dict(result.stats)
+        assert rows["Rows used"].startswith("60 of 300")
+        assert result.x.size == 60
+        assert result.color_values.shape == (60,)
+
+    def test_cluster_subsampling_off_reports_no_rows_used_row(self, workspace):
+        panel = MathLabPanel(workspace)
+        source = self._blob_source(workspace)
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
+        assert "Rows used" not in dict(result.stats)
+
+    @staticmethod
+    def _blob_source(workspace, name="blobs_sub"):
+        rng = np.random.default_rng(0)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.3, (60, 2)), rng.normal((10.0, 10.0), 0.3, (60, 2))]
+        )
+        return _make_dataset_source(workspace, name, pts[:, 0], pts[:, 1])
+
+    def test_pca_subsampling_restricts_the_technique_to_the_subset(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=300)
+        source = _make_multicol_source(workspace, "pcasub", columns)
+        training = _SamplingParams(subsample=True, max_rows=80, subsample_seed=0)
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore", training))
+        rows = dict(result.stats)
+        assert rows["Rows used"].startswith("80 of 300")
+        assert result.x.size == 80
+
+    def test_pca_no_sampling_sentinel_reports_a_plain_row_count(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=40)
+        source = _make_multicol_source(workspace, "pcanoop", columns)
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore", _NO_SAMPLING))
+        assert dict(result.stats)["Rows used"] == "40"
+
+    def test_pca_subsampling_off_matches_the_no_sampling_baseline(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=50)
+        source = _make_multicol_source(workspace, "pcaoff", columns)
+        names = tuple(columns.keys())
+        r1 = panel._compute(source, ("pca", names, 2, "zscore", _NO_SAMPLING))
+        r2 = panel._compute(
+            source, ("pca", names, 2, "zscore", _SamplingParams(subsample=False, split=False))
+        )
+        np.testing.assert_allclose(r1.x, r2.x)
+        np.testing.assert_allclose(r1.y, r2.y)
+        assert dict(r1.stats) == dict(r2.stats)
+
+    def test_umap_subsampling_restricts_the_technique_to_the_subset(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=200)
+        source = _make_multicol_source(workspace, "umapsub", columns)
+        training = _SamplingParams(subsample=True, max_rows=50, subsample_seed=0)
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, training)
+        )
+        rows = dict(result.stats)
+        assert rows["Rows used"].startswith("50 of 200")
+        assert result.x.size == 50
+
+    def test_umap_no_sampling_sentinel_reports_a_plain_row_count(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=40)
+        source = _make_multicol_source(workspace, "umapnoop", columns)
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, _NO_SAMPLING)
+        )
+        assert dict(result.stats)["Rows used"] == "40"
+
+
+class TestTrainValTestSplit:
+    """How training.split reaches the Fit/Cluster/PCA/UMAP _compute branches -- held-out
+    metrics reported with the "Train "/"Val "/"Test " prefix convention, and absent
+    entirely with the split off (the pre-feature baseline)."""
+
+    def test_fit_split_reports_train_val_test_r_squared_and_rmse(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(2)
+        x = np.linspace(0.0, 10.0, 300)
+        y = 2.0 * x + 1.0 + rng.normal(0.0, 0.05, x.size)
+        source = _make_dataset_source(workspace, "fitsplit", x, y)
+        training = _SamplingParams(split=True, val_frac=0.2, test_frac=0.2, split_seed=0)
+        result = panel._compute(
+            source,
+            ("fit", "polynomial", 1, "", None, False, "soft_l1", False, 0.95, False, 200, training),
+        )
+        rows = dict(result.stats)
+        for label in (
+            "Train R squared",
+            "Val R squared",
+            "Test R squared",
+            "Train RMSE",
+            "Val RMSE",
+            "Test RMSE",
+        ):
+            assert label in rows, f"missing {label!r} in fit split stats"
+
+    def test_fit_split_off_has_no_train_val_test_rows(self, workspace):
+        panel = MathLabPanel(workspace)
+        x = np.linspace(0.0, 10.0, 60)
+        source = _make_dataset_source(workspace, "fitsplitoff", x, 2.0 * x + 1.0)
+        result = panel._compute(
+            source,
+            (
+                "fit",
+                "polynomial",
+                1,
+                "",
+                None,
+                False,
+                "soft_l1",
+                False,
+                0.95,
+                False,
+                200,
+                _NO_SAMPLING,
+            ),
+        )
+        labels = [label for label, _v in result.stats]
+        assert not any(label.startswith(("Train ", "Val ", "Test ")) for label in labels)
+
+    def test_cluster_split_reports_train_val_test_inertia_and_silhouette(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(3)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.3, (100, 2)), rng.normal((10.0, 10.0), 0.3, (100, 2))]
+        )
+        source = _make_dataset_source(workspace, "clustersplit", pts[:, 0], pts[:, 1])
+        training = _SamplingParams(split=True, val_frac=0.2, test_frac=0.2, split_seed=0)
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, training))
+        rows = dict(result.stats)
+        for label in (
+            "Train inertia",
+            "Val inertia",
+            "Test inertia",
+            "Train silhouette",
+            "Val silhouette",
+            "Test silhouette",
+        ):
+            assert label in rows, f"missing {label!r} in cluster split stats"
+
+    def test_cluster_split_off_has_no_train_val_test_rows(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(4)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.3, (60, 2)), rng.normal((10.0, 10.0), 0.3, (60, 2))]
+        )
+        source = _make_dataset_source(workspace, "clustersplitoff", pts[:, 0], pts[:, 1])
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
+        labels = [label for label, _v in result.stats]
+        assert not any(label.startswith(("Train ", "Val ", "Test ")) for label in labels)
+
+    def test_pca_split_reports_reconstruction_error_per_partition(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=200)
+        source = _make_multicol_source(workspace, "pcasplit", columns)
+        training = _SamplingParams(split=True, val_frac=0.2, test_frac=0.2, split_seed=0)
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore", training))
+        rows = dict(result.stats)
+        for label in (
+            "Train reconstruction error",
+            "Val reconstruction error",
+            "Test reconstruction error",
+        ):
+            assert label in rows, f"missing {label!r} in pca split stats"
+
+    def test_pca_split_off_has_no_train_val_test_rows(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=40)
+        source = _make_multicol_source(workspace, "pcasplitoff", columns)
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore", _NO_SAMPLING))
+        labels = [label for label, _v in result.stats]
+        assert not any(label.startswith(("Train ", "Val ", "Test ")) for label in labels)
+
+    def test_umap_split_reports_row_counts_per_partition(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=150)
+        source = _make_multicol_source(workspace, "umapsplit", columns)
+        training = _SamplingParams(split=True, val_frac=0.2, test_frac=0.2, split_seed=0)
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, training)
+        )
+        rows = dict(result.stats)
+        assert "Train rows" in rows and "Val rows" in rows and "Test rows" in rows
+        total = int(rows["Train rows"]) + int(rows["Val rows"]) + int(rows["Test rows"])
+        assert total == 150
+
+    def test_umap_split_off_has_no_row_count_rows(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=40)
+        source = _make_multicol_source(workspace, "umapsplitoff", columns)
+        result = panel._compute(
+            source, ("umap", tuple(columns.keys()), 2, 10, 0.1, "zscore", 0, _NO_SAMPLING)
+        )
+        rows = dict(result.stats)
+        assert "Train rows" not in rows
+
+    def test_model_state_is_populated_only_for_the_four_trainable_kinds(self, workspace):
+        panel = MathLabPanel(workspace)
+        x = np.linspace(0.0, 10.0, 60)
+        y = np.sin(x)
+        source = _make_dataset_source(workspace, "modelstate1", x, y)
+
+        fit_result = panel._compute(
+            source,
+            (
+                "fit",
+                "polynomial",
+                2,
+                "",
+                None,
+                False,
+                "soft_l1",
+                False,
+                0.95,
+                False,
+                200,
+                _NO_SAMPLING,
+            ),
+        )
+        assert fit_result.model_state is not None
+
+        cluster_source = self._blob_source(workspace)
+        cluster_result = panel._compute(cluster_source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
+        assert cluster_result.model_state is not None
+
+        columns = _correlated_columns(n_rows=40)
+        nd_source = _make_multicol_source(workspace, "modelstate2", columns)
+        pca_result = panel._compute(
+            nd_source, ("pca", tuple(columns.keys()), 2, "zscore", _NO_SAMPLING)
+        )
+        assert pca_result.model_state is not None
+
+        smooth_result = panel._compute(source, ("smooth", "moving_average", 5, 0.0, 0, 0.0))
+        assert smooth_result.model_state is None
+
+        correlate_result = panel._compute(source, ("correlate", False, 0.95))
+        assert correlate_result.model_state is None
+
+    @staticmethod
+    def _blob_source(workspace, name="blobs_split"):
+        rng = np.random.default_rng(0)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.3, (60, 2)), rng.normal((10.0, 10.0), 0.3, (60, 2))]
+        )
+        return _make_dataset_source(workspace, name, pts[:, 0], pts[:, 1])
+
+
+def _wait_frames_until(panel, io, predicate, *, timeout=2.0, interval=0.005) -> None:
+    """Drive real frames until ``predicate()`` holds, polling rather than sleeping a
+    fixed amount -- robust against scheduler jitter, only fails if the condition
+    genuinely never becomes true within a generous margin."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        _draw_frame(panel, io)
+        if predicate():
+            return
+        time.sleep(interval)
+    raise AssertionError(f"condition not met within {timeout}s")
+
+
+def _drain(workspace) -> None:
+    """Run every command the queue holds (each a ``Command.do()``-wrapping closure
+    submitted via ``self.submit(...)``), without the trailing dirty-flag bookkeeping
+    ``CommandQueue.drain(plot)`` applies afterwards -- this file's own ``_FakePlot``
+    has no ``.frame``/``.cache`` for that step to touch, and these tests only care
+    that the queued closure actually ran."""
+    queue = workspace.queue
+    while len(queue):
+        queue._q.popleft()()
+
+
+def _fit_params(model_key: str, degree: int = 0) -> Tuple[Any, ...]:
+    """A ready-to-use Fit-tab params tuple for ``panel._compute(source, ...)`` -- every
+    knob but ``model_key``/``degree`` stays at a plain default (no expression, no
+    manual p0, non-robust, no confidence band, no output grid), since these tests care
+    about a particular fit's own numerics, not the surrounding UI knobs."""
+    return (
+        "fit",
+        model_key,
+        degree,
+        "",
+        None,
+        False,
+        "soft_l1",
+        False,
+        0.95,
+        False,
+        200,
+        _NO_SAMPLING,
+    )
+
+
+def _click_labelled_button(monkeypatch, matcher) -> None:
+    """Monkeypatch ``imgui.button`` so any label ``matcher(label)`` approves fires
+    True, every frame it's drawn -- for a plain "this button is pressed" assertion,
+    not a toggle (see :func:`_click_once_labelled_button` for that case)."""
+    real_button = imgui.button
+
+    def clicker(label, *a, **k):
+        return True if matcher(label) else real_button(label, *a, **k)
+
+    monkeypatch.setattr("glplot.gui.panels.mathlab.imgui.button", clicker)
+
+
+def _click_once_labelled_button(monkeypatch, matcher) -> None:
+    """Same as :func:`_click_labelled_button`, but the matched click only ever fires
+    True ONCE across the whole test -- every frame after that, the real button is
+    called normally. Needed for a toggle button (e.g. "Apply to..."): returning True
+    every frame would flip it open/closed/open instead of opening it once."""
+    real_button = imgui.button
+    fired = {"done": False}
+
+    def clicker(label, *a, **k):
+        if not fired["done"] and matcher(label):
+            fired["done"] = True
+            return True
+        return real_button(label, *a, **k)
+
+    monkeypatch.setattr("glplot.gui.panels.mathlab.imgui.button", clicker)
+
+
+class TestSaveAsModel:
+    """ "Save as model": mathlab.py's OWN wiring (``_build_trained_model``/
+    ``_draw_save_model_row``) -- ``ModelStore``'s add/remove/get/names/unique_name
+    behavior is already thoroughly covered by tests/test_gui_models.py's TestModelStore
+    and is deliberately not re-tested here.
+    """
+
+    @pytest.fixture
+    def fit_workspace(self):
+        """A single noiseless linear dataset -- the panel's default source with no
+        extra picking, and exact enough that a re-evaluated fit matches the settled
+        result to machine precision (used by later apply-transfer tests too)."""
+        ws = _FakeWorkspace()
+        x = np.linspace(-5.0, 5.0, 80)
+        y = 2.0 * x + 1.0
+        ws.store.add(DataSet("line", [Column("x", x), Column("y", y)]))
+        return ws
+
+    def _settle_fit(self, panel: MathLabPanel, io: Any, model: str = "gaussian") -> None:
+        panel.show_operation("fit")
+        panel._fit_model = model
+        for _ in range(4):
+            _draw_frame(panel, io)
+
+    def test_row_absent_for_a_non_trainable_tab(self, imgui_context, workspace, monkeypatch):
+        """Smooth is not in _TRAINABLE_TABS -- the row must never appear, however many
+        frames settle."""
+        panel = MathLabPanel(workspace)
+        panel.show_operation("smooth")
+        seen: List[str] = []
+        _click_labelled_button(monkeypatch, lambda label: (seen.append(label), False)[-1])
+        for _ in range(4):
+            _draw_frame(panel, imgui_context)
+        assert panel._cache_error is None
+        assert "Save as model" not in seen
+
+    def test_row_hidden_for_a_trainable_tab_whose_result_has_no_model_state(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """Direct check of the ``result.model_state is None`` half of the gate: a
+        non-trained ``_Result`` (from a non-fit operation) drawn under a trainable KEY
+        must still draw nothing."""
+        panel = MathLabPanel(workspace)
+        source = _dataset_source(workspace)
+        result = panel._compute(source, ("normalize", "minmax"))
+        assert result.model_state is None
+        seen: List[str] = []
+        _click_labelled_button(monkeypatch, lambda label: (seen.append(label), False)[-1])
+
+        def draw_row() -> None:
+            imgui.new_frame()
+            imgui.set_next_window_pos((100, 100))
+            imgui.set_next_window_size((_PANEL_W, _PANEL_H))
+            imgui.begin("Math Lab")
+            panel._draw_save_model_row(source, result, "fit")
+            imgui.end()
+            imgui.render()
+
+        draw_row()
+        assert "Save as model" not in seen
+
+    def test_row_shown_once_a_trainable_tab_has_settled(
+        self, imgui_context, fit_workspace, monkeypatch
+    ):
+        panel = MathLabPanel(fit_workspace)
+        seen: List[str] = []
+        _click_labelled_button(monkeypatch, lambda label: (seen.append(label), False)[-1])
+        self._settle_fit(panel, imgui_context, "linear")
+        assert panel._cache_error is None
+        assert panel._cache_result.model_state is not None
+        assert "Save as model" in seen
+
+    def test_clicking_save_does_not_trigger_a_new_compute_call(
+        self, imgui_context, fit_workspace, monkeypatch
+    ):
+        """Saving reads the already-settled ``_cache_result`` -- it must not recompute."""
+        panel = MathLabPanel(fit_workspace)
+        self._settle_fit(panel, imgui_context, "linear")
+        assert panel._cache_error is None
+
+        real_compute = panel._compute
+        calls = {"n": 0}
+
+        def counting(source, params):
+            calls["n"] += 1
+            return real_compute(source, params)
+
+        panel._compute = counting
+        _click_labelled_button(monkeypatch, lambda label: label == "Save as model")
+        _draw_frame(panel, imgui_context)
+
+        assert calls["n"] == 0, "clicking Save as model triggered a recompute"
+        assert not fit_workspace.queue.is_empty(), "the click never queued a save"
+        _drain(fit_workspace)
+        assert len(fit_workspace.models) == 1
+
+    def test_saved_fit_model_captures_popt_pcov_and_model_key(self, workspace):
+        panel = MathLabPanel(workspace)
+        x = np.linspace(-5.0, 5.0, 80)
+        source = _make_dataset_source(workspace, "linfit", x, 2.0 * x + 1.0)
+        result = panel._compute(source, _fit_params("linear"))
+        model = panel._build_trained_model(source, result, "fit")
+        assert model is not None
+        assert model.technique == "fit"
+        assert model.name == "Fit model"
+        assert model.fit_model_key == "linear"
+        assert model.input_columns == ("x",)
+        np.testing.assert_allclose(model.fit_popt, result.model_state["popt"])
+        np.testing.assert_allclose(model.fit_pcov, result.model_state["pcov"])
+
+    def test_saved_polynomial_fit_model_has_empty_expr_and_polyval_reproduces_it(self, workspace):
+        x = np.linspace(-3.0, 3.0, 60)
+        y = 2.0 * x**2 - 3.0 * x + 1.0
+        ws = _FakeWorkspace()
+        source = _make_dataset_source(ws, "polyfit", x, y)
+        panel = MathLabPanel(ws)
+        result = panel._compute(source, _fit_params("polynomial", degree=2))
+        model = panel._build_trained_model(source, result, "fit")
+        assert model.fit_model_key == "polynomial"
+        assert model.fit_expr == ""
+        assert model.fit_n_peaks == 0
+        np.testing.assert_allclose(np.polyval(model.fit_popt, x), y, atol=1e-6)
+
+    def test_saved_cluster_model_captures_method_and_centroids(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(3)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.2, (40, 2)), rng.normal((8.0, 8.0), 0.2, (40, 2))]
+        )
+        source = _make_dataset_source(workspace, "clusS", pts[:, 0], pts[:, 1])
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "cluster")
+        assert model.technique == "cluster"
+        assert model.cluster_method == "kmeans"
+        assert model.input_columns == ("x", "y")
+        np.testing.assert_allclose(model.cluster_centroid_x, result.model_state["centroid_x"])
+        np.testing.assert_allclose(model.cluster_centroid_y, result.model_state["centroid_y"])
+
+    def test_saved_pca_model_captures_components_mean_and_scale_stats(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns()
+        source = _make_multicol_source(workspace, "pcaS", columns)
+        names = tuple(columns.keys())
+        result = panel._compute(source, ("pca", names, 3, "zscore", _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "pca")
+        assert model.technique == "pca"
+        assert model.pca_columns == names
+        assert model.pca_scale == "zscore"
+        np.testing.assert_allclose(model.pca_components_, result.model_state["components_"])
+        np.testing.assert_allclose(model.pca_mean_, result.model_state["mean_"])
+        assert model.pca_scale_stats is result.model_state["scale_stats_"]
+
+    def test_saved_umap_model_captures_the_reducer(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=60)
+        source = _make_multicol_source(workspace, "umapS", columns)
+        names = tuple(columns.keys())
+        result = panel._compute(source, ("umap", names, 2, 10, 0.1, "zscore", 0, _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "umap")
+        assert model.technique == "umap"
+        assert model.umap_columns == names
+        assert model.umap_reducer is result.model_state["reducer"]
+
+    def test_saving_twice_with_the_same_typed_name_gets_deduped_by_modelstore(
+        self, imgui_context, fit_workspace, monkeypatch
+    ):
+        panel = MathLabPanel(fit_workspace)
+        self._settle_fit(panel, imgui_context, "linear")
+        assert panel._cache_error is None
+        panel._model_names["fit"] = "MyModel"
+
+        _click_labelled_button(monkeypatch, lambda label: label == "Save as model")
+        for _ in range(2):
+            _draw_frame(panel, imgui_context)
+            _drain(fit_workspace)
+
+        assert fit_workspace.models.names() == ["MyModel", "MyModel (2)"]
+
+    def test_saving_is_not_recorded_on_the_undo_stack(
+        self, imgui_context, fit_workspace, monkeypatch
+    ):
+        panel = MathLabPanel(fit_workspace)
+        self._settle_fit(panel, imgui_context, "linear")
+        assert panel._cache_error is None
+        before = len(panel.undo)
+
+        _click_labelled_button(monkeypatch, lambda label: label == "Save as model")
+        _draw_frame(panel, imgui_context)
+        _drain(fit_workspace)
+
+        assert len(fit_workspace.models) == 1
+        assert len(panel.undo) == before
+
+
+class TestModelRail:
+    """The right-hand trained-models rail: visibility, ordering, rename, delete, and
+    the thumbnail's reuse of the saved preview -- ``_draw_model_rail``/
+    ``_draw_model_row``/rename/delete/``draw()``'s width fallback.
+    """
+
+    def _simple_model(
+        self, panel: MathLabPanel, ws: _FakeWorkspace, *, name: str = "m", technique: str = "fit"
+    ) -> TrainedModel:
+        """A real, ``_build_trained_model``-produced model -- a genuine ``_Result`` as
+        its ``preview``, not a hand-rolled stand-in, so the rail's thumbnail dispatch
+        (``_draw_result_preview``) has real x/y/color_values to draw."""
+        if technique == "cluster":
+            rng = np.random.default_rng(1)
+            pts = np.vstack(
+                [rng.normal((0.0, 0.0), 0.2, (30, 2)), rng.normal((6.0, 6.0), 0.2, (30, 2))]
+            )
+            source = _make_dataset_source(ws, f"{name}_ds", pts[:, 0], pts[:, 1])
+            result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
+            model = panel._build_trained_model(source, result, "cluster")
+        else:
+            x = np.linspace(-5.0, 5.0, 80)
+            source = _make_dataset_source(ws, f"{name}_ds", x, 2.0 * x + 1.0)
+            result = panel._compute(source, _fit_params("linear"))
+            model = panel._build_trained_model(source, result, "fit")
+        assert model is not None
+        model.name = name
+        return model
+
+    def test_rail_hidden_with_zero_models_and_not_toggled(self, imgui_context, workspace):
+        panel = MathLabPanel(workspace)
+        assert panel._rail_open is False
+        assert not workspace.models.models
+        calls = {"n": 0}
+        real_rail = panel._draw_model_rail
+
+        def spy() -> None:
+            calls["n"] += 1
+            real_rail()
+
+        panel._draw_model_rail = spy
+        for _ in range(3):
+            _draw_frame(panel, imgui_context)
+        assert calls["n"] == 0
+
+    def test_rail_appears_automatically_after_the_first_save(self, imgui_context, workspace):
+        panel = MathLabPanel(workspace)
+        workspace.models.add(self._simple_model(panel, workspace, name="auto"))
+        assert panel._rail_open is False, "must not require the user to have opened it"
+        calls = {"n": 0}
+        real_rail = panel._draw_model_rail
+
+        def spy() -> None:
+            calls["n"] += 1
+            real_rail()
+
+        panel._draw_model_rail = spy
+        _draw_frame(panel, imgui_context)
+        assert calls["n"] > 0
+
+    def test_header_toggle_opens_the_rail_even_with_zero_models(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = MathLabPanel(workspace)
+        real_icon_button = icons.icon_button
+
+        def spy(id_str, shape, *args, **kwargs):
+            if shape == "layers":
+                return True
+            return real_icon_button(id_str, shape, *args, **kwargs)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.icons.icon_button", spy)
+        assert not workspace.models.models
+        assert panel._rail_open is False
+        _draw_frame(panel, imgui_context)
+        assert panel._rail_open is True
+
+    def test_models_are_listed_newest_first(self, imgui_context, workspace):
+        panel = MathLabPanel(workspace)
+        workspace.models.add(self._simple_model(panel, workspace, name="first"))
+        workspace.models.add(self._simple_model(panel, workspace, name="second"))
+        seen: List[str] = []
+        real_row = panel._draw_model_row
+
+        def spy(model: TrainedModel) -> None:
+            seen.append(model.name)
+            real_row(model)
+
+        panel._draw_model_row = spy
+        _draw_frame(panel, imgui_context)
+        assert seen == ["second", "first"]
+
+    def test_each_row_shows_a_technique_badge(self, imgui_context, workspace, monkeypatch):
+        panel = MathLabPanel(workspace)
+        workspace.models.add(
+            self._simple_model(panel, workspace, name="badge", technique="cluster")
+        )
+        texts: List[str] = []
+        real_text_colored = imgui.text_colored
+
+        def spy(color, text, *args, **kwargs):
+            texts.append(text)
+            return real_text_colored(color, text, *args, **kwargs)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.imgui.text_colored", spy)
+        _draw_frame(panel, imgui_context)
+        assert "CLUSTER" in texts
+
+    def test_double_click_begins_a_rename_and_the_rename_field_draws(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """``_begin_rail_rename`` is exactly what a rail row's double-click handler
+        calls (see ``_draw_model_row``) -- driven directly here since simulating a real
+        double-click through headless imgui has no sanctioned idiom in this suite, then
+        checked against the real draw: once rename is in progress, the inline text
+        field must actually render."""
+        panel = MathLabPanel(workspace)
+        model = self._simple_model(panel, workspace, name="torename")
+        workspace.models.add(model)
+
+        panel._begin_rail_rename(model)
+        assert panel._rail_rename_target == "torename"
+
+        seen_ids: List[str] = []
+        real_input_text = imgui.input_text
+
+        def spy(label, *args, **kwargs):
+            seen_ids.append(label)
+            return real_input_text(label, *args, **kwargs)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.imgui.input_text", spy)
+        _draw_frame(panel, imgui_context)
+        assert "##rail_rename" in seen_ids
+
+    def test_commit_rename_renames_the_model_and_is_not_on_the_undo_stack(self, workspace):
+        panel = MathLabPanel(workspace)
+        model = self._simple_model(panel, workspace, name="orig")
+        workspace.models.add(model)
+        before = len(panel.undo)
+
+        panel._begin_rail_rename(model)
+        panel._commit_rail_rename(model, "renamed")
+        assert panel._rail_rename_target is None, "commit must leave rename mode"
+        _drain(workspace)
+
+        assert model.name == "renamed"
+        assert workspace.models.get("renamed") is model
+        assert len(panel.undo) == before
+
+    def test_rename_that_collides_with_an_existing_name_gets_deduped(self, workspace):
+        panel = MathLabPanel(workspace)
+        a = self._simple_model(panel, workspace, name="a")
+        b = self._simple_model(panel, workspace, name="b")
+        workspace.models.add(a)
+        workspace.models.add(b)
+
+        panel._commit_rail_rename(b, "a")
+        _drain(workspace)
+
+        assert a.name == "a"
+        assert b.name == "a (2)"
+
+    def test_delete_removes_the_model_and_is_not_recorded_on_the_undo_stack(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = MathLabPanel(workspace)
+        model = self._simple_model(panel, workspace, name="todelete")
+        workspace.models.add(model)
+        before = len(panel.undo)
+
+        real_icon_button = icons.icon_button
+
+        def spy(id_str, shape, *args, **kwargs):
+            if shape == "trash":
+                return True
+            return real_icon_button(id_str, shape, *args, **kwargs)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.icons.icon_button", spy)
+        _draw_frame(panel, imgui_context)
+        _drain(workspace)
+
+        assert len(workspace.models) == 0
+        assert len(panel.undo) == before
+
+    def test_rail_thumbnail_reuses_the_saved_preview_without_recomputing(
+        self, imgui_context, workspace
+    ):
+        """Isolated to ``_draw_model_rail()`` alone, not a full ``panel.draw()`` frame:
+        the panel's currently-active TAB unconditionally recomputes its own result every
+        frame too (see ``_draw_body``), which would pollute a global ``_compute`` call
+        count that has nothing to do with the rail thumbnail this test is about."""
+        panel = MathLabPanel(workspace)
+        model = self._simple_model(panel, workspace, name="thumb")
+        workspace.models.add(model)
+
+        preview_calls: List[Any] = []
+        real_preview = panel._draw_result_preview
+
+        def spy_preview(result, **kwargs):
+            preview_calls.append((result, kwargs.get("id_prefix")))
+            return real_preview(result, **kwargs)
+
+        panel._draw_result_preview = spy_preview
+
+        compute_calls = {"n": 0}
+        real_compute = panel._compute
+
+        def counting(source, params):
+            compute_calls["n"] += 1
+            return real_compute(source, params)
+
+        panel._compute = counting
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((100, 100))
+        imgui.set_next_window_size((_PANEL_W, _PANEL_H))
+        imgui.begin("Math Lab")
+        panel._draw_model_rail()
+        imgui.end()
+        imgui.render()
+
+        rail_calls = [c for c in preview_calls if c[1] == "rail_thumb"]
+        assert rail_calls, "the rail row never drew its thumbnail via _draw_result_preview"
+        assert rail_calls[0][0] is model.preview
+        assert compute_calls["n"] == 0, "the rail thumbnail must not recompute the result"
+
+    def test_narrow_panel_falls_back_to_a_stacked_rail_section(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """Below ``_RAIL_MIN_LEFT_WIDTH``, the rail must draw as a full-width
+        collapsible section BELOW the body, not squeeze a fixed side column into a
+        panel too narrow for it (the live-window-screenshot regression noted in
+        ``draw()``'s own docstring)."""
+        panel = MathLabPanel(workspace)
+        workspace.models.add(self._simple_model(panel, workspace, name="narrow"))
+
+        section_labels: List[str] = []
+        real_section = widgets.section
+
+        def spy_section(label, **kwargs):
+            section_labels.append(label)
+            return real_section(label, **kwargs)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.widgets.section", spy_section)
+
+        child_ids: List[str] = []
+        real_begin_child = imgui.begin_child
+
+        def spy_begin_child(id_str, *args, **kwargs):
+            child_ids.append(id_str)
+            return real_begin_child(id_str, *args, **kwargs)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.imgui.begin_child", spy_begin_child)
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((100, 100))
+        imgui.set_next_window_size((300, _PANEL_H))
+        imgui.begin("Math Lab")
+        panel.draw()
+        imgui.end()
+        imgui.render()
+
+        assert "Trained models" in section_labels
+        assert "##mathlab_rail" not in child_ids
+
+    def test_wide_panel_uses_a_side_column_rail_not_a_stacked_section(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """The other half of the same fallback: a panel wide enough to spare
+        _RAIL_WIDTH without squeezing the body must use the side-column child, not the
+        stacked section -- guards against a fix for the narrow case regressing the
+        (still real, still used) wide case."""
+        panel = MathLabPanel(workspace)
+        workspace.models.add(self._simple_model(panel, workspace, name="wide"))
+
+        child_ids: List[str] = []
+        real_begin_child = imgui.begin_child
+
+        def spy_begin_child(id_str, *args, **kwargs):
+            child_ids.append(id_str)
+            return real_begin_child(id_str, *args, **kwargs)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.imgui.begin_child", spy_begin_child)
+
+        imgui.new_frame()
+        imgui.set_next_window_pos((100, 100))
+        imgui.set_next_window_size((1000, _PANEL_H))
+        imgui.begin("Math Lab")
+        panel.draw()
+        imgui.end()
+        imgui.render()
+
+        assert "##mathlab_rail" in child_ids
+
+
+class TestApplyModelToDataset:
+    """Transferring a saved TrainedModel onto a (usually different) dataset --
+    ``_evaluate_model``/``_command_apply_model_add_column``/
+    ``_command_apply_model_new_dataset``/``_draw_apply_model_section``.
+    """
+
+    def _fit_model(self, panel: MathLabPanel, ws: _FakeWorkspace, *, name: str = "fitm"):
+        x = np.linspace(-5.0, 5.0, 80)
+        y = 2.0 * x + 1.0
+        source = _make_dataset_source(ws, f"{name}_ds", x, y)
+        result = panel._compute(source, _fit_params("linear"))
+        model = panel._build_trained_model(source, result, "fit")
+        assert model is not None
+        model.name = name
+        return model, source, result
+
+    def test_evaluate_fit_model_reproduces_the_fit_on_its_own_training_x(self, workspace):
+        panel = MathLabPanel(workspace)
+        model, source, result = self._fit_model(panel, workspace)
+        values = panel._evaluate_model(model, source.dataset, {"x": "x"})
+        np.testing.assert_allclose(values, result.y, atol=1e-6)
+
+    def test_evaluate_polynomial_fit_model_uses_polyval_not_fit_spec(self, workspace, monkeypatch):
+        x = np.linspace(-3.0, 3.0, 60)
+        y = 2.0 * x**2 - 3.0 * x + 1.0
+        ws = _FakeWorkspace()
+        source = _make_dataset_source(ws, "polyfit", x, y)
+        panel = MathLabPanel(ws)
+        result = panel._compute(source, _fit_params("polynomial", degree=2))
+        model = panel._build_trained_model(source, result, "fit")
+        assert model.fit_model_key == "polynomial"
+
+        def boom(*args, **kwargs):
+            raise AssertionError("_fit_spec must never be reached for a polynomial model")
+
+        monkeypatch.setattr(panel, "_fit_spec", boom)
+        values = panel._evaluate_model(model, source.dataset, {"x": "x"})
+        np.testing.assert_allclose(values, np.polyval(model.fit_popt, x), atol=1e-9)
+
+    def test_evaluate_fit_model_on_a_different_dataset_sizes_to_its_own_row_count(self, workspace):
+        panel = MathLabPanel(workspace)
+        model, _source, _result = self._fit_model(panel, workspace)
+        target = DataSet("other", [Column("t", np.linspace(0.0, 1.0, 17))])
+        workspace.store.add(target)
+        values = panel._evaluate_model(model, target, {"x": "t"})
+        assert np.asarray(values).shape == (17,)
+        spec = panel._fit_spec(model.fit_model_key, model.fit_expr, model.fit_n_peaks)
+        np.testing.assert_allclose(values, spec.fn(target.get("t"), *model.fit_popt), atol=1e-9)
+
+    def test_evaluate_cluster_model_uses_nearest_centroid(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(2)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.2, (40, 2)), rng.normal((8.0, 8.0), 0.2, (40, 2))]
+        )
+        source = _make_dataset_source(workspace, "clusA", pts[:, 0], pts[:, 1])
+        result = panel._compute(source, ("cluster", "kmeans", 2, 0, _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "cluster")
+
+        target = DataSet(
+            "clusB", [Column("px", np.array([0.1, 8.1])), Column("py", np.array([0.1, 8.1]))]
+        )
+        workspace.store.add(target)
+        values = panel._evaluate_model(model, target, {"x": "px", "y": "py"})
+        expected = mathops2d.nearest_centroid(
+            target.get("px"), target.get("py"), model.cluster_centroid_x, model.cluster_centroid_y
+        )
+        np.testing.assert_array_equal(values, expected)
+
+    def test_evaluate_hierarchical_cluster_model_also_uses_nearest_centroid(self, workspace):
+        """Hierarchical clustering has no native out-of-sample rule -- the approved
+        transfer is the same nearest-centroid assignment k-means uses."""
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(5)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.2, (20, 2)), rng.normal((8.0, 8.0), 0.2, (20, 2))]
+        )
+        source = _make_dataset_source(workspace, "hierA", pts[:, 0], pts[:, 1])
+        result = panel._compute(source, ("cluster", "hierarchical", 2, "ward", _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "cluster")
+        assert model.cluster_method == "hierarchical"
+
+        target = DataSet(
+            "hierB", [Column("px", np.array([0.1, 8.1])), Column("py", np.array([0.1, 8.1]))]
+        )
+        workspace.store.add(target)
+        values = panel._evaluate_model(model, target, {"x": "px", "y": "py"})
+        expected = mathops2d.nearest_centroid(
+            target.get("px"), target.get("py"), model.cluster_centroid_x, model.cluster_centroid_y
+        )
+        np.testing.assert_array_equal(values, expected)
+
+    def test_hierarchical_apply_section_shows_a_permanent_disclosure(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """The disclosure must be a standing help-marker line, drawn every frame the
+        section is open -- not a one-time dismissible warning."""
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(9)
+        pts = np.vstack(
+            [rng.normal((0.0, 0.0), 0.2, (20, 2)), rng.normal((8.0, 8.0), 0.2, (20, 2))]
+        )
+        source = _make_dataset_source(workspace, "hierD", pts[:, 0], pts[:, 1])
+        result = panel._compute(source, ("cluster", "hierarchical", 2, "ward", _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "cluster")
+        model.name = "hier"
+        workspace.models.add(model)
+
+        _click_once_labelled_button(monkeypatch, lambda label: label.startswith("Apply to..."))
+
+        marks: List[str] = []
+        real_marker = widgets.help_marker
+
+        def spy_marker(text):
+            marks.append(text)
+            return real_marker(text)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.widgets.help_marker", spy_marker)
+
+        for _ in range(3):
+            marks.clear()
+            _draw_frame(panel, imgui_context)
+            assert any(
+                "nearest saved centroid" in t for t in marks
+            ), "the hierarchical disclosure did not draw this frame"
+
+    def test_evaluate_pca_model_matches_pca_transform_called_directly(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns()
+        source = _make_multicol_source(workspace, "pcaE", columns)
+        names = tuple(columns.keys())
+        result = panel._compute(source, ("pca", names, 3, "zscore", _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "pca")
+
+        # A different dataset with the same columns, reordered rows.
+        order = np.arange(len(columns[names[0]]))[::-1]
+        target = DataSet("pcaTarget", [Column(n, columns[n][order]) for n in names])
+        workspace.store.add(target)
+        column_map = {n: n for n in names}
+
+        values = panel._evaluate_model(model, target, column_map)
+        expected = mathopsnd.pca_transform(
+            [target.get(n) for n in names],
+            mean_=model.pca_mean_,
+            components_=model.pca_components_,
+            scale_stats=model.pca_scale_stats,
+            scale=model.pca_scale,
+        )
+        np.testing.assert_allclose(values, expected)
+
+    def test_evaluate_umap_model_calls_the_saved_reducers_own_transform(
+        self, workspace, monkeypatch
+    ):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=60)
+        source = _make_multicol_source(workspace, "umapE", columns)
+        names = tuple(columns.keys())
+        result = panel._compute(source, ("umap", names, 2, 10, 0.1, "zscore", 0, _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "umap")
+
+        target = DataSet("umapTarget", [Column(n, columns[n]) for n in names])
+        workspace.store.add(target)
+
+        calls: List[Any] = []
+        real_transform = model.umap_reducer.transform
+
+        def spy_transform(x):
+            calls.append(x)
+            return real_transform(x)
+
+        monkeypatch.setattr(model.umap_reducer, "transform", spy_transform)
+
+        values = panel._evaluate_model(model, target, {n: n for n in names})
+        assert calls, "evaluate did not call the saved reducer's own .transform"
+        assert np.asarray(values).shape[0] == target.n_rows()
+
+    def test_evaluate_raises_a_clear_error_when_a_required_column_is_missing(self, workspace):
+        panel = MathLabPanel(workspace)
+        model, source, _result = self._fit_model(panel, workspace, name="missingcol")
+        with pytest.raises(ValueError, match="no column"):
+            panel._evaluate_model(model, source.dataset, {})
+
+    def test_umap_model_with_no_saved_reducer_is_disabled_with_a_reason_not_a_crash(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """A model saved when umap-learn was unavailable carries ``umap_reducer=None``
+        -- the UI must show a disabled reason instead of reaching _evaluate_model."""
+        panel = MathLabPanel(workspace)
+        model = TrainedModel(
+            name="noreducer",
+            technique="umap",
+            created=0.0,
+            source_label="src [a, b]",
+            input_columns=("a", "b"),
+            umap_columns=("a", "b"),
+            umap_reducer=None,
+        )
+        workspace.models.add(model)
+
+        _click_once_labelled_button(monkeypatch, lambda label: label.startswith("Apply to..."))
+
+        marks: List[str] = []
+        real_marker = widgets.help_marker
+
+        def spy_marker(text):
+            marks.append(text)
+            return real_marker(text)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.widgets.help_marker", spy_marker)
+
+        for _ in range(2):
+            _draw_frame(panel, imgui_context)  # must not raise
+        assert any("Unavailable" in t for t in marks)
+
+        with pytest.raises(ValueError, match="no saved UMAP reducer"):
+            panel._evaluate_model(model, workspace.store.get("alpha"), {"a": "x", "b": "y"})
+
+    def test_add_column_apply_sizes_output_to_the_target_with_no_nan_padding(self, workspace):
+        panel = MathLabPanel(workspace)
+        model, _source, _result = self._fit_model(panel, workspace, name="addcol")
+        target = DataSet("addcolTarget", [Column("tx", np.linspace(-2.0, 2.0, 13))])
+        workspace.store.add(target)
+
+        cmd = panel._command_apply_model_add_column(model, target, {"x": "tx"}, "predicted")
+        assert cmd is not None
+        before = target.n_cols()
+        cmd.do()
+        try:
+            assert target.n_cols() == before + 1
+            new_col = target.columns[-1]
+            assert new_col.name == "predicted"
+            assert len(new_col.values) == 13
+            assert not np.isnan(new_col.values).any()
+        finally:
+            cmd.undo()
+        assert target.n_cols() == before
+
+    def test_new_dataset_apply_creates_one_column_per_pca_component(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns()
+        source = _make_multicol_source(workspace, "pcaND", columns)
+        names = tuple(columns.keys())
+        result = panel._compute(source, ("pca", names, 3, "zscore", _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "pca")
+
+        target = DataSet("pcaNDTarget", [Column(n, columns[n]) for n in names])
+        workspace.store.add(target)
+        column_map = {n: n for n in names}
+        cmd = panel._command_apply_model_new_dataset(model, target, column_map, "applied")
+        assert cmd is not None
+        before = set(workspace.store.names())
+        cmd.do()
+        try:
+            new_name = next(iter(set(workspace.store.names()) - before))
+            created = workspace.store.get(new_name)
+            assert created.column_names() == ["applied 1", "applied 2", "applied 3"]
+            assert created.n_rows() == target.n_rows()
+        finally:
+            cmd.undo()
+
+    def test_undo_on_add_column_apply_removes_exactly_the_columns_it_added(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns()
+        source = _make_multicol_source(workspace, "pcaUndo", columns)
+        names = tuple(columns.keys())
+        result = panel._compute(source, ("pca", names, 2, "zscore", _NO_SAMPLING))
+        model = panel._build_trained_model(source, result, "pca")
+
+        target = DataSet("pcaUndoTarget", [Column(n, columns[n]) for n in names])
+        workspace.store.add(target)
+        before_cols = list(target.column_names())
+        cmd = panel._command_apply_model_add_column(model, target, {n: n for n in names}, "score")
+        assert cmd is not None
+        cmd.do()
+        assert target.column_names() == before_cols + ["score 1", "score 2"]
+        cmd.undo()
+        assert target.column_names() == before_cols
+
+    def test_ui_drives_apply_to_dataset_add_column_end_to_end(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """The full path: the rail's own "Apply to..." section, pre-opened and with a
+        target/column mapping picked, "Apply" pressed, drain -- and the written values
+        match a direct _evaluate_model call.
+
+        Drawn via ``_draw_apply_model_section`` directly, not a full ``panel.draw()``
+        frame: the panel's currently-active TAB also has its own "Apply" button with
+        the exact same label (``_draw_apply``, line 5426), so a full-frame draw with
+        every "Apply" forced to click would ALSO fire that unrelated button -- isolating
+        the section keeps this test about the rail's own Apply, and only it.
+        """
+        panel = MathLabPanel(workspace)
+        model, _source, _result = self._fit_model(panel, workspace, name="uiapply")
+        workspace.models.add(model)
+
+        target = DataSet("uiApplyTarget", [Column("tx", np.linspace(-1.0, 1.0, 9))])
+        workspace.store.add(target)
+
+        key = model.name
+        panel._apply_model_open[key] = True
+        panel._apply_model_target_ds[key] = "uiApplyTarget"
+        panel._apply_model_columns[key] = {"x": "tx"}
+
+        _click_labelled_button(monkeypatch, lambda label: label == "Apply")
+
+        def draw_section() -> None:
+            imgui.new_frame()
+            imgui.set_next_window_pos((100, 100))
+            imgui.set_next_window_size((_PANEL_W, _PANEL_H))
+            imgui.begin("Math Lab")
+            panel._draw_apply_model_section(model)
+            imgui.end()
+            imgui.render()
+
+        before = target.n_cols()
+        draw_section()
+        assert not workspace.queue.is_empty(), "the Apply click never queued a command"
+        _drain(workspace)
+
+        assert target.n_cols() == before + 1
+        new_col = target.columns[-1]
+        assert new_col.name == "uiapply applied"
+        expected = panel._evaluate_model(model, target, {"x": "tx"})
+        np.testing.assert_allclose(new_col.values, expected, atol=1e-9)
+
+
+# ============================================================================
+# Diagnostic mini-plots (Phase 5): Fit residuals, PCA scree, k-means
+# elbow/silhouette, UMAP "color by column" -- lost from this file by the same
+# tool-use accident the sections above explain; rebuilt fresh here against the
+# current, intact production code rather than reconstructed from memory.
+# ============================================================================
+
+
+class TestFitDiagnostics:
+    """``result.diagnostic`` on the Fit tab: ``{"kind": "residuals", "x": ..., "y": ...}``,
+    actual minus fitted, always evaluated at the SOURCE's own (post-subsample) x -- never
+    at a synthetic output grid, and (with a split on) using the TRAIN-fit parameters but
+    scored over every post-subsample row, not just the train subset."""
+
+    def test_polynomial_residuals_equal_actual_minus_fitted_at_source_x(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(1)
+        x = np.linspace(-5.0, 5.0, 60)
+        y = 2.0 * x + 1.0 + rng.normal(0.0, 0.2, x.size)
+        source = _make_dataset_source(workspace, "fitdiag1", x, y)
+        result = panel._compute(
+            source,
+            (
+                "fit",
+                "polynomial",
+                1,
+                "",
+                None,
+                False,
+                "soft_l1",
+                False,
+                0.95,
+                False,
+                200,
+                _NO_SAMPLING,
+            ),
+        )
+        diag = result.diagnostic
+        assert diag is not None
+        assert diag["kind"] == "residuals"
+        coeffs = result.model_state["popt"]
+        expected = y - np.polyval(coeffs, x)
+        np.testing.assert_allclose(diag["x"], x)
+        np.testing.assert_allclose(diag["y"], expected)
+
+    def test_named_model_residuals_use_the_fitted_spec_not_polyval(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(2)
+        x = np.linspace(-5.0, 5.0, 80)
+        y = 3.0 * x - 2.0 + rng.normal(0.0, 0.15, x.size)
+        source = _make_dataset_source(workspace, "fitdiag2", x, y)
+        result = panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, False, 200, _NO_SAMPLING),
+        )
+        diag = result.diagnostic
+        assert diag is not None and diag["kind"] == "residuals"
+        popt = result.model_state["popt"]
+        expected = y - mathops.MODELS["linear"].fn(x, *popt)
+        np.testing.assert_allclose(diag["y"], expected, atol=1e-9)
+
+    def test_residuals_use_the_sources_own_x_even_when_use_grid_is_on(self, workspace):
+        """The main result may commit a synthetic N-point grid; the diagnostic must not."""
+        panel = MathLabPanel(workspace)
+        x = np.linspace(-5.0, 5.0, 37)
+        y = 2.0 * x + 1.0
+        source = _make_dataset_source(workspace, "fitdiag3", x, y)
+        result = panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, True, 500, _NO_SAMPLING),
+        )
+        assert result.x.size == 500, "the main result grid must still be the requested size"
+        diag = result.diagnostic
+        assert diag["x"].size == 37, "the diagnostic must keep the source's own row count"
+        np.testing.assert_allclose(diag["x"], x)
+        popt = result.model_state["popt"]
+        expected = y - mathops.MODELS["linear"].fn(x, *popt)
+        np.testing.assert_allclose(diag["y"], expected, atol=1e-9)
+
+    def test_residuals_evaluate_the_polynomial_grid_case_at_source_x_too(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(9)
+        x = np.sort(rng.uniform(-3.0, 3.0, 45))
+        y = 2.0 * x**2 - 3.0 * x + 1.0
+        source = _make_dataset_source(workspace, "fitdiag4", x, y)
+        result = panel._compute(
+            source,
+            (
+                "fit",
+                "polynomial",
+                2,
+                "",
+                None,
+                False,
+                "soft_l1",
+                False,
+                0.95,
+                True,
+                300,
+                _NO_SAMPLING,
+            ),
+        )
+        diag = result.diagnostic
+        assert diag["x"].size == 45
+        np.testing.assert_allclose(diag["x"], x)
+        coeffs = result.model_state["popt"]
+        np.testing.assert_allclose(diag["y"], y - np.polyval(coeffs, x), atol=1e-9)
+
+    def test_residuals_reflect_the_train_fit_popt_over_the_full_post_subsample_source(
+        self, workspace
+    ):
+        """``training.split`` on: model_state's popt is fit on train only, but the
+        diagnostic still covers every post-subsample row, not just train."""
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(3)
+        x = np.linspace(0.0, 10.0, 300)
+        y = 2.0 * x + 1.0 + rng.normal(0.0, 0.05, x.size)
+        source = _make_dataset_source(workspace, "fitdiag5", x, y)
+        training = _SamplingParams(split=True, val_frac=0.2, test_frac=0.2, split_seed=0)
+        result = panel._compute(
+            source,
+            ("fit", "polynomial", 1, "", None, False, "soft_l1", False, 0.95, False, 200, training),
+        )
+        train_idx, _val_idx, _test_idx = _split_indices(x.size, 0.2, 0.2, seed=0)
+        expected_coeffs, _cov, _yfit = mathops.fit_polynomial_covariance(
+            x[train_idx], y[train_idx], 1
+        )
+        np.testing.assert_allclose(result.model_state["popt"], expected_coeffs)
+
+        diag = result.diagnostic
+        # The diagnostic's x is every post-subsample row (300), not the ~240-row train
+        # subset the model itself was fit on.
+        assert diag["x"].size == 300 == x.size
+        assert diag["x"].size != train_idx.size
+        np.testing.assert_allclose(diag["x"], x)
+        expected_residuals = y - np.polyval(expected_coeffs, x)
+        np.testing.assert_allclose(diag["y"], expected_residuals, atol=1e-9)
+
+    def test_named_model_residuals_also_reflect_train_fit_popt_over_full_source(self, workspace):
+        panel = MathLabPanel(workspace)
+        rng = np.random.default_rng(4)
+        x = np.linspace(0.0, 10.0, 250)
+        y = 3.0 * x - 1.0 + rng.normal(0.0, 0.1, x.size)
+        source = _make_dataset_source(workspace, "fitdiag6", x, y)
+        training = _SamplingParams(split=True, val_frac=0.2, test_frac=0.2, split_seed=1)
+        result = panel._compute(
+            source,
+            ("fit", "linear", 0, "", None, False, "soft_l1", False, 0.95, False, 200, training),
+        )
+        diag = result.diagnostic
+        assert diag["x"].size == 250
+        popt = result.model_state["popt"]
+        expected = y - mathops.MODELS["linear"].fn(x, *popt)
+        np.testing.assert_allclose(diag["y"], expected, atol=1e-9)
+
+    def test_no_diagnostic_for_operations_other_than_fit_and_pca(self, workspace):
+        source = _make_dataset_source(
+            workspace, "fitdiag7", np.linspace(0, 10, 40), np.sin(np.linspace(0, 10, 40))
+        )
+        panel = MathLabPanel(workspace)
+        result = panel._compute(source, ("normalize", "minmax"))
+        assert result.diagnostic is None
+
+
+class TestPcaDiagnostics:
+    """``result.diagnostic`` on the PCA tab: ``{"kind": "scree", "ratios": ..., "chosen": ...}``
+    -- the FULL explained-variance spectrum, not just the ``n_components`` kept."""
+
+    def test_pca_backend_returns_the_full_spectrum_not_just_kept_components(self):
+        columns = _correlated_columns(n_rows=200, n_features=5)
+        arrays = list(columns.values())
+        out = mathopsnd.pca(arrays, n_components=2, scale="zscore")
+        full = out["explained_variance_ratio_full"]
+        assert full.size == min(out["n_samples"], out["n_features"]) == 5
+        # First n_components entries match explained_variance_ratio exactly.
+        np.testing.assert_allclose(full[:2], out["explained_variance_ratio"])
+
+    def test_full_spectrum_length_is_independent_of_n_components_requested(self):
+        columns = _correlated_columns(n_rows=150, n_features=6)
+        arrays = list(columns.values())
+        small = mathopsnd.pca(arrays, n_components=1, scale="zscore")
+        large = mathopsnd.pca(arrays, n_components=5, scale="zscore")
+        assert small["explained_variance_ratio_full"].size == 6
+        assert large["explained_variance_ratio_full"].size == 6
+        np.testing.assert_allclose(
+            small["explained_variance_ratio_full"], large["explained_variance_ratio_full"]
+        )
+
+    def test_scree_diagnostic_matches_the_backends_full_spectrum(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=200, n_features=5)
+        source = _make_multicol_source(workspace, "pcadiag1", columns)
+        names = tuple(columns.keys())
+        result = panel._compute(source, ("pca", names, 3, "zscore", _NO_SAMPLING))
+        diag = result.diagnostic
+        assert diag is not None and diag["kind"] == "scree"
+        expected = mathopsnd.pca([columns[n] for n in names], n_components=3, scale="zscore")[
+            "explained_variance_ratio_full"
+        ]
+        np.testing.assert_allclose(diag["ratios"], expected)
+        assert diag["ratios"].size == 5, "5 columns, so up to 5 singular values"
+
+    def test_scree_diagnostic_marks_the_chosen_component_count(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=120, n_features=4)
+        source = _make_multicol_source(workspace, "pcadiag2", columns)
+        names = tuple(columns.keys())
+        result = panel._compute(source, ("pca", names, 2, "zscore", _NO_SAMPLING))
+        diag = result.diagnostic
+        assert diag["chosen"] == 2
+
+        result4 = panel._compute(source, ("pca", names, 4, "zscore", _NO_SAMPLING))
+        assert result4.diagnostic["chosen"] == 4
+        # The spectrum itself does not depend on how many components were requested.
+        np.testing.assert_allclose(diag["ratios"], result4.diagnostic["ratios"])
+
+    def test_scree_ratios_sum_to_at_most_one(self, workspace):
+        panel = MathLabPanel(workspace)
+        columns = _correlated_columns(n_rows=100, n_features=5)
+        source = _make_multicol_source(workspace, "pcadiag3", columns)
+        result = panel._compute(source, ("pca", tuple(columns.keys()), 2, "zscore", _NO_SAMPLING))
+        ratios = result.diagnostic["ratios"]
+        assert float(np.sum(ratios)) == pytest.approx(1.0, abs=1e-6)
+
+
+class TestClusterDiagnostics:
+    """The k-means elbow/silhouette k-sweep: its own dedicated ``BackgroundJob``
+    (``_elbow_jobs``/``_elbow_results``), never dispatched through
+    ``_cached_result_async``/``_compute``, offered only for kmeans, and never run
+    automatically."""
+
+    def _blob_source(self, workspace, name="cdiagblobs", seed=0, n_per=60):
+        rng = np.random.default_rng(seed)
+        c1 = rng.normal((0.0, 0.0), 0.3, (n_per, 2))
+        c2 = rng.normal((10.0, 10.0), 0.3, (n_per, 2))
+        pts = np.vstack([c1, c2])
+        return _make_dataset_source(workspace, name, pts[:, 0], pts[:, 1])
+
+    def _force_section_open(self, monkeypatch, label):
+        real_section = widgets.section
+
+        def spy(lbl, *a, **k):
+            return True if lbl == label else real_section(lbl, *a, **k)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.widgets.section", spy)
+
+    def _wait_for_elbow(self, panel, io, key="cluster", timeout=8.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            _draw_frame(panel, io)
+            if panel._elbow_results.get(key) is not None:
+                return
+            time.sleep(0.01)
+        raise AssertionError("elbow/silhouette sweep never completed")
+
+    def test_elbow_section_is_offered_for_kmeans_not_hierarchical(self, imgui_context, workspace):
+        panel = MathLabPanel(workspace)
+        self._blob_source(workspace, name="cdiagA")
+
+        calls = []
+        real = panel._draw_elbow_section
+
+        def spy(source, key):
+            calls.append(key)
+            return real(source, key)
+
+        panel._draw_elbow_section = spy
+
+        panel.show_operation("cluster")
+        panel._cluster_method = "kmeans"
+        for _ in range(6):
+            _draw_frame(panel, imgui_context)
+        assert calls, "kmeans must offer the elbow/silhouette section"
+
+        calls.clear()
+        panel._cluster_method = "hierarchical"
+        for _ in range(6):
+            _draw_frame(panel, imgui_context)
+        assert not calls, "hierarchical must NOT offer the elbow/silhouette section"
+
+    def test_elbow_sweep_never_runs_automatically_from_viewing_the_tab(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = MathLabPanel(workspace)
+        self._blob_source(workspace, name="cdiagB")
+        # Force the collapsible section itself open (the strongest form of this claim:
+        # even with the button actually drawn and visible, no click means no job).
+        self._force_section_open(monkeypatch, "Elbow / silhouette (k-means)")
+
+        panel.show_operation("cluster")
+        panel._cluster_method = "kmeans"
+        for _ in range(10):
+            _draw_frame(panel, imgui_context)
+
+        assert panel._elbow_jobs == {}
+        assert panel._elbow_results == {}
+
+    def test_click_dispatches_a_real_sweep_and_marks_the_selected_k(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = MathLabPanel(workspace)
+        self._blob_source(workspace, name="cdiagC", n_per=60)  # 120 rows total
+        self._force_section_open(monkeypatch, "Elbow / silhouette (k-means)")
+        _click_once_labelled_button(
+            monkeypatch, lambda label: label.startswith("Compute elbow/silhouette")
+        )
+
+        marker_calls = {}
+        real_mini_plot = widgets.mini_plot
+
+        def spy_mini_plot(id_str, y, *a, **k):
+            if id_str in ("elbow_inertia", "elbow_silhouette"):
+                marker_calls[id_str] = k.get("markers")
+            return real_mini_plot(id_str, y, *a, **k)
+
+        monkeypatch.setattr("glplot.gui.panels.mathlab.widgets.mini_plot", spy_mini_plot)
+
+        panel.show_operation("cluster")
+        panel._cluster_method = "kmeans"
+        panel._cluster_k = 3
+        self._wait_for_elbow(panel, imgui_context, key="cluster")
+
+        k_values, inertias, silhouettes = panel._elbow_results["cluster"]
+        assert k_values.size > 0
+        assert float(k_values[0]) == 2.0
+        # 120 points, so the sweep is capped at the module's own max_k=10, not the row count.
+        assert float(k_values[-1]) == 10.0
+        assert inertias.shape == k_values.shape == silhouettes.shape
+
+        # One more settled frame so the mini_plot spy above sees the now-populated results.
+        _draw_frame(panel, imgui_context)
+        assert "elbow_inertia" in marker_calls and marker_calls["elbow_inertia"] is not None
+        mk_x, mk_y = marker_calls["elbow_inertia"]
+        assert mk_x == [3.0], "the marker must sit at the currently selected k"
+        idx3 = int(np.argmin(np.abs(k_values - 3.0)))
+        assert mk_y == pytest.approx([float(inertias[idx3])])
+
+    def test_elbow_sweep_operates_on_the_subsampled_row_set_not_the_full_dataset(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = MathLabPanel(workspace)
+        source = self._blob_source(workspace, name="cdiagD", n_per=2500)  # 5000 rows total
+
+        # Set the sub-sampling state directly (the "Sampling" section stays collapsed
+        # and untouched -- this mirrors how the elbow section reads it, independent of
+        # whether that section has ever been opened in the UI).
+        panel._sampling_enabled["cluster"] = True
+        panel._sampling_max_rows["cluster"] = 5
+        panel._sampling_seed["cluster"] = 0
+
+        # Confirm _cluster_training_xy (what the elbow section actually fits on) itself
+        # already reflects the cap, independent of the async plumbing below.
+        panel._current_source = source
+        xa, ya = panel._cluster_training_xy(source, "cluster")
+        assert xa.size == ya.size == 5
+
+        self._force_section_open(monkeypatch, "Elbow / silhouette (k-means)")
+        _click_once_labelled_button(
+            monkeypatch, lambda label: label.startswith("Compute elbow/silhouette")
+        )
+
+        panel.show_operation("cluster")
+        panel._cluster_method = "kmeans"
+        self._wait_for_elbow(panel, imgui_context, key="cluster")
+
+        k_values, _inertias, _silhouettes = panel._elbow_results["cluster"]
+        # min(max_k=10, n - 1) with n=5 (the SUBSAMPLE cap) is 4, not 10 (which is what
+        # the full 5000-row dataset would have produced).
+        assert float(k_values[-1]) == 4.0
+        assert k_values.size == 3  # k = 2, 3, 4
+
+
+# ============================================================================
+# UMAP "color by column" preview (Phase 5): presentation-only, recolors the
+# already-computed embedding without touching _compute/caching/model_state.
+# ============================================================================
+
+
+class TestUmapDiagnostics:
+    def _columns_with_category(self, n_rows=150, n_features=4, seed=0):
+        columns = _correlated_columns(n_rows=n_rows, n_features=n_features, seed=seed)
+        # A column NOT included in the embedding -- what "color by" recolors with.
+        columns["cat"] = (np.arange(n_rows) % 3).astype(np.float64)
+        return columns
+
+    def test_color_by_column_produces_categories_and_an_aligned_bucketed_array(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = self._columns_with_category(n_rows=150)
+        embed_cols = ("a", "b", "c", "noise3")
+        source = _make_multicol_source(workspace, "umapdiag1", columns, x_col="a", y_col="b")
+        result = panel._compute(source, ("umap", embed_cols, 2, 10, 0.1, "zscore", 0, _NO_SAMPLING))
+        bucket = panel._umap_color_values(source, "umap", result, "cat")
+        assert bucket is not None
+        categories, bucketed = bucket
+        assert bucketed.size == int(np.asarray(result.x).size)
+        np.testing.assert_array_equal(np.sort(categories), np.array([0.0, 1.0, 2.0]))
+
+        # The bucketed values must actually correspond to "cat" at the embedding's own
+        # rows (every row here, since nothing was subsampled and nothing is non-finite).
+        expected_picked = source.dataset.get("cat")
+        expected_categories, expected_bucketed = np.unique(expected_picked, return_inverse=True)
+        np.testing.assert_array_equal(categories, expected_categories)
+        np.testing.assert_array_equal(bucketed, expected_bucketed.astype(np.int64))
+
+    def test_color_by_column_length_matches_the_embedding_after_subsampling(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = self._columns_with_category(n_rows=800, n_features=4)
+        embed_cols = ("a", "b", "c", "noise3")
+        source = _make_multicol_source(workspace, "umapdiag2", columns, x_col="a", y_col="b")
+
+        training = _SamplingParams(subsample=True, max_rows=100, subsample_seed=0)
+        panel._sampling_enabled["umap"] = True
+        panel._sampling_max_rows["umap"] = 100
+        panel._sampling_seed["umap"] = 0
+
+        result = panel._compute(source, ("umap", embed_cols, 2, 10, 0.1, "zscore", 0, training))
+        n_embedding = int(np.asarray(result.x).size)
+        assert n_embedding <= 100
+        assert n_embedding < 800, "the embedding must actually be smaller than the full dataset"
+
+        bucket = panel._umap_color_values(source, "umap", result, "cat")
+        assert bucket is not None
+        _categories, bucketed = bucket
+        assert bucketed.size == n_embedding
+
+        # Cross-check against the row-index reconstruction directly.
+        row_idx = panel._umap_row_indices(source, "umap", embed_cols)
+        assert row_idx.size == n_embedding
+        expected_picked = np.asarray(source.dataset.get("cat"))[row_idx]
+        _expected_categories, expected_bucketed = np.unique(expected_picked, return_inverse=True)
+        np.testing.assert_array_equal(bucketed, expected_bucketed.astype(np.int64))
+
+    def test_color_by_column_is_presentation_only_and_never_touches_model_state(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = self._columns_with_category(n_rows=120)
+        embed_cols = ("a", "b", "c", "noise3")
+        source = _make_multicol_source(workspace, "umapdiag3", columns, x_col="a", y_col="b")
+        result = panel._compute(source, ("umap", embed_cols, 2, 10, 0.1, "zscore", 0, _NO_SAMPLING))
+        model_state_before = result.model_state
+        x_before = np.array(result.x, copy=True)
+        panel._umap_color_values(source, "umap", result, "cat")
+        panel._umap_color_values(source, "umap", result, "cat")
+        assert result.model_state is model_state_before
+        np.testing.assert_array_equal(result.x, x_before)
+
+    def test_color_by_column_returns_none_on_a_row_count_mismatch(self, workspace):
+        """Defensive fallback: if the row-index reconstruction disagrees with the
+        embedding's own row count (e.g. stale sampling state for a different tab key),
+        coloring is skipped rather than raising or silently misaligning arrays."""
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = self._columns_with_category(n_rows=150)
+        embed_cols = ("a", "b", "c", "noise3")
+        source = _make_multicol_source(workspace, "umapdiag4", columns, x_col="a", y_col="b")
+        result = panel._compute(source, ("umap", embed_cols, 2, 10, 0.1, "zscore", 0, _NO_SAMPLING))
+        assert int(np.asarray(result.x).size) == 150
+
+        # Mismatch this key's sampling state against the actual (unsampled) embedding.
+        panel._sampling_enabled["umap"] = True
+        panel._sampling_max_rows["umap"] = 50
+        panel._sampling_seed["umap"] = 0
+
+        bucket = panel._umap_color_values(source, "umap", result, "cat")
+        assert bucket is None
+
+    def test_color_by_column_missing_column_returns_none(self, workspace):
+        pytest.importorskip("umap")
+        panel = MathLabPanel(workspace)
+        columns = self._columns_with_category(n_rows=100)
+        embed_cols = ("a", "b", "c", "noise3")
+        source = _make_multicol_source(workspace, "umapdiag5", columns, x_col="a", y_col="b")
+        result = panel._compute(source, ("umap", embed_cols, 2, 10, 0.1, "zscore", 0, _NO_SAMPLING))
+        assert panel._umap_color_values(source, "umap", result, "does_not_exist") is None
+
+
+# ============================================================================
+# "(index)" pseudo-column in Math Lab's dataset-source X/Y picker (mathlab.py's
+# _draw_dataset_source, _INDEX_OPTION, _replace_reason) -- lost from this file by
+# the same tool-use accident the sections above explain; rebuilt fresh here against
+# the current, intact production code rather than reconstructed from memory. NOT the
+# Data Editor's own "(index)" option (a separate feature in a separate, unaffected
+# file -- see tests/test_gui_data_editor.py).
+# ============================================================================
+
+
+def _capture_combo_options(monkeypatch) -> Dict[str, List[str]]:
+    """Record the options list every ``widgets.enum_combo`` call drew, keyed by label."""
+    box: Dict[str, List[str]] = {}
+    real = widgets.enum_combo
+
+    def spy(lbl, current, options, **kwargs):
+        box[lbl] = [str(o) for o in options]
+        return real(lbl, current, options, **kwargs)
+
+    monkeypatch.setattr("glplot.gui.panels.mathlab.widgets.enum_combo", spy)
+    return box
+
+
+class TestIndexAxisOption:
+    """``_INDEX_OPTION`` ("(index)"): a selectable X/Y pick that synthesizes
+    ``np.arange(dataset.n_rows())`` instead of reading a real column, and
+    ``_replace_reason``'s precise handling of it (only the axis a result actually
+    WRITES BACK to, if it is the index, blocks Replace)."""
+
+    def test_index_option_is_offered_in_both_the_x_and_y_column_pickers(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = MathLabPanel(workspace)
+        box = _capture_combo_options(monkeypatch)
+        for _ in range(2):
+            _draw_frame(panel, imgui_context)
+        assert _INDEX_OPTION in box.get("X column", [])
+        assert _INDEX_OPTION in box.get("Y column", [])
+
+    def test_picking_index_for_x_produces_arange_x_raw(self, imgui_context, workspace):
+        panel = MathLabPanel(workspace)
+        panel._ds_name = "alpha"  # 128 rows, columns "x"/"y"
+        panel._ds_columns["alpha"] = (_INDEX_OPTION, "y")
+        for _ in range(2):
+            _draw_frame(panel, imgui_context)
+
+        assert panel._ds_x_col == _INDEX_OPTION
+        assert panel._current_source is not None
+        dataset = workspace.store.get("alpha")
+        np.testing.assert_array_equal(
+            panel._current_source.x_raw, np.arange(dataset.n_rows(), dtype=np.float64)
+        )
+        # y is untouched -- a real column, not synthesized.
+        np.testing.assert_allclose(panel._current_source.y_raw, dataset.get("y"))
+
+    def test_picking_index_for_y_produces_arange_y_raw(self, imgui_context, workspace):
+        panel = MathLabPanel(workspace)
+        panel._ds_name = "alpha"
+        panel._ds_columns["alpha"] = ("x", _INDEX_OPTION)
+        for _ in range(2):
+            _draw_frame(panel, imgui_context)
+
+        assert panel._ds_y_col == _INDEX_OPTION
+        dataset = workspace.store.get("alpha")
+        np.testing.assert_array_equal(
+            panel._current_source.y_raw, np.arange(dataset.n_rows(), dtype=np.float64)
+        )
+        np.testing.assert_allclose(panel._current_source.x_raw, dataset.get("x"))
+
+    def test_a_stale_remembered_column_falls_back_even_with_index_on_the_other_axis(
+        self, imgui_context, workspace
+    ):
+        """A no-longer-existing column name must still fall back to columns[1] (the
+        ordinary stale-column rule), independent of _INDEX_OPTION being a valid pick on
+        the OTHER axis at the same time."""
+        panel = MathLabPanel(workspace)
+        panel._ds_name = "alpha"
+        panel._ds_columns["alpha"] = (_INDEX_OPTION, "vanished")
+        for _ in range(2):
+            _draw_frame(panel, imgui_context)
+        assert panel._ds_x_col == _INDEX_OPTION, "a genuinely valid pick must survive"
+        assert panel._ds_y_col == "y", "the stale pick must fall back to columns[1]"
+
+    def test_index_pick_survives_being_redrawn_across_several_frames(
+        self, imgui_context, workspace
+    ):
+        """REGRESSION class this feature already had to guard against once: an index
+        pick must not silently reset back to a real column on some later frame."""
+        panel = MathLabPanel(workspace)
+        panel._ds_name = "alpha"
+        panel._ds_columns["alpha"] = (_INDEX_OPTION, "y")
+        for i in range(8):
+            _draw_frame(panel, imgui_context)
+            assert panel._ds_x_col == _INDEX_OPTION, f"index pick reset itself at frame {i}"
+
+    def _index_x_source(self, workspace, name="idxrepl", n=40):
+        x = np.arange(n, dtype=np.float64)
+        y = np.sin(x)
+        ds = DataSet(name, [Column("y", y)])
+        workspace.store.add(ds)
+        return _Source(
+            key=("dataset", name, _INDEX_OPTION, "y"),
+            label=f"{name}.y",
+            x_name=_INDEX_OPTION,
+            y_name="y",
+            x_raw=x,
+            y_raw=y,
+            dataset=ds,
+            x_col=_INDEX_OPTION,
+            y_col="y",
+        )
+
+    def _index_y_source(self, workspace, name="idxreply", n=40):
+        x = np.linspace(0.0, 10.0, n)
+        y = np.arange(n, dtype=np.float64)
+        ds = DataSet(name, [Column("x", x)])
+        workspace.store.add(ds)
+        return _Source(
+            key=("dataset", name, "x", _INDEX_OPTION),
+            label=f"{name}.{_INDEX_OPTION}",
+            x_name="x",
+            y_name=_INDEX_OPTION,
+            x_raw=x,
+            y_raw=y,
+            dataset=ds,
+            x_col="x",
+            y_col=_INDEX_OPTION,
+        )
+
+    def _plain_result(self, x, y, *, x_changed=False):
+        from glplot.gui.panels.mathlab import _Result
+
+        return _Result(
+            x=np.asarray(x, float),
+            y=np.asarray(y, float),
+            x_name="x",
+            y_name="y out",
+            suffix="op",
+            plot_label="p",
+            overlay=None,
+            x_changed=x_changed,
+        )
+
+    def test_replace_unavailable_when_y_is_the_index(self, workspace):
+        panel = MathLabPanel(workspace)
+        source = self._index_y_source(workspace)
+        result = self._plain_result(source.x_raw, np.cos(source.x_raw))
+        reason = panel._replace_reason(source, result)
+        assert reason is not None
+        assert "Y axis is the row index" in reason
+
+    def test_replace_unavailable_when_x_is_the_index_and_the_result_changes_x(self, workspace):
+        panel = MathLabPanel(workspace)
+        source = self._index_x_source(workspace)
+        result = self._plain_result(np.linspace(0, 39, 100), np.zeros(100), x_changed=True)
+        reason = panel._replace_reason(source, result)
+        assert reason is not None
+        assert "X axis is the row index" in reason
+
+    def test_replace_available_when_x_is_the_index_but_the_result_leaves_x_alone(self, workspace):
+        """A y-only transform (e.g. Smooth) over an index-X source: only y gets written
+        back, so Replace must stay available."""
+        panel = MathLabPanel(workspace)
+        source = self._index_x_source(workspace)
+        result = self._plain_result(source.x_raw, np.cos(source.x_raw), x_changed=False)
+        reason = panel._replace_reason(source, result)
+        assert reason is None
+
+    def test_replace_still_checks_row_count_once_the_index_case_is_cleared(self, workspace):
+        panel = MathLabPanel(workspace)
+        source = self._index_x_source(workspace, n=40)
+        # x_changed False (index left alone) but wrong row count -> the ordinary
+        # row-count reason must still fire.
+        result = self._plain_result(np.arange(10.0), np.arange(10.0), x_changed=False)
+        reason = panel._replace_reason(source, result)
+        assert reason is not None
+        assert "row count" in reason
+
+    def test_add_column_works_fine_with_an_index_x_source(self, workspace):
+        panel = MathLabPanel(workspace)
+        source = self._index_x_source(workspace, n=30)
+        result = self._plain_result(source.x_raw, np.cos(source.x_raw))
+        cmd = panel._command_add_column(source, result, "smooth")
+        assert cmd is not None
+        before = source.dataset.n_cols()
+        cmd.do()
+        assert source.dataset.n_cols() == before + 1
+        np.testing.assert_allclose(source.dataset.columns[-1].values, result.y)
+        cmd.undo()
+        assert source.dataset.n_cols() == before
+
+    def test_new_dataset_works_fine_with_an_index_x_source(self, workspace):
+        panel = MathLabPanel(workspace)
+        source = self._index_x_source(workspace, n=25)
+        result = self._plain_result(source.x_raw, np.cos(source.x_raw))
+        cmd = panel._command_new_dataset(source, result, "smooth")
+        before_names = set(workspace.store.names())
+        cmd.do()
+        created = set(workspace.store.names()) - before_names
+        assert created, "New dataset must succeed with an index-X source"
+        ds = workspace.store.get(next(iter(created)))
+        assert ds.n_rows() == 25
+        cmd.undo()
+        assert set(workspace.store.names()) == before_names

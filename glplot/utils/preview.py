@@ -561,6 +561,23 @@ def _resolve_axes_title(panel: object, engine: object, allow_caption: bool = Tru
     return "" if candidate in STOCK_WINDOW_TITLES else candidate
 
 
+def _text_style_kwargs(
+    opts: object, fontsize_attr: str, color_attr: str, default_fontsize: float
+) -> dict:
+    """``fontsize=``/``color=`` kwargs for one text element, matching the live-window default.
+
+    ``color`` is only included when set: matplotlib's ``Text.set_color(None)`` raises, so
+    an unset option must leave the keyword out entirely and fall back to matplotlib's own
+    default (black), which already matches the live renderer's default light-on-dark ink on
+    the near-universal white savefig background.
+    """
+    kwargs = {"fontsize": getattr(opts, fontsize_attr, None) or default_fontsize}
+    color = getattr(opts, color_attr, None)
+    if color is not None:
+        kwargs["color"] = color
+    return kwargs
+
+
 def _apply_panel_labels(ax: object, panel: object, engine: object) -> None:
     """Apply ``panel``'s own axis names and title -- the per-panel half of the chrome.
 
@@ -573,16 +590,23 @@ def _apply_panel_labels(ax: object, panel: object, engine: object) -> None:
     if getattr(panel, "xlabel", ""):
         ax.set_xlabel(
             panel.xlabel,
-            fontsize=getattr(opts, "axis_xlabel_fontsize", None) or AXIS_LABEL_FONTSIZE,
+            **_text_style_kwargs(
+                opts, "axis_xlabel_fontsize", "axis_xlabel_color", AXIS_LABEL_FONTSIZE
+            ),
         )
     if getattr(panel, "ylabel", ""):
         ax.set_ylabel(
             panel.ylabel,
-            fontsize=getattr(opts, "axis_ylabel_fontsize", None) or AXIS_LABEL_FONTSIZE,
+            **_text_style_kwargs(
+                opts, "axis_ylabel_fontsize", "axis_ylabel_color", AXIS_LABEL_FONTSIZE
+            ),
         )
     title = _resolve_axes_title(panel, engine, allow_caption=False)
     if title:
-        ax.set_title(title, fontsize=getattr(opts, "axis_title_fontsize", None) or TITLE_FONTSIZE)
+        ax.set_title(
+            title,
+            **_text_style_kwargs(opts, "axis_title_fontsize", "axis_title_color", TITLE_FONTSIZE),
+        )
 
 
 def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None) -> None:
@@ -601,25 +625,35 @@ def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None)
     # one place it actually renders (the headless export) is exactly the "keyword
     # accepted, quietly ignored" failure this codebase's own compat tests exist to catch.
     opts = getattr(engine, "options", None)
-    title_fontsize = getattr(opts, "axis_title_fontsize", None) or TITLE_FONTSIZE
-    xlabel_fontsize = getattr(opts, "axis_xlabel_fontsize", None) or AXIS_LABEL_FONTSIZE
-    ylabel_fontsize = getattr(opts, "axis_ylabel_fontsize", None) or AXIS_LABEL_FONTSIZE
+    title_kwargs = _text_style_kwargs(
+        opts, "axis_title_fontsize", "axis_title_color", TITLE_FONTSIZE
+    )
+    xlabel_kwargs = _text_style_kwargs(
+        opts, "axis_xlabel_fontsize", "axis_xlabel_color", AXIS_LABEL_FONTSIZE
+    )
+    ylabel_kwargs = _text_style_kwargs(
+        opts, "axis_ylabel_fontsize", "axis_ylabel_color", AXIS_LABEL_FONTSIZE
+    )
+    tick_kwargs = {"labelsize": getattr(opts, "axis_tick_fontsize", None) or TICK_LABEL_FONTSIZE}
+    tick_color = getattr(opts, "axis_tick_color", None)
+    if tick_color is not None:
+        tick_kwargs["labelcolor"] = tick_color
 
     if getattr(engine, "grid_visible", False):
         ax.grid(True, alpha=0.25)
     if hasattr(engine, "xlabel"):
-        ax.set_xlabel(engine.xlabel, fontsize=xlabel_fontsize)
+        ax.set_xlabel(engine.xlabel, **xlabel_kwargs)
     if hasattr(engine, "ylabel"):
-        ax.set_ylabel(engine.ylabel, fontsize=ylabel_fontsize)
+        ax.set_ylabel(engine.ylabel, **ylabel_kwargs)
     if has_3d:
         # The axis titles set through the 3D panel take precedence over the engine's 2D
         # ones: a 3D scene's labels live on ``axes3d``, and falling straight through to
         # ``engine.zlabel`` used to export a literal "z" over a named axis.
         axes3d_opts = getattr(engine, "axes3d", None)
         if getattr(axes3d_opts, "xlabel", ""):
-            ax.set_xlabel(axes3d_opts.xlabel, fontsize=xlabel_fontsize)
+            ax.set_xlabel(axes3d_opts.xlabel, **xlabel_kwargs)
         if getattr(axes3d_opts, "ylabel", ""):
-            ax.set_ylabel(axes3d_opts.ylabel, fontsize=ylabel_fontsize)
+            ax.set_ylabel(axes3d_opts.ylabel, **ylabel_kwargs)
         ax.set_zlabel(
             getattr(axes3d_opts, "zlabel", "") or getattr(engine, "zlabel", "z") or "z",
             fontsize=AXIS_LABEL_FONTSIZE,
@@ -629,12 +663,12 @@ def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None)
         camera = getattr(engine, "camera3d", None)
         if camera is not None and camera.projection == "orthographic":
             ax.set_proj_type("ortho")
-        ax.tick_params(labelsize=TICK_LABEL_FONTSIZE)
+        ax.tick_params(**tick_kwargs)
     else:
-        ax.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE)
+        ax.tick_params(axis="both", **tick_kwargs)
     resolved_title = _resolve_axes_title(panel, engine)
     if resolved_title:
-        ax.set_title(resolved_title, fontsize=title_fontsize)
+        ax.set_title(resolved_title, **title_kwargs)
     handles, labels = ax.get_legend_handles_labels()
     if labels:
         unique = []
@@ -849,8 +883,13 @@ def _reapply_pinned_limits(ax: object, has_3d: bool, engine: object) -> None:
             ax.set_ylim(*get_ylim())
 
 
-def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_kwargs) -> None:
-    """Export ``engine``'s figure to a static image file.
+def _build_preview_figure(engine: object, scale: float = 1.0):
+    """Build (but do not save) the matplotlib ``Figure`` a preview export draws into.
+
+    Shared by :func:`render_preview` (writes it to a file) and :func:`render_preview_array`
+    (reads its pixels back directly) so the two only differ in how a finished figure turns
+    into output, not in how the figure itself is built -- one panel loop, one set of
+    layer/label/colorbar/title rules, instead of two copies that could drift apart.
 
     A single panel renders with matplotlib's own auto margins, unchanged from before panels
     existed. Two or more panels -- a ``subplots()`` grid, ``subplot2grid()``, or
@@ -1086,9 +1125,41 @@ def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_
         # autosizer might have triggered -- rather than only once, before it -- is what
         # actually survives to the saved file.
         _reapply_pinned_limits(title_ax, single_3d_ax is not None, engine)
+    return fig
+
+
+def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_kwargs) -> None:
+    """Export ``engine``'s figure to a static image file.
+
+    See :func:`_build_preview_figure` for how the figure itself is built; this just writes
+    it out. ``dpi``/``bbox_inches``/``transparent``/``facecolor``/``pad_inches``/``format``
+    (and anything else a caller passes through ``savefig()``) are real ``Figure.savefig()``
+    keywords here -- this *is* a real matplotlib figure -- so they are forwarded rather than
+    dropped.
+    """
+    import matplotlib.pyplot as mpl
+
+    fig = _build_preview_figure(engine, scale)
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
-    # `dpi`/`bbox_inches`/`transparent`/`facecolor`/`pad_inches`/`format` (and anything else
-    # a caller passes through `savefig()`) are real `Figure.savefig()` keywords here -- this
-    # *is* a real matplotlib figure -- so they are forwarded rather than dropped.
     fig.savefig(filename, **savefig_kwargs)
     mpl.close(fig)
+
+
+def render_preview_array(engine: object, scale: float = 1.0) -> np.ndarray:
+    """Render ``engine``'s figure and return its pixels directly, with no file I/O.
+
+    Same figure as :func:`render_preview` (see :func:`_build_preview_figure`), but skips
+    the PNG encode and the disk write/read a file-based caller needs. Profiled at ~35% of
+    one frame's total cost in a headless animation loop (``PIL``'s PNG encoder alone was
+    as expensive as matplotlib's own draw) -- pure encode/decode overhead a caller that only
+    wants an ``(H, W, 3)`` uint8 array never needed. Used by
+    :func:`glplot.animation.figure_to_rgb`'s headless path, where an animation's hundreds of
+    frames each paid that cost once per frame.
+    """
+    import matplotlib.pyplot as mpl
+
+    fig = _build_preview_figure(engine, scale)
+    fig.canvas.draw()
+    rgb = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+    mpl.close(fig)
+    return rgb

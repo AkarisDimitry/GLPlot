@@ -109,6 +109,7 @@ def auto_grid_color(background: Sequence[float]) -> RGB:
     lum = 0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
     return (0.2, 0.2, 0.2) if lum > 0.5 else (0.8, 0.8, 0.8)
 
+
 #: Tone-map operator indices understood by ``POST_COMPOSITE_FS`` (mirrors
 #: ``managers/effects.py``; duplicated rather than imported because ``effects`` does
 #: ``from OpenGL.GL import *`` at module level and would break headless import).

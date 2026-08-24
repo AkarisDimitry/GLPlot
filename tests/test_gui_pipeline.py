@@ -7,6 +7,8 @@ run fully headless -- no imgui, no GL. The panel that wraps them is tested separ
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pytest
 
@@ -152,6 +154,7 @@ imgui = pytest.importorskip("imgui_bundle").imgui
 
 from typing import Any, List  # noqa: E402
 
+from glplot.gui import notifications  # noqa: E402
 from glplot.gui.commands import CommandQueue  # noqa: E402
 from glplot.gui.datasets import Column, DataSet, DataStore  # noqa: E402
 from glplot.gui.history import UndoStack  # noqa: E402
@@ -266,3 +269,304 @@ class TestPipelinePanel:
         assert "chain out" in workspace.store.names()
         ds = workspace.store.get("chain out")
         assert float(np.max(ds.get("y"))) == pytest.approx(1.0, abs=1e-9)
+
+
+def _wait_frames_until(panel, io, predicate, *, timeout=2.0, interval=0.005):
+    """Drive real frames until ``predicate()`` holds. Polls rather than sleeping a
+    fixed amount -- robust against scheduler jitter, only fails if the condition
+    genuinely never becomes true within a generous margin. Mirrors
+    test_gui_mathlab.py's helper of the same name/shape exactly."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        _draw_frame(panel, io)
+        if predicate():
+            return
+        time.sleep(interval)
+    raise AssertionError(f"condition not met within {timeout}s")
+
+
+class TestPipelineAsyncEnabled:
+    """_async_enabled(): identical contract to MathLabPanel's -- see that class's own
+    test of the same name for why the whole rest of this file stays deterministic
+    without ever touching it."""
+
+    def test_default_is_synchronous_under_the_fake_plot(self, workspace):
+        panel = PipelinePanel(workspace)
+        assert panel._async_enabled() is False
+
+    def test_force_async_overrides_the_default(self, workspace):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        assert panel._async_enabled() is True
+
+    def test_real_plot_with_is_test_mode_false_is_async(self, workspace):
+        panel = PipelinePanel(workspace)
+        panel.plot._is_test_mode = False
+        assert panel._async_enabled() is True
+
+    def test_real_plot_with_is_test_mode_true_is_sync(self, workspace):
+        panel = PipelinePanel(workspace)
+        panel.plot._is_test_mode = True
+        assert panel._async_enabled() is False
+
+
+class TestPipelineAsyncCompute:
+    """Background compute for the chain: pending/settle/cancel/retry/debounce/notify.
+
+    Real threads, small bounded real sleeps (unavoidable for a concurrency feature),
+    always waited on via _wait_frames_until's poll-until-condition loop -- never a
+    fixed sleep-then-assert -- so these stay robust under CI jitter instead of flaky.
+    """
+
+    def _stub_run_pipeline(self, monkeypatch, *, sleep=0.03, ok=True, error="boom"):
+        """Replace glplot.gui.panels.pipeline.pipeline.run_pipeline (as looked up by
+        the panel's own module) with a stub that sleeps then returns a canned
+        PipelineResult. Returns the list of (x, y, steps) it was called with."""
+        calls = []
+
+        def stub(x, y, steps):
+            calls.append((np.asarray(x), np.asarray(y), list(steps)))
+            time.sleep(sleep)
+            if ok:
+                return pipeline.PipelineResult(np.asarray(x), np.asarray(y) * 2.0)
+            return pipeline.PipelineResult(np.asarray(x), np.asarray(y), 0, error)
+
+        monkeypatch.setattr("glplot.gui.panels.pipeline.pipeline.run_pipeline", stub)
+        return calls
+
+    def test_first_call_is_pending_not_blocking(self, imgui_context, workspace, monkeypatch):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.2)
+        panel._steps = [pipeline.new_step("normalize")]
+
+        start = time.monotonic()
+        _draw_frame(panel, imgui_context)
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.1, "a pending compute must not block the draw call"
+        assert panel._cache_result is None
+
+    def test_settles_to_the_real_result_once_the_job_finishes(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.03)
+        panel._steps = [pipeline.new_step("normalize")]
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+        assert panel._cache_result.ok
+
+    def test_failed_step_settles_as_ready_not_error(self, imgui_context, workspace, monkeypatch):
+        """run_pipeline never raises -- a failing step is encoded in the result, so
+        this must settle to "ready" with result.ok is False, never BackgroundJob's
+        "error" state."""
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.02, ok=False, error="bad cutoff")
+        panel._steps = [pipeline.new_step("filter")]
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+        assert panel._cache_result.ok is False
+        assert panel._cache_result.error == "bad cutoff"
+
+    def test_cancel_stops_the_ui_from_waiting_immediately(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.3)
+        panel._steps = [pipeline.new_step("normalize")]
+        _draw_frame(panel, imgui_context)  # dispatches the job
+
+        job = panel._async_job
+        assert job is not None
+        panel._cancel_async()
+
+        _draw_frame(panel, imgui_context)
+        assert panel._cache_result is None
+        assert job.poll().state == "cancelled"
+
+    def test_cancel_stays_cancelled_until_steps_change(self, imgui_context, workspace, monkeypatch):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.02)
+        panel._steps = [pipeline.new_step("normalize")]
+        _draw_frame(panel, imgui_context)
+        panel._cancel_async()
+
+        for _ in range(5):
+            _draw_frame(panel, imgui_context)
+            assert panel._cache_result is None
+
+    def test_retry_redispatches_and_eventually_settles(self, imgui_context, workspace, monkeypatch):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.02)
+        panel._steps = [pipeline.new_step("normalize")]
+        _draw_frame(panel, imgui_context)
+        panel._cancel_async()
+        _draw_frame(panel, imgui_context)
+        assert panel._async_job.poll().state == "cancelled"
+
+        panel._retry_async()
+        assert panel._async_job is None
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+        assert panel._cache_result.ok
+
+    def test_debounce_collapses_rapid_step_edits_into_one_dispatch(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        """Simulates rapidly tweaking a step's parameter (e.g. dragging a slider):
+        many edits in quick succession while a job is already running must not each
+        spawn their own background job -- only the settled, final one should run."""
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        monkeypatch.setattr("glplot.gui.panels.pipeline._ASYNC_DEBOUNCE_SECONDS", 0.2)
+        calls = self._stub_run_pipeline(monkeypatch, sleep=0.6)
+        step = pipeline.new_step("smooth")
+        step.params["window"] = 3
+        panel._steps = [step]
+        _draw_frame(panel, imgui_context)  # first-ever dispatch, immediate
+        assert len(calls) == 1
+
+        for w in (5, 7, 9, 11):
+            step.params["window"] = w
+            _draw_frame(panel, imgui_context)
+            time.sleep(0.02)
+
+        # None of those edits should have started a second job yet -- the 0.6s-long
+        # first job is still running, and each edit just pushes the debounce clock.
+        assert len(calls) == 1
+
+        _wait_frames_until(
+            panel, imgui_context, lambda: panel._cache_result is not None, timeout=3.0
+        )
+        assert len(calls) == 2
+        assert calls[-1][2][0].params["window"] == 11
+
+    def test_notification_pushed_for_a_slow_success(self, imgui_context, workspace, monkeypatch):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        monkeypatch.setattr("glplot.gui.panels.pipeline._ASYNC_NOTIFY_THRESHOLD_SECONDS", 0.0)
+        self._stub_run_pipeline(monkeypatch, sleep=0.02)
+        panel._steps = [pipeline.new_step("normalize")]
+        notifications.clear()
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+        toasts = notifications.active()
+        assert len(toasts) == 1
+        assert toasts[0].kind == "success"
+        notifications.clear()
+
+    def test_notification_pushed_for_a_slow_step_failure(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        monkeypatch.setattr("glplot.gui.panels.pipeline._ASYNC_NOTIFY_THRESHOLD_SECONDS", 0.0)
+        self._stub_run_pipeline(monkeypatch, sleep=0.02, ok=False, error="nope")
+        panel._steps = [pipeline.new_step("filter")]
+        notifications.clear()
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+        toasts = notifications.active()
+        assert len(toasts) == 1
+        assert toasts[0].kind == "error"
+        notifications.clear()
+
+    def test_no_notification_below_the_threshold(self, imgui_context, workspace, monkeypatch):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        monkeypatch.setattr("glplot.gui.panels.pipeline._ASYNC_NOTIFY_THRESHOLD_SECONDS", 999.0)
+        self._stub_run_pipeline(monkeypatch, sleep=0.02)
+        panel._steps = [pipeline.new_step("normalize")]
+        notifications.clear()
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+        assert notifications.active() == []
+
+    def test_sync_mode_never_reaches_any_async_bookkeeping(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = PipelinePanel(workspace)
+        self._stub_run_pipeline(monkeypatch, sleep=0.0)
+        panel._steps = [pipeline.new_step("normalize")]
+        for _ in range(3):
+            _draw_frame(panel, imgui_context)
+        assert panel._cache_result is not None
+        assert panel._async_job is None
+        assert panel._async_result is None
+
+
+class TestPipelineAsyncUiIntegration:
+    """The pending/cancelled rows, driven through the real headless imgui harness."""
+
+    def _stub_run_pipeline(self, monkeypatch, *, sleep=0.05):
+        def stub(x, y, steps):
+            time.sleep(sleep)
+            return pipeline.PipelineResult(np.asarray(x), np.asarray(y))
+
+        monkeypatch.setattr("glplot.gui.panels.pipeline.pipeline.run_pipeline", stub)
+
+    def test_busy_row_appears_while_pending(self, imgui_context, workspace, monkeypatch):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.2)
+        panel._steps = [pipeline.new_step("normalize")]
+
+        texts = []
+        real_text = imgui.text
+
+        def spy_text(s, *a, **k):
+            texts.append(str(s))
+            return real_text(s, *a, **k)
+
+        monkeypatch.setattr(imgui, "text", spy_text)
+        _draw_frame(panel, imgui_context)
+        assert any("Computing" in t for t in texts)
+
+    def test_cancel_button_click_reaches_cancel_async(self, imgui_context, workspace, monkeypatch):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.3)
+        panel._steps = [pipeline.new_step("normalize")]
+        _draw_frame(panel, imgui_context)
+        assert panel._async_job is not None
+
+        real_button = imgui.button
+
+        def spy_button(label, *a, **k):
+            if label.startswith("Cancel##"):
+                return True
+            return real_button(label, *a, **k)
+
+        monkeypatch.setattr(imgui, "button", spy_button)
+        _draw_frame(panel, imgui_context)
+
+        assert panel._async_job.poll().state == "cancelled"
+
+    def test_cancelled_row_shows_a_retry_button_that_works(
+        self, imgui_context, workspace, monkeypatch
+    ):
+        panel = PipelinePanel(workspace)
+        panel._force_async = True
+        self._stub_run_pipeline(monkeypatch, sleep=0.02)
+        panel._steps = [pipeline.new_step("normalize")]
+        _draw_frame(panel, imgui_context)
+        panel._cancel_async()
+        _draw_frame(panel, imgui_context)  # renders the "Cancelled." + Retry row
+
+        real_button = imgui.button
+
+        def spy_button(label, *a, **k):
+            if label.startswith("Retry##"):
+                return True
+            return real_button(label, *a, **k)
+
+        monkeypatch.setattr(imgui, "button", spy_button)
+        _draw_frame(panel, imgui_context)  # clicks Retry
+
+        _wait_frames_until(panel, imgui_context, lambda: panel._cache_result is not None)
+        assert panel._cache_result.ok

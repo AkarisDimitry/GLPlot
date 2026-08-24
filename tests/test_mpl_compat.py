@@ -567,19 +567,19 @@ class TestHist2dParity:
         xs = np.concatenate([np.zeros(10), [1.0]])
         layer = gplt.hist2d(xs, xs, bins=2)[3]
         busy = gplt.hist2d(xs, xs, bins=2, cmin=5)[3]
-        assert len(busy.pts) < len(layer.pts)
+        assert len(busy.vertices) < len(layer.vertices)
 
     def test_cmax_drops_crowded_cells(self, plot):
         xs = np.concatenate([np.zeros(10), [1.0]])
         layer = gplt.hist2d(xs, xs, bins=2)[3]
         sparse = gplt.hist2d(xs, xs, bins=2, cmax=5)[3]
-        assert len(sparse.pts) < len(layer.pts)
+        assert len(sparse.vertices) < len(layer.vertices)
 
     def test_empty_cells_stay_out_even_with_cmin_zero(self, plot):
         """Drawing them would colour "nothing landed here" as the colormap's low end."""
         xs = np.concatenate([np.zeros(10), [1.0]])
         counts, _, _, layer = gplt.hist2d(xs, xs, bins=4, cmin=0)
-        assert len(layer.pts) == int((counts > 0).sum())
+        assert len(layer.vertices) // 4 == int((counts > 0).sum())
 
 
 class TestStemAndTextParity:
@@ -1090,10 +1090,13 @@ class TestImshowAndContourfUnderARealScale:
 
 
 class TestContourStreamplotHist2dAlreadySupportRealScales:
-    """None of these three needed new code: `contour()`'s live lines and `streamplot()`
-    both draw through `add_line_strip()` (the `PolylineLayer` path already patched for
-    log/symlog/asinh), and `hist2d()` draws its bin centres through `scatter()` (also
-    already patched). This class makes that fact checked rather than assumed."""
+    """`contour()`'s live lines and `streamplot()` both draw through `add_line_strip()`
+    (the `PolylineLayer` path already patched for log/symlog/asinh) and needed no new
+    code. `hist2d()` reaches the equivalent hook on `PatchLayer` (`renderers/patch.py`)
+    -- the same one `bar()` already used -- so every cell corner, not just a stand-in
+    centre point, is scale-aware: the rendered tiles keep tiling with no gap or overlap
+    even under a nonlinear axis. This class makes that fact checked rather than assumed.
+    """
 
     def test_contour_under_log_scale_exports_headless_without_crashing(self, tmp_path):
         x = np.linspace(1.0, 10.0, 15)
@@ -1125,18 +1128,41 @@ class TestContourStreamplotHist2dAlreadySupportRealScales:
         gplt.savefig(str(tmp_path / "hist2d_log.png"))
         assert (tmp_path / "hist2d_log.png").exists()
 
-    def test_hist2d_bin_edges_stay_linear_under_a_log_axis(self):
-        """Documented simplification: only the bin-centre positions are scale-aware,
-        the edges numpy computed are not log-spaced. Not a bug -- see the module
-        comment above `_SCALE_NAMES` in pyplot.py."""
+    def test_hist2d_bin_edges_are_linear_in_data_space(self):
+        """`layer.vertices` is the raw truth the Data panel/CSV export read -- a real
+        axis scale transforms a throwaway GPU-upload copy, never this array (see the
+        module comment above `_SCALE_NAMES` in pyplot.py) -- so the *stored* cell edges
+        stay exactly what `np.histogram2d` computed regardless of any active scale."""
         rng = np.random.default_rng(0)
         x = rng.uniform(1.0, 1000.0, 500)
         y = rng.uniform(1.0, 100.0, 500)
         _, _, _, layer = gplt.hist2d(x, y, bins=10)
-        xs = np.sort(np.unique(layer.pts[:, 0]))
+        xs = np.sort(np.unique(np.round(layer.vertices[:, 0].astype(np.float64), 6)))
         gaps = np.diff(xs)
-        # Linear edges -> roughly equal gaps between adjacent bin centres.
+        # Linear edges -> roughly equal gaps between adjacent cell boundaries.
         assert gaps.max() / gaps.min() < 1.5
+
+    def test_hist2d_tiles_still_share_edges_after_a_real_log_transform(self):
+        """The actual claim the module comment makes: every cell corner is scale-aware
+        (not just a stand-in centre point), so applying the exact transform
+        `renderers/patch.py` applies at GPU-upload to the layer's own vertices leaves
+        adjacent cells sharing the same transformed edge -- no gap, no overlap, under a
+        real log axis, the same as under a linear one."""
+        from glplot.utils.scale import forward
+
+        rng = np.random.default_rng(0)
+        x = rng.uniform(1.0, 1000.0, 500)
+        y = rng.uniform(1.0, 100.0, 500)
+        _, _, _, layer = gplt.hist2d(x, y, bins=10)
+
+        raw_xs = np.round(layer.vertices[:, 0].astype(np.float64), 6)
+        transformed = forward(layer.vertices[:, 0].astype(np.float64), "log", None)
+        # Group the transformed x by its raw (pre-transform) value: every vertex sharing
+        # a raw edge must land on the exact same transformed coordinate, or two cells
+        # that used to share a wall would now show a gap or an overlap there.
+        for raw_value in np.unique(raw_xs):
+            group = transformed[raw_xs == raw_value]
+            assert np.allclose(group, group[0]), f"edge at x={raw_value} split under log scale"
 
 
 class TestBoxplot:
@@ -1482,7 +1508,8 @@ class TestColorbar:
         assert by0 == y0 and bh == h
 
     @pytest.mark.parametrize(
-        "location,orientation", [("left", "vertical"), ("top", "horizontal"), ("bottom", "horizontal")]
+        "location,orientation",
+        [("left", "vertical"), ("top", "horizontal"), ("bottom", "horizontal")],
     )
     def test_other_three_locations(self, plot, location, orientation):
         panel = gplt.gca().panel
@@ -1588,18 +1615,24 @@ class TestScatterMarkerReachesTheExport:
     """``scatter(marker=...)`` was stored on the layer but dropped by the PNG export.
 
     Every point exported as a circle regardless of what was asked for -- most visibly on
-    ``hist2d``, which passes ``marker="s"`` on purpose because a 2D histogram's bins are
-    squares, and whose exported PNG therefore disagreed with the live window.
+    ``hist2d``, which used to pass ``marker="s"`` on purpose because a 2D histogram's
+    bins are squares, and whose exported PNG therefore disagreed with the live window.
+    ``hist2d`` now draws a real rectangular mesh (see ``TestHist2dParity``) rather than
+    sized square markers, which sidesteps this whole bug class for it structurally: a
+    patch's per-vertex colours export through the same generic path
+    (``utils/preview.py``'s "patch that carries per-vertex colours" branch) that already
+    draws it live, so there is no separate marker-shape mapping left to fall out of step.
     """
 
     def test_marker_is_recorded_on_the_layer(self, plot):
         layer = gplt.scatter([0.0, 1.0], [0.0, 1.0], marker="^")
         assert layer.metadata["marker"] == "^"
 
-    def test_hist2d_asks_for_square_bins(self, plot):
+    def test_hist2d_is_a_patch_so_live_and_export_cannot_disagree(self, plot):
         rng = np.random.default_rng(0)
         *_, layer = gplt.hist2d(rng.normal(size=200), rng.normal(size=200), bins=8)
-        assert layer.metadata["marker"] == "s"
+        assert layer.layer_type == "patch"
+        assert "marker" not in layer.metadata
 
     def test_live_shader_has_a_shape_for_each_supported_marker(self, plot):
         """The live GL path drew every marker as a circle until the shader gained shapes.
@@ -1662,7 +1695,7 @@ class TestPerPanelAxisNames:
         assert axs[0].panel.title == ""
 
     def test_stock_window_caption_is_not_promoted_to_an_axes_title(self, plot):
-        """"GLPlot" is the default *window* caption and must never become a plot title."""
+        """ "GLPlot" is the default *window* caption and must never become a plot title."""
         from glplot.utils.preview import _resolve_axes_title
 
         fig, axs = gplt.subplots(1, 2)
@@ -1805,6 +1838,43 @@ class TestHexbin:
     def test_log_scales_warn(self, plot, cloud, kwargs):
         with pytest.warns(gplt.MatplotlibCompatWarning):
             gplt.hexbin(*cloud, gridsize=10, **kwargs)
+
+    def test_hexbin_auto_equalises_the_aspect(self, plot):
+        """A hexagon is only regular -- not a stretched parallelogram -- when x and y
+        share the same world-units-per-pixel; ``_hexagon_geometry`` computes its own
+        ``rx``/``ry`` assuming exactly that. Left to the default 'auto' aspect this
+        module's own ``plot`` fixture (a deliberately non-square 1000x500 window) would
+        stretch a symmetric data range unevenly across it -- the same failure mode
+        ``mandelbrot()``/``julia()`` already guard against via the same
+        ``_apply_equal_aspect`` call (see ``_add_fractal``), extended here since a
+        hexbin is equally meaningless off-square.
+        """
+        rng = np.random.default_rng(1)
+        # A wide-vs-tall data range on top of the fixture's own non-square window, so an
+        # implementation that only fixed the window's own aspect (and not the data's)
+        # would still fail this.
+        x = rng.normal(0.0, 20.0, 2000)
+        y = rng.normal(0.0, 2.0, 2000)
+        gplt.hexbin(x, y, gridsize=15)
+        upp_x, upp_y = _units_per_px(plot)
+        assert upp_x == pytest.approx(upp_y, rel=1e-6)
+
+    def test_hexbin_equalising_still_frames_every_point(self, plot):
+        """Widening, not cropping: every point that went into the hexagons must still
+        land inside the final, equalised view -- the property
+        ``test_equal_widens_rather_than_crops`` proves for ``axis('equal')`` directly,
+        checked here end to end against the actual data instead of the camera's own
+        zoom numbers."""
+        rng = np.random.default_rng(1)
+        x = rng.normal(0.0, 20.0, 2000)
+        y = rng.normal(0.0, 2.0, 2000)
+        gplt.hexbin(x, y, gridsize=15)
+        cx, cy = plot.camera.cx, plot.camera.cy
+        half_w, half_h = 1.0 / plot.camera.zoom_x, 1.0 / plot.camera.zoom_y
+        assert x.min() >= cx - half_w - 1e-6
+        assert x.max() <= cx + half_w + 1e-6
+        assert y.min() >= cy - half_h - 1e-6
+        assert y.max() <= cy + half_h + 1e-6
 
 
 class TestEventplot:
@@ -2032,22 +2102,24 @@ class TestStreamplot:
 class TestPatchMappableRemap:
     """clim() and set_cmap() must reach the per-vertex patch mappables.
 
-    hexbin, pcolor and tripcolor colour a single patch through a per-vertex colour buffer.
-    The GUI's re-mapper (`set_layer_colormap`) knows only image and scatter-value layers
-    and *raises* on a patch, so a bare ``clim()`` after ``hexbin()`` crashed with
-    'layer_type patch has no per-layer colormap'. These patches now carry their own re-map
-    path; each of these fails against the crashing version and against a no-op that leaves
-    the colours untouched.
+    hexbin, hist2d, pcolor and tripcolor colour a single patch through a per-vertex colour
+    buffer (hist2d joined this list once it became a real filled mesh rather than a scatter
+    of sized point markers -- see TestHist2dParity). The GUI's re-mapper
+    (`set_layer_colormap`) knows only image and scatter-value layers and *raises* on a
+    patch, so a bare ``clim()`` after ``hexbin()`` crashed with 'layer_type patch has no
+    per-layer colormap'. These patches now carry their own re-map path; each of these fails
+    against the crashing version and against a no-op that leaves the colours untouched.
     """
 
     @pytest.mark.parametrize(
         "build",
         [
             lambda r: gplt.hexbin(r.normal(size=2000), r.normal(size=2000), gridsize=12),
+            lambda r: gplt.hist2d(r.normal(size=2000), r.normal(size=2000), bins=12)[3],
             lambda r: gplt.pcolor(np.arange(30.0).reshape(5, 6)),
             lambda r: gplt.tripcolor(r.random(40), r.random(40), r.random(40)),
         ],
-        ids=["hexbin", "pcolor", "tripcolor"],
+        ids=["hexbin", "hist2d", "pcolor", "tripcolor"],
     )
     def test_clim_does_not_crash_and_recolours(self, plot, build):
         layer = build(np.random.default_rng(0))
@@ -2060,10 +2132,11 @@ class TestPatchMappableRemap:
         "build",
         [
             lambda r: gplt.hexbin(r.normal(size=2000), r.normal(size=2000), gridsize=12),
+            lambda r: gplt.hist2d(r.normal(size=2000), r.normal(size=2000), bins=12)[3],
             lambda r: gplt.pcolor(np.arange(30.0).reshape(5, 6)),
             lambda r: gplt.tripcolor(r.random(40), r.random(40), r.random(40)),
         ],
-        ids=["hexbin", "pcolor", "tripcolor"],
+        ids=["hexbin", "hist2d", "pcolor", "tripcolor"],
     )
     def test_set_cmap_recolours_the_patch(self, plot, build):
         layer = build(np.random.default_rng(0))
@@ -2132,6 +2205,11 @@ class TestColormapSurface:
     def test_hexbin_is_a_mappable(self, plot, scalars):
         x, y, _ = scalars
         layer = gplt.hexbin(x, y, gridsize=10)
+        assert gplt.gci() is layer
+
+    def test_hist2d_is_a_mappable(self, plot, scalars):
+        x, y, _ = scalars
+        layer = gplt.hist2d(x, y, bins=10)[3]
         assert gplt.gci() is layer
 
     def test_sci_points_at_a_chosen_layer(self, plot, scalars):

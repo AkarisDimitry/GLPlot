@@ -46,6 +46,9 @@ __all__ = [
     "HierarchicalUnavailableError",
     "HIERARCHICAL_UNAVAILABLE_MESSAGE",
     "HIERARCHICAL_METHODS",
+    "nearest_centroid",
+    "cluster_inertia",
+    "silhouette_score",
     "density2d",
     "kde2d_available",
     "KdeUnavailableError",
@@ -160,6 +163,173 @@ def _drop_empty_clusters(
     remap = {int(old): new for new, old in enumerate(used.tolist())}
     new_assignments = np.array([remap[int(a)] for a in assignments.tolist()], dtype=np.int64)
     return centroids[used], new_assignments
+
+
+def nearest_centroid(x: Any, y: Any, centroid_x: Any, centroid_y: Any) -> np.ndarray:
+    """Assign each ``(x, y)`` row to its nearest centroid by Euclidean distance.
+
+    The out-of-sample scoring rule Math Lab's Cluster tab uses to place held-out
+    train/val/test rows against centroids fit on the train partition only, and (a
+    later phase) the cross-dataset transfer mechanism for both k-means and
+    hierarchical clustering -- hierarchical has no native out-of-sample rule at all
+    (its labels come from cutting a merge tree, not from a distance to a centroid), so
+    nearest-centroid against its post-hoc centroids (each cluster's point mean, already
+    what :func:`hierarchical_cluster` returns) is the accepted approximation for it too.
+
+    At convergence, this reproduces :func:`kmeans_cluster`'s own training-time
+    assignment exactly: Lloyd's algorithm (and scipy's ``kmeans2``) only stops once
+    every point's assignment already equals its nearest returned centroid, which is
+    precisely what this function (re-)computes.
+
+    Args:
+        x: First coordinate, 1-D.
+        y: Second coordinate, 1-D, same length as ``x``.
+        centroid_x: Centroid first coordinates, 1-D, non-empty.
+        centroid_y: Centroid second coordinates, 1-D, same length as ``centroid_x``.
+
+    Returns:
+        ``labels``, length ``len(x)``: the 0-based index into ``centroid_x``/
+        ``centroid_y`` of each row's nearest centroid, or ``-1`` for a non-finite
+        ``(x, y)`` row -- the same convention :func:`kmeans_cluster` and
+        :func:`hierarchical_cluster` already use.
+
+    Raises:
+        ValueError: On empty/mismatched input, or no centroids given.
+    """
+    xa, ya = _as_xy(x, y)
+    cx, cy = _as_xy(centroid_x, centroid_y)
+    if cx.size == 0:
+        raise ValueError("nearest_centroid needs at least one centroid")
+
+    labels = np.full(xa.shape, -1.0, dtype=np.float64)
+    good = np.isfinite(xa) & np.isfinite(ya)
+    if np.any(good):
+        points = np.column_stack([xa[good], ya[good]])
+        centroids = np.column_stack([cx, cy])
+        deltas = points[:, None, :] - centroids[None, :, :]
+        dists = np.sum(deltas * deltas, axis=2)
+        labels[good] = np.argmin(dists, axis=1).astype(np.float64)
+    return labels
+
+
+def cluster_inertia(x: Any, y: Any, centroid_x: Any, centroid_y: Any, labels: Any) -> float:
+    """Sum of squared distances from each assigned point to its own centroid.
+
+    The public counterpart of the private :func:`_inertia` helper above (which scores
+    a restart during fitting, on a bare points array): this one takes ``labels``
+    explicitly, so a caller can score points that were never part of the fit at all --
+    a held-out val/test split assigned via :func:`nearest_centroid`, for instance.
+
+    Args:
+        x: First coordinate, 1-D.
+        y: Second coordinate, 1-D, same length as ``x``.
+        centroid_x: Centroid first coordinates, 1-D.
+        centroid_y: Centroid second coordinates, 1-D, same length as ``centroid_x``.
+        labels: Per-row centroid index (0-based into ``centroid_x``/``centroid_y``), or
+            ``-1`` for a row to exclude -- the convention :func:`kmeans_cluster`,
+            :func:`hierarchical_cluster` and :func:`nearest_centroid` all share.
+
+    Returns:
+        Sum of squared point-to-centroid distances, over rows with a non-negative
+        label only (a non-finite/unassigned row contributes nothing, the same way an
+        empty sum is 0.0 rather than nan).
+
+    Raises:
+        ValueError: On empty/mismatched input, or a label referencing a centroid index
+            outside ``centroid_x``'s range.
+    """
+    xa, ya = _as_xy(x, y)
+    cx, cy = _as_xy(centroid_x, centroid_y)
+    lab = np.asarray(labels, dtype=np.float64)
+    if lab.shape != xa.shape:
+        raise ValueError(
+            f"labels must have the same length as x and y (got {lab.shape} vs {xa.shape})"
+        )
+    good = np.isfinite(xa) & np.isfinite(ya) & np.isfinite(lab) & (lab >= 0.0)
+    if not np.any(good):
+        return 0.0
+    idx = lab[good].astype(np.int64)
+    if int(idx.min()) < 0 or int(idx.max()) >= cx.size:
+        raise ValueError(
+            f"labels reference a centroid index outside [0, {cx.size}) "
+            f"(got range [{int(idx.min())}, {int(idx.max())}])"
+        )
+    points = np.column_stack([xa[good], ya[good]])
+    centroids = np.column_stack([cx, cy])
+    return float(np.sum((points - centroids[idx]) ** 2))
+
+
+def silhouette_score(x: Any, y: Any, labels: Any) -> float:
+    """Mean silhouette coefficient of a labelled 2-D point cloud.
+
+    For each point ``i`` in cluster ``C``: ``a(i)`` is its mean distance to the other
+    members of ``C``; ``b(i)`` is the smallest, over every OTHER cluster, of its mean
+    distance to that cluster's members; the silhouette coefficient is
+    ``(b(i) - a(i)) / max(a(i), b(i))`` (in ``[-1, 1]``, higher meaning better
+    separated). The return value is the mean over every scored point.
+
+    Pure numpy plus ``scipy.spatial.distance.cdist`` (this project's own scipy is
+    already a hard dependency -- see the module docstring; there is no sklearn here to
+    reach for).
+
+    Args:
+        x: First coordinate, 1-D.
+        y: Second coordinate, 1-D, same length as ``x``.
+        labels: Per-row cluster label. A negative label (the ``kmeans_cluster``/
+            ``nearest_centroid`` "unclustered/non-finite" convention) is excluded, same
+            as a non-finite ``(x, y)`` row.
+
+    Returns:
+        The mean silhouette coefficient, or ``nan`` when fewer than 2 distinct labels
+        have at least 2 members each -- ``a(i)`` needs a same-cluster neighbour to
+        average over, and ``b(i)`` needs a second cluster to compare against, so the
+        metric is simply undefined with less than that, not a degenerate 0 or 1.
+
+    Raises:
+        ValueError: On empty/mismatched input.
+    """
+    from scipy.spatial.distance import cdist
+
+    xa, ya = _as_xy(x, y)
+    lab = np.asarray(labels, dtype=np.float64)
+    if lab.shape != xa.shape:
+        raise ValueError(
+            f"labels must have the same length as x and y (got {lab.shape} vs {xa.shape})"
+        )
+    good = np.isfinite(xa) & np.isfinite(ya) & np.isfinite(lab) & (lab >= 0.0)
+    if not np.any(good):
+        return float("nan")
+
+    points_all = np.column_stack([xa[good], ya[good]])
+    labels_all = lab[good].astype(np.int64)
+    unique, counts = np.unique(labels_all, return_counts=True)
+    valid = unique[counts >= 2]
+    if valid.size < 2:
+        return float("nan")
+
+    keep = np.isin(labels_all, valid)
+    points = points_all[keep]
+    cluster_of = labels_all[keep]
+    dist = cdist(points, points)
+    n = points.shape[0]
+    a = np.zeros(n, dtype=np.float64)
+    b = np.full(n, np.inf, dtype=np.float64)
+
+    for lbl in valid:
+        members = cluster_of == lbl
+        idx = np.where(members)[0]
+        # a(i): mean distance to every OTHER point in the same cluster (exclude self,
+        # whose distance is 0 -- dividing by idx.size - 1, safe since valid clusters
+        # have at least 2 members).
+        a[idx] = dist[np.ix_(idx, idx)].sum(axis=1) / (idx.size - 1)
+        others = np.where(~members)[0]
+        if others.size:
+            mean_to_this_cluster = dist[np.ix_(others, idx)].mean(axis=1)
+            b[others] = np.minimum(b[others], mean_to_this_cluster)
+
+    denom = np.maximum(a, b)
+    silhouette = np.where(denom > 0.0, (b - a) / denom, 0.0)
+    return float(np.mean(silhouette))
 
 
 def _kmeans(
@@ -496,9 +666,7 @@ def hierarchical_cluster(
         # bearing, but keeps this in lockstep with kmeans_cluster if that ever changes.
         assignments = fcluster(tree, t=kk, criterion="maxclust").astype(np.int64) - 1
 
-    centroids = np.array(
-        [points[assignments == c].mean(axis=0) for c in np.unique(assignments)]
-    )
+    centroids = np.array([points[assignments == c].mean(axis=0) for c in np.unique(assignments)])
     centroids, assignments = _drop_empty_clusters(centroids, assignments)
 
     labels = np.full(xa.shape, -1.0, dtype=np.float64)

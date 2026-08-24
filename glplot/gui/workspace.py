@@ -1,12 +1,12 @@
 """The workspace: menu bar, icon rail, the floating panel windows, and the keymap.
 
 Layer 3 of the GUI — the only module that knows the full panel set exists. It owns the
-three shared services (:class:`~glplot.gui.datasets.DataStore`,
-:class:`~glplot.gui.history.UndoStack`, :class:`~glplot.gui.commands.CommandQueue`) and
-hands them to every panel through :class:`~glplot.gui.panels.base.Panel`'s proxies, so
-there is exactly one of each per plot.
+four shared services (:class:`~glplot.gui.datasets.DataStore`,
+:class:`~glplot.gui.history.UndoStack`, :class:`~glplot.gui.commands.CommandQueue`,
+:class:`~glplot.gui.models.ModelStore`) and hands them to every panel through
+:class:`~glplot.gui.panels.base.Panel`'s proxies, so there is exactly one of each per plot.
 
-It also owns the fourth service: the :class:`~glplot.gui.actions.ActionRegistry`, built in
+It also owns the fifth service: the :class:`~glplot.gui.actions.ActionRegistry`, built in
 exactly one place (:meth:`Workspace._register_actions`). Three consumers read it and none
 of them has a list of its own — the keymap dispatches from it (:meth:`Workspace.draw`),
 the command palette searches it, and Help's shortcut sheet is generated from it. A
@@ -35,6 +35,7 @@ from .actions import ActionRegistry
 from .commands import CommandQueue
 from .datasets import DataStore
 from .history import UndoStack
+from .models import ModelStore
 from .panels.base import Panel
 
 if TYPE_CHECKING:
@@ -222,11 +223,12 @@ class Workspace:
         self.plot = plot
         self._hud = hud
 
-        # The three shared services. Panels reach them through Panel's proxies; nothing
+        # The four shared services. Panels reach them through Panel's proxies; nothing
         # else may construct a second one, or half the UI would talk to a dead store.
         self.store = DataStore()
         self.undo = UndoStack()
         self.queue = CommandQueue()
+        self.models = ModelStore()
 
         self.panels: Dict[str, Panel] = {}
         self.open: Dict[str, bool] = {}
@@ -2189,7 +2191,7 @@ class Workspace:
         if imgui.begin_menu("Panels"):
             for key, panel in self.panels.items():
                 action = self.registry.get(f"panel.{key}")
-                chord = keys.format(action.chord) if action and action.chord else None
+                chord = keys.format(action.chord) if action and action.chord else ""
                 clicked, _ = imgui.menu_item(panel.title, chord, self.open.get(key, False))
                 if clicked:
                     self.open[key] = not self.open.get(key, False)
@@ -2218,11 +2220,11 @@ class Workspace:
             self._menu_action("view.toggle_frame")
             imgui.separator()
             _, state.show_status_overlay = imgui.menu_item(
-                "Status Overlay", None, state.show_status_overlay
+                "Status Overlay", "", state.show_status_overlay
             )
-            _, state.show_selection = imgui.menu_item("Selection Info", None, state.show_selection)
-            _, state.show_analysis = imgui.menu_item("Analysis", None, state.show_analysis)
-            changed, hint = imgui.menu_item("Getting Started Hint", None, self._show_hint)
+            _, state.show_selection = imgui.menu_item("Selection Info", "", state.show_selection)
+            _, state.show_analysis = imgui.menu_item("Analysis", "", state.show_analysis)
+            changed, hint = imgui.menu_item("Getting Started Hint", "", self._show_hint)
             if changed:
                 self._show_hint = hint
             imgui.end_menu()
@@ -2245,7 +2247,7 @@ class Workspace:
         action = self.registry.get(action_id)
         if action is None:  # pragma: no cover - every id here is registered above
             return
-        shortcut = keys.format(action.chord) if action.chord is not None else None
+        shortcut = keys.format(action.chord) if action.chord is not None else ""
         checked = self.registry.checked(action)
         clicked, _ = imgui.menu_item(
             label or action.title,

@@ -131,7 +131,9 @@ def _draw_one(imgui, draw_list, width, height, panel, cb, ink, is_light, colorma
             True,
         )
     else:
-        left, top, right, bottom = _close_pad_gap(panel, width, height, cb, left, top, right, bottom)
+        left, top, right, bottom = _close_pad_gap(
+            panel, width, height, cb, left, top, right, bottom
+        )
 
     stops = np.asarray(
         colormap_values(
@@ -149,15 +151,35 @@ def _draw_one(imgui, draw_list, width, height, panel, cb, ink, is_light, colorma
         frac = min(max(float(cb.norm(value)), 0.0), 1.0)
         label = _format_tick(value, cb.format)
         w = _draw_tick(
-            imgui, draw_list, left, top, right, bottom, frac, cb.orientation, tick_side,
-            label, ink, text_halo,
+            imgui,
+            draw_list,
+            left,
+            top,
+            right,
+            bottom,
+            frac,
+            cb.orientation,
+            tick_side,
+            label,
+            ink,
+            text_halo,
         )
         widest_tick_w = max(widest_tick_w, w)
 
     if cb.label:
         _draw_axis_label(
-            imgui, draw_list, left, top, right, bottom, cb.orientation, tick_side,
-            cb.label, ink, widest_tick_w, text_halo,
+            imgui,
+            draw_list,
+            left,
+            top,
+            right,
+            bottom,
+            cb.orientation,
+            tick_side,
+            cb.label,
+            ink,
+            widest_tick_w,
+            text_halo,
         )
 
     if cb.inset:
@@ -219,8 +241,12 @@ def _sized_text(imgui, draw_list, x: float, y: float, ink: int, text: str, px: f
     """
     font = imgui.get_font()
     if halo is not None:
-        for dx, dy in ((-_INSET_TEXT_HALO_PX, 0.0), (_INSET_TEXT_HALO_PX, 0.0),
-                       (0.0, -_INSET_TEXT_HALO_PX), (0.0, _INSET_TEXT_HALO_PX)):
+        for dx, dy in (
+            (-_INSET_TEXT_HALO_PX, 0.0),
+            (_INSET_TEXT_HALO_PX, 0.0),
+            (0.0, -_INSET_TEXT_HALO_PX),
+            (0.0, _INSET_TEXT_HALO_PX),
+        ):
             draw_list.add_text(font, px, (x + dx, y + dy), halo, text)
     draw_list.add_text(font, px, (x, y), ink, text)
 
@@ -250,10 +276,14 @@ def _draw_gradient(imgui, draw_list, left, top, right, bottom, stops, orientatio
         for i in range(n):
             f0, f1 = i / n, (i + 1) / n
             y_lo = bottom - f0 * (bottom - top)  # screen y of the lower-value edge
-            y_hi = bottom - f1 * (bottom - top)  # screen y of the higher-value edge (smaller, higher up)
+            y_hi = bottom - f1 * (
+                bottom - top
+            )  # screen y of the higher-value edge (smaller, higher up)
             c_lo = imgui.get_color_u32(tuple(float(c) for c in stops[i]))
             c_hi = imgui.get_color_u32(tuple(float(c) for c in stops[i + 1]))
-            draw_list.add_rect_filled_multi_color((left, y_hi), (right, y_lo), c_hi, c_hi, c_lo, c_lo)
+            draw_list.add_rect_filled_multi_color(
+                (left, y_hi), (right, y_lo), c_hi, c_hi, c_lo, c_lo
+            )
     else:
         # fraction 0 (vmin) at the left, fraction 1 (vmax) at the right.
         for i in range(n):
@@ -262,7 +292,9 @@ def _draw_gradient(imgui, draw_list, left, top, right, bottom, stops, orientatio
             x_hi = left + f1 * (right - left)
             c_lo = imgui.get_color_u32(tuple(float(c) for c in stops[i]))
             c_hi = imgui.get_color_u32(tuple(float(c) for c in stops[i + 1]))
-            draw_list.add_rect_filled_multi_color((x_lo, top), (x_hi, bottom), c_lo, c_hi, c_hi, c_lo)
+            draw_list.add_rect_filled_multi_color(
+                (x_lo, top), (x_hi, bottom), c_lo, c_hi, c_hi, c_lo
+            )
 
 
 def _resolve_ticks(cb: "ColorbarSpec") -> List[float]:
@@ -285,7 +317,9 @@ def _resolve_ticks(cb: "ColorbarSpec") -> List[float]:
         # Base is not read off `norm` (matplotlib does not expose it uniformly across
         # versions) -- 10 is SymLogNorm's own default and the only base this codebase's
         # own symlog axis scale (`utils/scale.py`) uses, so it is not a guess.
-        locator = ticker.SymmetricalLogLocator(linthresh=getattr(cb.norm, "linthresh", 1.0), base=10)
+        locator = ticker.SymmetricalLogLocator(
+            linthresh=getattr(cb.norm, "linthresh", 1.0), base=10
+        )
     else:
         locator = ticker.MaxNLocator(nbins=6)
     try:
@@ -341,16 +375,28 @@ def _draw_tick(
             stroke_end = x_edge - _TICK_LEN_PX
             draw_list.add_line((x_edge, y), (stroke_end, y), ink, 1.0)
             _sized_text(
-                imgui, draw_list, stroke_end - _TICK_LABEL_GAP_PX - text_w, y - text_h * 0.5,
-                ink, label, _TICK_TEXT_PX, halo,
+                imgui,
+                draw_list,
+                stroke_end - _TICK_LABEL_GAP_PX - text_w,
+                y - text_h * 0.5,
+                ink,
+                label,
+                _TICK_TEXT_PX,
+                halo,
             )
         else:  # "right" (default)
             x_edge = right
             stroke_end = x_edge + _TICK_LEN_PX
             draw_list.add_line((x_edge, y), (stroke_end, y), ink, 1.0)
             _sized_text(
-                imgui, draw_list, stroke_end + _TICK_LABEL_GAP_PX, y - text_h * 0.5,
-                ink, label, _TICK_TEXT_PX, halo,
+                imgui,
+                draw_list,
+                stroke_end + _TICK_LABEL_GAP_PX,
+                y - text_h * 0.5,
+                ink,
+                label,
+                _TICK_TEXT_PX,
+                halo,
             )
     else:
         x = left + frac * (right - left)
@@ -359,16 +405,28 @@ def _draw_tick(
             stroke_end = y_edge - _TICK_LEN_PX
             draw_list.add_line((x, y_edge), (x, stroke_end), ink, 1.0)
             _sized_text(
-                imgui, draw_list, x - text_w * 0.5, stroke_end - _TICK_LABEL_GAP_PX - text_h,
-                ink, label, _TICK_TEXT_PX, halo,
+                imgui,
+                draw_list,
+                x - text_w * 0.5,
+                stroke_end - _TICK_LABEL_GAP_PX - text_h,
+                ink,
+                label,
+                _TICK_TEXT_PX,
+                halo,
             )
         else:  # "bottom" (default)
             y_edge = bottom
             stroke_end = y_edge + _TICK_LEN_PX
             draw_list.add_line((x, y_edge), (x, stroke_end), ink, 1.0)
             _sized_text(
-                imgui, draw_list, x - text_w * 0.5, stroke_end + _TICK_LABEL_GAP_PX,
-                ink, label, _TICK_TEXT_PX, halo,
+                imgui,
+                draw_list,
+                x - text_w * 0.5,
+                stroke_end + _TICK_LABEL_GAP_PX,
+                ink,
+                label,
+                _TICK_TEXT_PX,
+                halo,
             )
     return text_w
 
@@ -401,7 +459,10 @@ def _draw_axis_label(
         _, h = imgui.calc_text_size(text)
         mid_y = 0.5 * (top + bottom)
         if location == "left":
-            center_x = max(left - _TICK_LABEL_GAP_PX - widest_tick_w - _AXIS_LABEL_GAP_PX - h * 0.5, h * 0.5 + 1.0)
+            center_x = max(
+                left - _TICK_LABEL_GAP_PX - widest_tick_w - _AXIS_LABEL_GAP_PX - h * 0.5,
+                h * 0.5 + 1.0,
+            )
         else:
             center_x = right + _TICK_LABEL_GAP_PX + widest_tick_w + _AXIS_LABEL_GAP_PX + h * 0.5
         anchor = (left, max(top - h - 2.0, 1.0))
