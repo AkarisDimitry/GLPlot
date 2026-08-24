@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import glplot.animation as _animation
 import glplot.pyplot as _gplt
 from glplot.engine import GPULinePlot
 
@@ -46,6 +47,15 @@ def test_gallery_scripts_build_without_rendering(monkeypatch):
     (the no-window path added to fix the macOS headless crash), so we patch
     at the pyplot module level rather than patching GPULinePlot.savefig.
 
+    28_chladni_wave_animation.py is the one script that calls Animation.save()
+    (not savefig()) to write a real animated GIF -- 54 frames each re-rendered
+    through the full matplotlib preview pipeline and then Pillow-encoded.
+    Animation.save() itself already has dedicated coverage in
+    test_animation_integration.py, so faking it here is the same call as
+    faking savefig(): this test exists to prove every gallery script runs to
+    completion without crashing, not to reproduce every real render or
+    re-encode a GIF that already lives in examples/gallery/results/.
+
     Running 26 scripts through full line coverage genuinely takes ~90s
     (verified), well past the suite's default 60s hang ceiling -- this is real
     work, not a hang, so it gets its own generous timeout rather than raising
@@ -58,6 +68,14 @@ def test_gallery_scripts_build_without_rendering(monkeypatch):
 
     monkeypatch.setattr(_gplt, "savefig", fake_savefig)
     monkeypatch.setattr(GPULinePlot, "run", lambda self: None)
+
+    def fake_animation_save(self, *args, **kwargs):
+        # Mirror Animation.save()'s own first line so its "deleted without
+        # rendering anything" __del__ warning doesn't fire on a save() that was
+        # deliberately skipped, not forgotten.
+        self._draw_was_started = True
+
+    monkeypatch.setattr(_animation.Animation, "save", fake_animation_save)
 
     root = Path(__file__).resolve().parents[1] / "examples" / "gallery"
     for script in sorted(root.glob("[0-9][0-9]_*.py")):
