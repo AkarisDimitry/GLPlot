@@ -429,6 +429,17 @@ def write_gif(
         append_images=images[1:],
         duration=duration_ms,
         loop=int(loop),
+        # Pillow defaults `optimize` to True whenever no explicit palette is given (see
+        # GifImagePlugin._save), which makes _write_multiple_frames diff every frame
+        # against the last with a full-resolution ImageMath mask to find a transparent
+        # fill for unchanged pixels -- a pure-Python-driven pixel op per frame pair, on
+        # top of the RGB->P quantization every frame already needs. For a real animation
+        # (dozens of full-figure frames), that is easily a bottleneck rather than a
+        # rounding error, and was slow enough on a cold Windows CI runner to blow the
+        # suite's per-test timeout with nothing actually stuck. It only ever changes file
+        # size, never the decoded pixels, so turning it off trades a somewhat larger GIF
+        # for a bounded, predictable encode.
+        optimize=False,
     )
     _verify_nonempty(resolved, "a GIF")
     return str(resolved)
