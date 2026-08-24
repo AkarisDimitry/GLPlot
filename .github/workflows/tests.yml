@@ -58,6 +58,21 @@ jobs:
       run: |
         xvfb-run -a pytest --cov=glplot --cov-report=term-missing --cov-report=xml
 
+    - name: Warm the matplotlib font cache (Windows)
+      # matplotlib builds its font list lazily on first use, by scanning every font on
+      # the machine -- on a fresh Windows runner this can take well over the suite's
+      # per-test 60s timeout (see pyproject.toml), and the animation/preview pipeline's
+      # gallery-integration test is typically the first thing in the whole run to draw
+      # real text through the Agg backend, so *that* test is the one left holding a
+      # timeout that has nothing to do with its own code. Building the cache here, in
+      # its own step with its own generous budget, keeps a one-time cold start off any
+      # single test's clock; the cache then lives in %USERPROFILE%\.matplotlib for the
+      # pytest step that follows.
+      if: runner.os == 'Windows'
+      timeout-minutes: 5
+      run: |
+        python -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; fig = plt.figure(); ax = fig.add_subplot(); ax.set_title('warm'); fig.canvas.draw(); plt.close(fig)"
+
     - name: Run tests with coverage
       if: runner.os != 'Linux'
       timeout-minutes: 10
