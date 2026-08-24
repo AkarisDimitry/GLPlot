@@ -20,7 +20,7 @@
   - Parameters documented with types
   - Returns and raises sections
   - 80+ practical code examples
-- **Architecture Document**: GLPlot_Architecture_and_Mathematical_Formulation.md
+- **Architecture Document**: docs/ARCHITECTURE.md
 - **Contributing Guide**: CONTRIBUTING.md with development setup
 - **Code of Conduct**: CODE_OF_CONDUCT.md
 - **Citation**: CITATION.cff with publication metadata

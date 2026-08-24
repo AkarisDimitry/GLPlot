@@ -13,7 +13,7 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 
 ## ✅ Documentation
 
-- [x] **Clear statement of need** (README.md motivation section, paper.md)
+- [x] **Clear statement of need** (README.md motivation section, paper/paper.md)
 - [x] **Installation instructions complete** (README.md with clean environment testing)
 - [x] **Example usage provided** (README.md with 5+ code examples, 19 gallery scripts)
 - [x] **Principal functionality documented** (README.md, docstrings in code)
@@ -33,11 +33,11 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 ## ✅ Advanced Requirements
 
 - [x] **Explicit comparison with alternatives** (README.md comparison table)
-- [x] **Explanation of novelty** (paper.md, GLPlot_Architecture_and_Mathematical_Formulation.md)
+- [x] **Explanation of novelty** (paper/paper.md, docs/ARCHITECTURE.md)
 - [x] **OSI-approved license** (MIT)
 - [x] **pip/conda installation** (works in clean environment)
 - [x] **Minimal executable example** (README.md examples, gallery scripts)
-- [x] **Complete API documentation** (docstrings, paper.md, architecture doc)
+- [x] **Complete API documentation** (docstrings, paper/paper.md, architecture doc)
 - [x] **Tests for core behavior** (65+ tests in tests/ directory)
 - [x] **CI on supported versions** (GitHub Actions: Python 3.9-3.12, macOS/Ubuntu/Windows)
 - [x] **Reproducible tests** (pytest runs headless without windows)
@@ -46,7 +46,7 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 - [x] **Code of conduct** (CODE_OF_CONDUCT.md)
 - [x] **Versioned release** (version 0.1.3 in pyproject.toml, glplot.__version__, CITATION.cff, and CHANGELOG.md)
 - [x] **CITATION.cff** (provided for academic citations)
-- [x] **paper.md** (academic journal submission format)
+- [x] **paper/paper.md** (academic journal submission format)
 
 ## 📋 Pre-Publication Tasks
 
@@ -56,7 +56,7 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 - [ ] Register with PyPI (if not already)
 - [ ] Verify CI passes on all platforms
 - [ ] Submit to SoftwareX journal (if desired)
-- [ ] Update paper.md with bibliography references
+- [ ] Update paper/paper.md with bibliography references
 
 ## 🎯 Quality Metrics
 
@@ -77,10 +77,10 @@ This document verifies that GLPlot meets all requirements for scientific softwar
 - **CODE_OF_CONDUCT.md**: Community conduct guidelines
 - **CONTRIBUTING.md**: Contribution procedures and guidelines
 - **CHANGELOG.md**: Versioned release history
-- **paper.md**: Academic paper for SoftwareX submission
+- **paper/paper.md**: Academic paper for SoftwareX submission
 - **LICENSE**: MIT License text
 - **pyproject.toml**: Project metadata and dependencies
-- **GLPlot_Architecture_and_Mathematical_Formulation.md**: Technical specification
+- **docs/ARCHITECTURE.md**: Technical specification
 - **.github/workflows/**: CI/CD pipeline (tests.yml, lint.yml, build.yml)
 - **tests/**: Comprehensive test suite (65+ tests)
 - **examples/gallery/**: 19 reproducible example scripts

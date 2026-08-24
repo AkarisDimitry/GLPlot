@@ -503,7 +503,7 @@ interactive path never reads pixels back to the CPU.
 
 ![GLPlot rendering pipeline](examples/dataflow.png)
 
-See [GLPlot_Architecture_and_Mathematical_Formulation.md](GLPlot_Architecture_and_Mathematical_Formulation.md)
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 for the full derivation of each stage, including the density-accumulation math and the
 viewport-relative projection that keeps zoom numerically stable.
 
@@ -524,7 +524,7 @@ for GPU/environment diagnostics.
 ## Documentation
 
 - API reference: docstrings in `glplot.pyplot`, or the built docs — see [docs/README.md](docs/README.md)
-- Architecture: [GLPlot_Architecture_and_Mathematical_Formulation.md](GLPlot_Architecture_and_Mathematical_Formulation.md)
+- Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Dev tools: [tools/README.md](tools/README.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 

@@ -1,7 +1,5 @@
 # System files
 .DS_Store
-.vscode/
-.idea/
 *.swp
 *.swo
 *~

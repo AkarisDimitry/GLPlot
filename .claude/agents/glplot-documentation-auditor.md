@@ -34,7 +34,7 @@ Specializes in auditing, analyzing, and improving documentation quality.
 - Reports documentation gaps
 
 ### Publication Readiness Check
-- Verifies paper.md completeness
+- Verifies paper/paper.md completeness
 - Checks CITATION.cff validity
 - Validates README structure
 - Verifies API documentation

@@ -327,7 +327,7 @@ Add to README.md:
 **Documentation**:
 - ✅ `README.md` — Installation, examples, features
 - ✅ `docs/` — Complete Sphinx documentation
-- ✅ `paper.md` — Academic paper for SoftwareX
+- ✅ `paper/paper.md` — Academic paper for SoftwareX
 
 **Tests**:
 - ✅ `tests/` — 508 passing tests

@@ -636,4 +636,4 @@ Related Documentation
 
 - :doc:`testing` - Comprehensive testing guide
 - :doc:`../guide/basic-plotting` - API usage examples
-- `GLPlot Mathematical Formulation <../../GLPlot_Architecture_and_Mathematical_Formulation.md>`_
+- `GLPlot Mathematical Formulation <../../ARCHITECTURE.md>`_

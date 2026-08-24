@@ -35,7 +35,7 @@ Key Resources
 - `GitHub Repository <https://github.com/AkarisDimitry/GLPlot>`_
 - `Issue Tracker <https://github.com/AkarisDimitry/GLPlot/issues>`_
 - `Code of Conduct <../../CODE_OF_CONDUCT.md>`_
-- `Mathematical Formulation <../../GLPlot_Architecture_and_Mathematical_Formulation.md>`_
+- `Mathematical Formulation <../../ARCHITECTURE.md>`_
 
 Development Environment
 -----------------------
