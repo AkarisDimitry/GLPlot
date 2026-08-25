@@ -38,7 +38,7 @@ EXPECTED_FILES = [
 ]
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(600)
 def test_gallery_scripts_build_without_rendering(monkeypatch):
     """All 21 gallery scripts must run to completion without crashing and each
     must call savefig() exactly once with the expected filename.
@@ -56,10 +56,16 @@ def test_gallery_scripts_build_without_rendering(monkeypatch):
     completion without crashing, not to reproduce every real render or
     re-encode a GIF that already lives in examples/gallery/results/.
 
-    Running 26 scripts through full line coverage genuinely takes ~90s
-    (verified), well past the suite's default 60s hang ceiling -- this is real
-    work, not a hang, so it gets its own generous timeout rather than raising
-    the ceiling for every other test.
+    Running 26 scripts genuinely takes ~75s *with coverage tracing on*
+    (verified locally -- pyproject.toml's addopts enables --cov=glplot for
+    every test run, including this one, and that instrumentation is most of
+    this test's own cost: ~25s of the same run with --no-cov). CI runners
+    have measurably less single-threaded headroom than a fast local machine,
+    and this test alone exceeded a 180s ceiling on both Windows and Linux CI
+    without hanging -- every script still finished, just slower than budgeted.
+    600s keeps a large margin over the worst CI time seen so far, in the same
+    spirit as this test already having its own timeout rather than raising
+    the suite's default 60s ceiling for every other test.
     """
     saved = []
 

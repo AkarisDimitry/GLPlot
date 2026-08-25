@@ -11,9 +11,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     # A hung step (e.g. apt waiting on a dpkg lock, or a blocking GLFW/OpenGL call
     # pytest-timeout can't preempt) used to silently eat GitHub's 6-hour default job
-    # timeout with no indication of where it got stuck. 20 minutes is generous next
-    # to the ~1-minute local run; it just guarantees a fast, legible failure instead.
-    timeout-minutes: 20
+    # timeout with no indication of where it got stuck. 25 minutes is generous next
+    # to the local run; it just guarantees a fast, legible failure instead.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -54,7 +54,12 @@ jobs:
 
     - name: Run tests with coverage (Linux, under a virtual display)
       if: runner.os == 'Linux'
-      timeout-minutes: 10
+      # test_gallery_scripts_build_without_rendering alone now carries its own 600s
+      # timeout (tests/test_gallery_integration.py) -- 26 example scripts under real
+      # coverage tracing measured at ~75s locally, and CI runners have shown
+      # measurably less single-threaded headroom than that. 15 minutes covers that
+      # test's own worst case plus the rest of the suite (~2-3 min uninstrumented).
+      timeout-minutes: 15
       run: |
         xvfb-run -a pytest --cov=glplot --cov-report=term-missing --cov-report=xml
 
@@ -75,7 +80,9 @@ jobs:
 
     - name: Run tests with coverage
       if: runner.os != 'Linux'
-      timeout-minutes: 10
+      # See the Linux step's comment: the gallery-integration test's own 600s budget
+      # is what this needs room for.
+      timeout-minutes: 15
       run: |
         pytest --cov=glplot --cov-report=term-missing --cov-report=xml
 
