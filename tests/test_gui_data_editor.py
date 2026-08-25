@@ -1128,7 +1128,16 @@ class TestCsvAsyncCompute:
         panel._export_csv(ds)
         assert not path.exists()  # not yet -- still running in the background
 
-        _wait_until(lambda: (panel._poll_csv_job(), path.exists())[1])
+        # Wait on _csv_job going back to None, not on path.exists(): the background
+        # thread writes the file and *then* flips the job's internal done flag (see
+        # BackgroundJob._run), so there is a real window where the file is already on
+        # disk but poll() still reports "running" and _poll_csv_job() has not yet set
+        # _status. _csv_job is only cleared by _poll_csv_job() itself once it has
+        # applied the "done" result, so waiting on it (like every sibling test in this
+        # class waits on a side effect of _poll_csv_job(), not of the background
+        # thread) is race-free.
+        _wait_until(lambda: (panel._poll_csv_job(), panel._csv_job is None)[1])
+        assert path.exists()
         assert "Exported" in panel._status
 
     def test_import_failure_surfaces_via_poll(self, tmp_path):
