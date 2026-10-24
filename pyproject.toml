@@ -56,7 +56,9 @@ test = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
-    "pytest-timeout>=2.1"
+    "pytest-timeout>=2.1",
+    # The MCP server tests skip without the SDK; CI should run them, not skip them.
+    "mcp>=1.10"
 ]
 
 mcp = [

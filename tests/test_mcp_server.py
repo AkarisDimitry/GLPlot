@@ -444,6 +444,7 @@ class TestEntryPoints:
         assert 'pip install "glplot[mcp]"' in err and "Traceback" not in err
 
     def test_default_roots(self, monkeypatch, tmp_path):
+        pytest.importorskip("mcp")
         from glplot.mcp import server as server_module
 
         assert server_module.default_roots(["/a", "/b"]) == ["/a", "/b"]

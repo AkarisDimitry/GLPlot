@@ -504,8 +504,9 @@ For Claude Desktop, add to `claude_desktop_config.json`:
 { "mcpServers": { "glplot": { "command": "python", "args": ["-m", "glplot.mcp", "--root", "/Users/me/data"] } } }
 ```
 
-`--root` is the only directory the model may read data from or save images into (repeatable);
-without it, file access is off. Formulas run through the same restricted expression evaluator as
+`--root` sets the directories the model may read data from or save images into (repeatable);
+without it, that is the directory the server was started in (never `/`), so set it explicitly.
+Formulas run through the same restricted expression evaluator as
 the workstation, with size-capped array constructors, so the model can generate data
 (`"sin(2*pi*t) * exp(-t)"`) instead of typing it, and there is no tool that runs arbitrary code.
 Tools: `create_figure`, `create_dataset`, `load_dataset`, `add_plot` (14 kinds), `add_function`,

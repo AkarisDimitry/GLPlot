@@ -191,7 +191,10 @@ def _apply_style_vars() -> None:
 
     style.anti_aliased_lines = True
     style.anti_aliased_fill = True
-    style.curve_tessellation_tol = 1.25
+    # imgui-bundle 1.93 replaced the curve tolerance with `curve_tessellation_max_error`
+    # (its own default, 1.12, is fine); older builds still have the tolerance, default 1.25.
+    if hasattr(style, "curve_tessellation_tol"):
+        style.curve_tessellation_tol = 1.25
     style.alpha = 1.0
 
 

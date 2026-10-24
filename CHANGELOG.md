@@ -56,8 +56,9 @@ version whose notes cover everything since 0.1.3 (see "0.1.4 - 0.1.13" below).
   limits, labels and legend text. Runs headless over stdio or streamable HTTP, on `mcp` 1.x
   and 2.x. Optional extra: `pip install "glplot[mcp]"`; importing `glplot` never imports it.
   Safety: no code-execution tool, formulas go through the workstation's AST-validated
-  evaluator with size-capped array constructors, and file access is opt-in (`--root`), confined
-  after symlink resolution, extension-limited, and never overwrites unless asked.
+  evaluator with size-capped array constructors, and file access is confined to `--root` (default: the
+  working directory, never `/`), after symlink resolution, extension-limited, and never overwrites
+  unless asked.
 - `glplot.utils.preview.render_preview_bytes`: the headless export as in-memory bytes, with a
   hook to read the resolved axes from the same render.
 
@@ -107,6 +108,8 @@ version whose notes cover everything since 0.1.3 (see "0.1.4 - 0.1.13" below).
 
 ### Fixed
 
+- The workstation theme crashed with `imgui-bundle` 1.93 (`Style.curve_tessellation_tol` was
+  renamed `curve_tessellation_max_error`); both spellings work now.
 - The headless export's 3-D line branch put a layer's raw `label` in the legend, ignoring the
   bookkeeping-label rule every other branch honours, so a 3-D wireframe/quiver layer named after
   its recipe (or an engine-assigned name) was listed as a legend entry nobody asked for.

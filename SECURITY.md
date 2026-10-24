@@ -33,8 +33,11 @@ is built so that it cannot be asked to run arbitrary code or reach arbitrary fil
 - **No code execution.** There is no tool that evaluates Python. Formulas (`add_function`,
   `add_field`, dataset columns) go through the same AST-validated evaluator the GUI uses, which
   allows a fixed set of numeric operations, and the array constructors in it are size-capped.
-- **No file access by default.** Reading and writing files is off until you pass `--root DIR`.
-  With a root, paths are confined to it after symlink resolution, limited to known extensions
+- **File access is confined to a root.** Pass `--root DIR` (repeatable) to choose it. Without
+  `--root`, the root is the directory the server was started in, so a client that launches it
+  from a project folder lets the model read data from, and save images into, that folder; it is
+  never the whole disk (started from `/`, there is no root and file tools refuse). Set `--root`
+  explicitly. Paths are confined to a root after symlink resolution, limited to known extensions
   (data: tables, `.npy`/`.npz`, images; output: `.png`, `.svg`, `.pdf`, `.jpg`), files over
   256 MB are refused, and an existing file is never overwritten unless the call says so.
 - **Local transport by default.** The default transport is stdio. `--transport streamable-http`
