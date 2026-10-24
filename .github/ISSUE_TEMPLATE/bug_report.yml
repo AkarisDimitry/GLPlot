@@ -1,0 +1,57 @@
+name: Bug report
+description: Something draws wrong, crashes, or behaves differently from Matplotlib
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For a security problem, do **not** file it here: see
+        [SECURITY.md](https://github.com/AkarisDimitry/GLPlot/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal code that shows it
+      description: A short, self-contained script. `fig.savefig("out.png")` is enough if the bug is visible in the export.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Traceback or screenshot
+      description: Paste the full traceback, or drag in an image.
+  - type: input
+    id: version
+    attributes:
+      label: GLPlot version
+      description: "`python -c \"import glplot; print(glplot.__version__)\"`"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Python
+      placeholder: "macOS 15, Python 3.12"
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it happen?
+      options:
+        - In the interactive window
+        - In savefig / headless export
+        - In the workstation GUI (python -m glplot)
+        - In the MCP server
+        - Not sure
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU / OpenGL renderer (if it is a rendering problem)
+      description: Your GPU and driver, e.g. from `glGetString(GL_RENDERER)` or your OS's system information.

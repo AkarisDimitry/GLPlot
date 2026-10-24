@@ -7,7 +7,7 @@ type: software
 authors:
   - family-names: Lombardi
     given-names: Juan Manuel
-    email: lombardi@fhi-berlin.mpg.de
+    email: lombardi@fhi.mpg.de
     affiliation: "Fritz Haber Institute of the Max Planck Society"
     orcid: "https://orcid.org/0009-0002-3961-1426"
   - family-names: Riccius
@@ -48,6 +48,6 @@ keywords:
   - data visualization
 license: MIT
 status: "active development"
-version: 0.1.7
-date-released: 2026-08-18
+version: 0.2.0
+date-released: 2026-10-24
 development-status: "Beta"

@@ -208,7 +208,7 @@ Getting Help
 - **Questions**: Open a GitHub issue with ``question`` label
 - **Design discussions**: Use GitHub Discussions
 - **Technical help**: Check documentation and existing issues first
-- **Email**: Contact maintainers at lombardi@fhi-berlin.mpg.de
+- **Email**: Contact maintainers at lombardi@fhi.mpg.de
 - **Discord/Slack**: Not available yet, but planned for future
 
 Related Documentation

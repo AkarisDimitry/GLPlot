@@ -65,8 +65,16 @@ imgui.ini
 # unlike examples/gallery/results, which IS embedded in README.md and must stay tracked)
 examples/benchmark/results/
 
+# Frames written by examples/gallery/animations/17_ns_pes_exploration.py (out_dir="NS_movie",
+# relative to wherever it is run). The script regenerates them; the movie itself is what
+# belongs in animations/results/.
+examples/gallery/animations/NS_movie/
+
 # Claude Code (local settings only, keep agents/)
 .claude/settings.json
 .claude/settings.local.json
 .claude/MANIFEST.md
 .claude/memory/
+
+# Codex CLI local agent definitions (a copy of .claude/agents for another tool)
+.codex/

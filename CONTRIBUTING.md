@@ -42,7 +42,7 @@ When creating enhancement suggestions, please include:
 
 ### Prerequisites
 
-* Python 3.9 or later
+* Python 3.11 or later
 * pip or conda
 * Git
 
@@ -67,6 +67,17 @@ pytest --cov=glplot --cov-report=html
 
 ### Code Style
 
+CI runs `black`, `isort`, `flake8` and `ruff check` (all configured in `pyproject.toml` and
+`.flake8`). To run the same checks before every commit:
+
+```bash
+pip install -e ".[dev]"
+pre-commit install
+```
+
+or run them by hand: `black glplot tests examples && isort glplot tests examples &&
+flake8 glplot tests && ruff check glplot tests examples`.
+
 * Follow [PEP 8](https://www.python.org/dev/peps/pep-0008/) for Python code
 * Use meaningful variable and function names
 * Limit lines to 100 characters where reasonable
@@ -79,6 +90,12 @@ pytest --cov=glplot --cov-report=html
 * Use the imperative mood ("Move cursor to..." not "Moves cursor to...")
 * Limit the first line to 72 characters or less
 * Reference issues and pull requests liberally after the first line
+
+### Large files
+
+Keep binary files in the repository small (under 1 MB; the `pre-commit` hook checks). Every
+version of a GIF or video stays in the git history forever and is downloaded by every clone,
+so link big animations from a release or a docs host instead of committing them.
 
 ### Documentation
 
@@ -93,6 +110,6 @@ Contributors will be recognized in the project's documentation and repository me
 
 ## Questions?
 
-Feel free to open an issue with the `question` label or contact the maintainers at [lombardi@fhi-berlin.mpg.de](mailto:lombardi@fhi-berlin.mpg.de).
+Feel free to open an issue with the `question` label or contact the maintainers at [lombardi@fhi.mpg.de](mailto:lombardi@fhi.mpg.de).
 
 Thank you for contributing! 🎉

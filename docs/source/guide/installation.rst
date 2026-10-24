@@ -6,14 +6,14 @@ System Requirements
 
 Before installing GLPlot, ensure you have:
 
-- **Python**: 3.9 or later
+- **Python**: 3.11 or later
 - **OpenGL**: 3.3+ capable GPU driver
 - **Git**: For installing from source
 
 Required Dependencies:
 - `numpy <https://numpy.org/>`_ >= 1.23
 - `scipy <https://scipy.org/>`_ >= 1.9
-- `matplotlib <https://matplotlib.org/>`_ >= 3.6
+- `matplotlib <https://matplotlib.org/>`_ >= 3.6, < 3.10
 - `glfw <https://github.com/FlorianBrucker/pyglfw>`_ >= 2.5
 - `PyOpenGL <https://pyopengl.sourceforge.net/>`_ >= 3.1.6
 

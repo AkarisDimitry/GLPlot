@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "glplot"
-version = "0.1.9"
+version = "0.2.0"
 description = "High-performance OpenGL plotting library for Python"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "Juan Manuel Lombardi", email = "lombardi@fhi-berlin.mpg.de" },
+    { name = "Juan Manuel Lombardi", email = "lombardi@fhi.mpg.de" },
     { name = "Felix Riccius" },
     { name = "Julian Holland" },
     { name = "Gianmarco Ducci" }
@@ -42,6 +42,11 @@ dependencies = [
 dev = [
     "build>=1.0",
     "twine>=4.0",
+    "black>=24.0",
+    "isort>=5.13",
+    "flake8>=7.0",
+    "ruff>=0.5",
+    "pre-commit>=3.5",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
@@ -53,6 +58,13 @@ test = [
     "pytest-mock>=3.10",
     "pytest-timeout>=2.1"
 ]
+
+mcp = [
+    "mcp>=1.10",
+]
+
+[project.scripts]
+glplot-mcp = "glplot.mcp.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/AkarisDimitry/GLPlot"
@@ -92,6 +104,22 @@ markers = [
 # all, one hung test burns the entire CI job down to GitHub's 6-hour default
 # with no indication of which test it was -- which is what actually happened.
 timeout = 60
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["build", "dist", "docs/_build"]
+
+[tool.ruff.lint]
+# Ruff's default rule set (E4, E7, E9, F), kept in step with .flake8.
+# E741 (ambiguous name) is off because `l, r, b, t` for left/right/bottom/top is the
+# convention for view and bounding-box extents all through the engine and renderers.
+extend-ignore = ["E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# The GPU modules bind PyOpenGL through `from OpenGL.GL import *`, the library's documented
+# usage; the gl* entry points cannot be enumerated in an explicit import list (see .flake8).
+"glplot/**" = ["F403", "F405"]
 
 [tool.black]
 line-length = 100

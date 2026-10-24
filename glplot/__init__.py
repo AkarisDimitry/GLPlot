@@ -38,7 +38,7 @@ except Exception:  # pragma: no cover - imgui_bundle is optional at import time 
 from .engine import GPULinePlot
 from .options import BlendMode, EngineOptions, RenderMode
 
-__version__ = "0.1.6"
+__version__ = "0.2.0"
 __author__ = "Juan Manuel Lombardi"
 __license__ = "MIT"
 

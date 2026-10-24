@@ -5,7 +5,9 @@ max-line-length = 100
 
 # E203 / W503 conflict with black's formatting of slices and line breaks before
 # binary operators; both are explicitly recommended for black-formatted code.
-extend-ignore = E203, W503
+# E741 is off because `l, r, b, t` for left/right/bottom/top is the convention for
+# view and bounding-box extents all through the engine and renderers.
+extend-ignore = E203, W503, E741
 
 exclude =
     .git,
@@ -29,3 +31,6 @@ per-file-ignores =
     # genuinely undefined names elsewhere.
     glplot/*: F403,F405
     glplot/*/*: F403,F405
+    # The MCP usage guide is markdown prose and tables sent to a model: a table row cannot be
+    # wrapped, and wrapping the prose would only add line breaks to what the model reads.
+    glplot/mcp/guide.py: E501

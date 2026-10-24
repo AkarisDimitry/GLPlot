@@ -11,7 +11,7 @@ sys.path.insert(0, str(project_root))
 project = "GLPlot"
 copyright = "2024, Juan Manuel Lombardi"
 author = "Juan Manuel Lombardi"
-release = "0.1.3"
+release = "0.2.0"
 
 # Sphinx extensions
 extensions = [

@@ -85,7 +85,7 @@ Development Setup
 Prerequisites
 ~~~~~~~~~~~~~
 
-- Python 3.9 or later
+- Python 3.11 or later
 - Git
 - pip or conda
 - C compiler (for building native dependencies on some systems)
@@ -618,7 +618,7 @@ Getting Help
 - **Questions**: Open an issue with the `question` label
 - **Technical Help**: Check existing documentation and issues first
 - **Discussions**: Use GitHub Discussions for design conversations
-- **Email**: Contact maintainers at lombardi@fhi-berlin.mpg.de
+- **Email**: Contact maintainers at lombardi@fhi.mpg.de
 
 Recognition
 -----------

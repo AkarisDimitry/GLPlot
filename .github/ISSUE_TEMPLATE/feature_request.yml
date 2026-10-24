@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest a plot type, a Matplotlib function GLPlot lacks, or a GUI improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The goal first, then what stops you.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like GLPlot to do?
+      description: For a Matplotlib function, the call you would write.
+      render: python
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?

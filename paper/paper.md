@@ -10,7 +10,7 @@ tags:
 authors:
   - name: Juan Manuel Lombardi
     corresponding: true
-    email: lombardi@fhi-berlin.mpg.de
+    email: lombardi@fhi.mpg.de
     affiliation: 1
     orcid: 0009-0002-3961-1426
   - name: Felix Riccius
