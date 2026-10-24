@@ -73,7 +73,7 @@ except Exception as e:
 # hvplot
 try:
     import holoviews as hv
-    import hvplot.pandas
+    import hvplot.pandas  # noqa: F401  (registers the .hvplot accessor)
 
     hv.extension("matplotlib")
     hvplot_available = True

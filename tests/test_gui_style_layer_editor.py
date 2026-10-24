@@ -618,3 +618,137 @@ class TestOutlineAndBlending:
         # The keys the panel draws itself today. A key leaving this set means the shared
         # editor grew a branch for it and the local one must go.
         assert local == {"stride", "nu", "nv", "gap", "bar_dx", "bar_dy", "scale", "head"}
+
+
+# ----------------------------------------------------------------------------------
+# Group editing: "All layers" / "All <type> layers" in the layer selector
+# ----------------------------------------------------------------------------------
+
+
+def _mixed_2d(plot):
+    """Two scatters and a line: an "All layers" group and an "All scatter layers" one."""
+    x = np.arange(12.0)
+    a = layerops.add_xy_layer(plot, x, np.sin(x), kind="scatter", label="a")
+    b = layerops.add_xy_layer(plot, x, np.cos(x), kind="scatter", label="b")
+    line = layerops.add_xy_layer(plot, x, x / 12.0, kind="line", label="line")
+    return a, b, line
+
+
+class TestGroupEditing:
+    def test_the_selector_offers_all_and_per_type_groups(self, plot, panel):
+        _mixed_2d(plot)
+        groups = panel._layer_groups(plot.scene.layers)
+        groups = {key: len(members) for key, _label, members in groups}
+        # No "All polyline layers": a group of one is just that layer.
+        assert groups == {"__all__": 3, "scatter": 2}
+
+    def test_no_groups_with_a_single_layer(self, plot, panel):
+        x = np.arange(5.0)
+        layerops.add_xy_layer(plot, x, x, kind="scatter", label="only")
+        assert panel._layer_groups(plot.scene.layers) == []
+
+    def test_an_all_layers_edit_reaches_every_layer_after_the_drain(self, ws, plot, panel):
+        layers = _mixed_2d(plot)
+        _select(plot, layers[0])
+        panel._layer_group = "__all__"
+        panel._group_anchor = panel._selected_layer_id()
+        members = panel._resolve_group(plot.scene.layers)
+        panel._group_ids = tuple(m.layer_id for m in members)
+
+        panel._set_style(members[0], alpha=0.25)
+        assert all(layer.style.alpha == 1.0 for layer in layers)  # queued, not applied
+        ws.drain()
+        assert all(layer.style.alpha == 0.25 for layer in layers)
+
+    def test_a_type_group_edit_leaves_other_types_alone(self, ws, plot, panel):
+        a, b, line = _mixed_2d(plot)
+        _select(plot, line)
+        panel._layer_group = "scatter"
+        panel._group_anchor = panel._selected_layer_id()
+        members = panel._resolve_group(plot.scene.layers)
+        panel._group_ids = tuple(m.layer_id for m in members)
+        assert members == [a, b]
+
+        panel._set_style(members[0], point_size=11.0)
+        ws.drain()
+        assert a.style.point_size == b.style.point_size == 11.0
+        assert line.style.point_size != 11.0
+
+    def test_single_layer_edits_are_unchanged_outside_a_group(self, ws, plot, panel):
+        a, b, _line = _mixed_2d(plot)
+        panel._set_style(a, alpha=0.5)
+        ws.drain()
+        assert a.style.alpha == 0.5 and b.style.alpha == 1.0
+
+    def test_all_layers_never_includes_the_3d_axis_decoration(self, plot, panel):
+        plot.set_ndim(3)
+        _add3d(plot, kind="scatter3d", label="p")
+        _add3d(plot, kind="surface3d", label="s")
+        assert any(
+            layer.metadata.get("artist") in plot._SYSTEM_3D_ARTISTS for layer in plot.scene.layers
+        ), "the fixture should have 3D decoration for this test to mean anything"
+        (_key, _label, members), *_ = panel._layer_groups(plot.scene.layers)
+        assert [m.label for m in members] == ["p", "s"]
+
+    def test_selecting_a_layer_elsewhere_drops_the_group(self, ws, plot, panel):
+        a, b, _line = _mixed_2d(plot)
+        _select(plot, a)
+        panel._layer_group = "__all__"
+        panel._group_anchor = panel._selected_layer_id()
+        assert panel._resolve_group(plot.scene.layers)
+        _select(plot, b)  # e.g. a click in the plot, or the Scene panel
+        assert panel._resolve_group(plot.scene.layers) == []
+        assert panel._layer_group is None
+
+    def test_a_colormap_edit_skips_members_without_one_quietly(self, ws, plot, panel):
+        x = np.arange(20.0)
+        mapped = layerops.add_xy_layer(plot, x, np.sin(x), kind="scatter", label="m", c=x)
+        plain = layerops.add_xy_layer(plot, x, np.cos(x), kind="scatter", label="p")
+        panel._group_ids = (mapped.layer_id, plain.layer_id)
+        panel._set_layer_colormap(mapped, cmap="plasma")
+        ws.drain()
+        assert panel._layer_error == ""
+        assert mapped.metadata.get("cmap") == "plasma" or mapped.style.cmap == "plasma"
+
+    def test_the_layer_tab_draws_in_group_mode(self, harness, ws, plot, panel, all_sections):
+        a, _b, _line = _mixed_2d(plot)
+        _select(plot, a)
+        panel._layer_group = "__all__"
+        panel._group_anchor = panel._selected_layer_id()
+        _layer_frame(harness, panel)
+        assert len(panel._group_ids) == 3
+
+    def test_the_layer_tab_draws_a_3d_type_group(self, harness, ws, plot, panel, all_sections):
+        plot.set_ndim(3)
+        first = _add3d(plot, kind="scatter3d", label="p1")
+        _add3d(plot, kind="scatter3d", label="p2")
+        _select(plot, first)
+        panel._layer_group = "scatter3d"
+        panel._group_anchor = panel._selected_layer_id()
+        _layer_frame(harness, panel)
+        assert len(panel._group_ids) == 2
+
+    def test_the_combo_maps_group_and_layer_entries(self, harness, ws, plot, panel, monkeypatch):
+        """Groups come first in the combo; the entries after them are the layers."""
+        from glplot.gui.panels import style as style_mod
+
+        a, b, line = _mixed_2d(plot)
+        _select(plot, a)
+        picks = iter([1, 2 + 2])  # "All scatter layers", then layer index 2 ("line")
+        real_combo = style_mod.imgui.combo
+
+        def fake_combo(label, index, names):
+            if label == "##layer_select":
+                assert names[:2] == ["All layers (3)", "All scatter layers (2)"]
+                return True, next(picks)
+            return real_combo(label, index, names)
+
+        monkeypatch.setattr(style_mod.imgui, "combo", fake_combo)
+        _layer_frame(harness, panel)
+        assert panel._layer_group == "scatter"
+        assert plot.interaction.selected_layer_id == a.layer_id  # selection untouched
+
+        _layer_frame(harness, panel)
+        assert panel._layer_group is None
+        ws.drain()
+        assert plot.interaction.selected_layer_id == line.layer_id

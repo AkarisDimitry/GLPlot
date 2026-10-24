@@ -4,6 +4,29 @@ This directory contains diagnostic and utility scripts for GLPlot development an
 
 ## Tools Overview
 
+### `build_gallery_assets.py` and `gl_capture.py`
+**Purpose**: Regenerate the thumbnails the Style and Gallery panels show (`glplot/gui/assets/gallery`)
+
+Each thumbnail is a *real render*: the figure is built with the GUI's own functions, styled with
+the same `apply_style` the card's click runs, drawn by the OpenGL window and read back from its
+framebuffer (`gl_capture.py`). One process per capture (a second window in one process fails on
+imgui's stale font texture), several at a time.
+
+**Usage** (needs a display and a GPU):
+```bash
+python tools/build_gallery_assets.py                          # everything (~1.5 min)
+python tools/build_gallery_assets.py --styles neon --scenes lines,surface
+python tools/build_gallery_assets.py --recipes surface3d
+python tools/build_gallery_assets.py --only styles --scenes field --sheet sheet.png --no-encode
+python tools/build_gallery_assets.py --post-only              # re-encode saved captures, no GL
+```
+
+**When to use**: after adding or changing a style preset or a recipe. A test fails until the
+committed set matches the current catalogue, and `--sheet` writes a contact sheet so a new look
+can be judged next to the others before it is committed.
+
+---
+
 ### `check_gl_capabilities.py`
 **Purpose**: Verify OpenGL capabilities on your system
 

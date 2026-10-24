@@ -3,6 +3,8 @@ from __future__ import annotations
 import atexit
 import copy
 import datetime as _dt
+import functools
+import inspect
 import sys as _sys
 import time
 import warnings
@@ -11,10 +13,14 @@ from typing import Any, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from . import controls as _controls_mod
 from .core import layout as _layout
+from .core import twin as _twin_core
 from .core.layers import BaseLayer, FractalLayer, FunctionLayer, Layer3D
 from .core.panel import ColorbarSpec as _ColorbarSpec
+from .core.twin import TwinAxis as _TwinAxis
 from .engine import GPULinePlot
+from .utils import scale as _scale_utils
 
 ColorLike = Union[
     Tuple[float, float, float, float],
@@ -258,7 +264,8 @@ def _get_or_create_plot() -> GPULinePlot:
 
 def _next_cycle_color(plot_obj: GPULinePlot) -> str:
     idx = getattr(plot_obj, "_color_cycle_index", 0)
-    cycle = _color_cycle()
+    # ``ax.set_prop_cycle(color=[...])`` wins over the rcParams cycle for this figure.
+    cycle = getattr(plot_obj, "_prop_cycle_colors", None) or _color_cycle()
     plot_obj._color_cycle_index = (idx + 1) % len(cycle)
     return cycle[idx % len(cycle)]
 
@@ -288,6 +295,39 @@ def _parse_plot_groups(args: tuple) -> list:
             i += 1
         groups.append((x, y, fmt))
     return groups
+
+
+def _plot_columns(x: Any, y: Any) -> list:
+    """``[(x, y), ...]``: one pair per line, splitting a 2-D ``x`` and/or ``y`` by column.
+
+    matplotlib draws each column of a 2-D array as its own line -- ``plot(Y)`` for an
+    ``(n, k)`` matrix, ``plot(x, Y)`` against one shared x, or ``plot(X, Y)`` with a column
+    each. Anything that is not a 2-D numeric array (a list of scalars, a pandas column, a
+    string key resolved later, ``None``) comes back as the single pair it was.
+    """
+
+    def matrix(value: Any) -> Optional[np.ndarray]:
+        if value is None or isinstance(value, str):
+            return None
+        try:
+            arr = np.asarray(value)
+        except Exception:
+            return None
+        return arr if arr.ndim == 2 and arr.dtype != object else None
+
+    ymat = matrix(y if y is not None else x)
+    xmat = matrix(x) if y is not None else None
+    if ymat is None and xmat is None:
+        return [(x, y)]
+    if y is None:  # plot(Y): the columns are the y data against an implicit index
+        return [(ymat[:, j], None) for j in range(ymat.shape[1])]
+    if ymat is not None and xmat is not None:
+        if xmat.shape != ymat.shape:
+            return [(x, y)]
+        return [(xmat[:, j], ymat[:, j]) for j in range(ymat.shape[1])]
+    if ymat is not None:
+        return [(x, ymat[:, j]) for j in range(ymat.shape[1])]
+    return [(xmat[:, j], y) for j in range(xmat.shape[1])]
 
 
 def _parse_plot_format(fmt: Optional[str]) -> dict[str, Any]:
@@ -353,6 +393,11 @@ def _plot_single(
     x: ArrayLike, y: Optional[ArrayLike] = None, fmt: Optional[str] = None, **kwargs: Any
 ) -> BaseLayer:
     style = _parse_plot_format(fmt)
+    if "marker" in style and "linestyle" not in style:
+        # matplotlib reads a format string that names a marker but no line ('o', 'ro') as
+        # markers only; without this the default solid line was drawn through them. Applied
+        # before the kwargs so an explicit `linestyle=` still wins, as it does there.
+        style["linestyle"] = "none"
     style.update({k: v for k, v in kwargs.items() if v is not None})
     if y is None:
         y_arr = _as_float_array(_coerce_axis_values(x, "y", "plot"), ndim=1, name="y")
@@ -574,6 +619,13 @@ def _add_3d_layer(
     plot_obj.scene.layers.append(layer)
     if getattr(plot_obj, "view3d", {}).get("show_axes", True):
         plot_obj.ensure_3d_axes()
+    else:
+        # ensure_3d_axes() is what syncs every layer onto the shared scene box and the full
+        # camera (box_aspect, projection, pan). With the axes off it never runs, so a layer
+        # added after set_axis3d_off() -- e.g. a plot3d() rebuilt inside an animation's
+        # update() -- kept only elev/azim/fov and was framed against its *own* extent: a
+        # small contour loop blew up to fill the whole box in the live window.
+        plot_obj.sync_3d_camera()
     _set_dirty(plot_obj)
     return layer
 
@@ -798,16 +850,25 @@ def _set_current_mappable(layer: BaseLayer) -> BaseLayer:
 
 
 def _resolve_cmap(explicit: Optional[str], default: str) -> str:
-    """Which colormap a call actually uses: explicit > :func:`set_cmap` > the default.
+    """Which colormap a call actually uses: explicit > :func:`set_cmap` > style > default.
 
-    Three levels rather than two, so `set_cmap('jet')` reaches every plot that did not name
-    a colormap -- which is the whole point of it -- without overriding one that did, and
-    without silently retiring the per-function defaults GLPlot already shipped.
+    Four levels, so `set_cmap('jet')` reaches every plot that did not name a colormap --
+    which is the whole point of it -- without overriding one that did, and without silently
+    retiring the per-function defaults GLPlot already shipped.
+
+    The *style* level is the current figure's own: a preset that was applied with its
+    colormap (:func:`plot_style`) leaves it on the figure, so the next ``scatter(c=...)`` or
+    ``imshow`` on that figure matches the look without naming one. It sits below
+    :func:`set_cmap` because that is a deliberate, process-wide call, and it is per figure
+    because a style belongs to the figure it was applied to.
     """
     if explicit is not None:
         return explicit
     if _CURRENT_CMAP is not None:
         return _CURRENT_CMAP
+    styled = getattr(_CURRENT_PLOT, "_style_cmap", None)
+    if styled:
+        return styled
     return default
 
 
@@ -1055,6 +1116,48 @@ def _warn_unsupported(
         )
 
 
+#: matplotlib ``Text`` properties that ``title()``/``xlabel()``/``ylabel()``/``xticks()`` take
+#: through ``**kwargs`` there. GLPlot draws one fixed text style, so none of them can be
+#: honoured live -- but a script that passes ``fontweight="bold"`` must still run.
+_TEXT_PROP_NAMES = frozenset(
+    {
+        "fontweight", "weight", "fontstyle", "style", "fontfamily", "family", "fontname",
+        "fontvariant", "variant", "fontstretch", "stretch", "fontproperties", "font",
+        "rotation", "rotation_mode", "ha", "va", "horizontalalignment", "verticalalignment",
+        "multialignment", "linespacing", "alpha", "bbox", "backgroundcolor", "wrap", "zorder",
+        "position", "usetex", "clip_on", "visible", "label", "gid", "url", "animated",
+    }
+)  # fmt: skip
+
+
+def _accept_text_props(fn: Any) -> Any:
+    """Let ``fn`` take matplotlib ``Text`` keyword properties it has no parameter for.
+
+    A property the function's own signature names is left to the function. Any other name
+    in :data:`_TEXT_PROP_NAMES` is dropped with a once-only warning rather than raising
+    ``TypeError`` -- the compat policy of this module -- and anything unrecognised still
+    raises, so a typo is not swallowed. ``functools.wraps`` keeps ``inspect.signature``
+    reading the real parameters.
+    """
+    named = set(inspect.signature(fn).parameters)
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        extra = {k: kwargs.pop(k) for k in list(kwargs) if k not in named and k in _TEXT_PROP_NAMES}
+        if extra:
+            _warn_unsupported(
+                fn.__name__,
+                extra,
+                {
+                    k: "is a text style property GLPlot does not draw: its text style is fixed"
+                    for k in extra
+                },
+            )
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
 def _warn_unsupported_call(func: str, why: str, stacklevel: int = 3) -> None:
     """Warn that a whole *call* is a no-op, once, the way :func:`_warn_unsupported` does.
 
@@ -1121,6 +1224,13 @@ def _set_title(
     _set_dirty(plot)
 
 
+def _set_panel_aspect_equal(plot: GPULinePlot, equal: bool) -> None:
+    """Record on the active panel whether the caller wants equal x/y units."""
+    panel = getattr(plot, "active_panel", None)
+    if panel is not None:
+        panel.aspect_equal = bool(equal)
+
+
 def _apply_equal_aspect(plot: GPULinePlot, square: bool = False) -> None:
     """Give x and y the same world-units-per-pixel, by widening the finer axis.
 
@@ -1141,6 +1251,10 @@ def _apply_equal_aspect(plot: GPULinePlot, square: bool = False) -> None:
     camera = plot.camera
     half_w = 1.0 / max(camera.zoom_x, 1e-12)
     half_h = 1.0 / max(camera.zoom_y, 1e-12)
+
+    # Remembered so a headless savefig() can reproduce it; `square` is a one-off equalising
+    # of the spans, not a lasting aspect, so it is not recorded.
+    _set_panel_aspect_equal(plot, not square)
 
     if square:
         half = max(half_w, half_h)
@@ -1182,6 +1296,7 @@ def _set_axis_visible(plot: GPULinePlot, visible: bool) -> None:
     plot.options.axis_show_grid = visible
     plot.options.axis_show_labels = visible
     plot.options.axis_show_frame = visible
+    plot.active_panel.axis_off = not visible
     _set_dirty(plot)
 
 
@@ -1587,6 +1702,25 @@ _AXES_DENIED_NAMES = frozenset(
         "get_figlabels",
         "new_figure_manager",
         "get_current_fig_manager",
+        # Figure-only methods ``GPULinePlot`` carries (see "The rest of the Figure surface").
+        # Without these, the engine fallback below would answer ``ax.get_size_inches()`` with
+        # the *figure's* size and ``ax.get_axes()`` with every axes of it.
+        "get_axes",
+        "number",
+        "get_size_inches",
+        "set_size_inches",
+        "get_figwidth",
+        "get_figheight",
+        "set_figwidth",
+        "set_figheight",
+        "align_labels",
+        "align_xlabels",
+        "align_ylabels",
+        "autofmt_xdate",
+        "set_tight_layout",
+        "set_constrained_layout",
+        "set_layout_engine",
+        "get_layout_engine",
         # Output and the event loop.
         "show",
         "savefig",
@@ -1797,12 +1931,372 @@ class AxesProxy:
         )
         spec = _layout.PanelSpec(rect_frac=rect_frac)
         panel = fig.add_panel(spec)
+        panel.explicit_rect = True
         idx = len(fig.panels) - 1
         proxy = AxesProxy(fig, idx, name=panel.name, row=panel.row, col=panel.col)
         proxy._activate()
         _apply_projection(fig, projection)
         self._activate()
         return proxy
+
+    # ``_active_axes`` builds a fresh proxy for the active panel every time, so two proxies
+    # for one panel are the normal case. Identity would make ``ax in fig.axes`` and
+    # ``fig.axes[0] == ax`` false for the very object the caller just got from ``subplots``.
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AxesProxy):
+            return NotImplemented
+        return (
+            self._fig is other._fig
+            and self._index == other._index
+            and getattr(self, "_twin_axis", None) == getattr(other, "_twin_axis", None)
+        )
+
+    def __hash__(self) -> int:
+        return hash((id(self._fig), self._index, getattr(self, "_twin_axis", None)))
+
+    def _owns(self, layer: Any) -> bool:
+        """Does ``layer`` belong to *this* axes? A twin's layers are not the host's."""
+        return layer.metadata.get("twin_axis") == getattr(self, "_twin_axis", None)
+
+    def _query(self, fn: Any, *args: Any) -> Any:
+        """Run a module-level reader against this panel, then restore the current axes.
+
+        A getter that left its panel active would redirect the next ``gplt.plot(...)``, which
+        is the surprise the camera-angle properties above go out of their way to avoid.
+        """
+        global _CURRENT_PLOT
+        previous_plot, previous_index = _CURRENT_PLOT, self._fig.active_panel_index
+        try:
+            self._activate()
+            # Inside the preview so a tick or limit read before the first render reports
+            # the fit it is going to get, not the (-1, 1) default the camera still holds.
+            with self._fig.autoscale_preview():
+                return fn(*args)
+        finally:
+            _CURRENT_PLOT = previous_plot
+            self._fig.active_panel_index = previous_index
+
+    # -- matplotlib's getters --------------------------------------------------------------
+
+    def get_xlabel(self) -> str:
+        return str(self.panel.xlabel)
+
+    def get_ylabel(self) -> str:
+        return str(self.panel.ylabel)
+
+    def get_title(self, loc: str = "center") -> str:
+        # GLPlot has the one centred title; matplotlib answers "" for the other two slots.
+        return str(self.panel.title) if loc == "center" else ""
+
+    def get_xscale(self) -> str:
+        return str(self._fig.axes_option(self.panel, "axis_scale_x"))
+
+    def get_yscale(self) -> str:
+        return str(self._fig.axes_option(self.panel, "axis_scale_y"))
+
+    def get_xticks(self, *, minor: bool = False) -> np.ndarray:
+        """Tick positions currently drawn on x -- only those inside the view."""
+        return np.asarray(self._query(xticks)[0], dtype=float)
+
+    def get_yticks(self, *, minor: bool = False) -> np.ndarray:
+        return np.asarray(self._query(yticks)[0], dtype=float)
+
+    def get_xticklabels(self, minor: bool = False, which: Optional[str] = None) -> list:
+        """Tick labels as ``Text`` objects whose ``set_rotation`` reaches this axes."""
+        locs, labels = self._query(xticks)
+        cls = _tick_label_text_class()
+        return [cls(self, "x", float(x), 0.0, str(s)) for x, s in zip(locs, labels)]
+
+    def get_yticklabels(self, minor: bool = False, which: Optional[str] = None) -> list:
+        locs, labels = self._query(yticks)
+        cls = _tick_label_text_class()
+        return [cls(self, "y", 0.0, float(y), str(s)) for y, s in zip(locs, labels)]
+
+    def get_xbound(self) -> Tuple[float, float]:
+        lo, hi = self._query(xlim)
+        return (min(lo, hi), max(lo, hi))
+
+    def get_ybound(self) -> Tuple[float, float]:
+        lo, hi = self._query(ylim)
+        return (min(lo, hi), max(lo, hi))
+
+    def get_figure(self) -> GPULinePlot:
+        return self._fig
+
+    def has_data(self) -> bool:
+        return any(self._owns(layer) for layer in self.panel.scene.layers)
+
+    def get_lines(self) -> list:
+        """The polyline layers of this axes -- what ``plot()`` and ``errorbar()`` draw."""
+        return [
+            layer
+            for layer in self.panel.scene.layers
+            if layer.layer_type == "polyline" and self._owns(layer)
+        ]
+
+    def get_legend_handles_labels(self, legend_handler_map: Any = None) -> Tuple[list, list]:
+        """``(handles, labels)`` of every layer that would earn a legend entry.
+
+        The handles are the layers themselves -- there is no separate artist to hand back --
+        and the rule for which count is the headless export's own, so the two agree.
+        """
+        from .utils.preview import _legend_label
+
+        handles, labels = [], []
+        for layer in self.panel.scene.layers:
+            if not self._owns(layer):
+                continue
+            label = _legend_label(layer)
+            if label and not label.startswith("_") and layer.style.visible:
+                handles.append(layer)
+                labels.append(label)
+        return handles, labels
+
+    def get_position(self) -> Any:
+        """The axes box as a ``matplotlib.transforms.Bbox`` in figure fractions."""
+        from matplotlib.transforms import Bbox
+
+        return Bbox.from_bounds(*self.panel.rect_frac)
+
+    def get_facecolor(self) -> Tuple[float, float, float, float]:
+        return _figure_get_facecolor(self._fig)
+
+    get_fc = get_facecolor
+
+    def get_axisbelow(self) -> str:
+        return "line"
+
+    def xaxis_inverted(self) -> bool:
+        """True when x runs right-to-left (``set_xlim(hi, lo)`` or ``invert_xaxis()``)."""
+        return bool(self.panel.camera.flip_x)
+
+    def yaxis_inverted(self) -> bool:
+        """True when y runs top-to-bottom (``set_ylim(hi, lo)`` or ``invert_yaxis()``)."""
+        return bool(self.panel.camera.flip_y)
+
+    def _flip_axis(self, axis: str) -> None:
+        """Toggle the direction of one axis, keeping the data range the view already shows."""
+        fig = self._activate()
+        keep = fig._twin_ranges()  # a twin keeps the range it shows; only its direction flips
+        camera = self.panel.camera
+        setattr(camera, f"flip_{axis}", not getattr(camera, f"flip_{axis}"))
+        self.panel.cache.active = False
+        fig._refit_twins(keep)
+        fig._sync_shared_axes()
+        _set_dirty(fig)
+
+    def invert_xaxis(self) -> None:
+        """Reverse the x axis, so values grow right-to-left."""
+        self._flip_axis("x")
+
+    def invert_yaxis(self) -> None:
+        """Reverse the y axis, so values grow top-to-bottom."""
+        self._flip_axis("y")
+
+    # -- matplotlib's setters --------------------------------------------------------------
+
+    def set_position(self, pos: Any, which: str = "both") -> None:
+        """Move and resize this axes to ``[left, bottom, width, height]`` figure fractions."""
+        bounds = pos.bounds if hasattr(pos, "bounds") else pos
+        x0, y0, w, h = (float(v) for v in bounds)
+        self.panel.rect_frac = (x0, y0, w, h)
+        self.panel.explicit_rect = True
+        self._fig.frame.dirty_scene = True
+
+    def set_xbound(self, lower: Optional[float] = None, upper: Optional[float] = None) -> None:
+        lo, hi = self.get_xbound()
+        self._activate()
+        xlim(lo if lower is None else lower, hi if upper is None else upper)
+
+    def set_ybound(self, lower: Optional[float] = None, upper: Optional[float] = None) -> None:
+        lo, hi = self.get_ybound()
+        self._activate()
+        ylim(lo if lower is None else lower, hi if upper is None else upper)
+
+    def set_xmargin(self, m: float) -> None:
+        self._activate()
+        margins(x=m)
+
+    def set_ymargin(self, m: float) -> None:
+        self._activate()
+        margins(y=m)
+
+    def relim(self, visible_only: bool = False) -> None:
+        """Nothing to do: limits are recomputed from the layers whenever autoscale runs."""
+
+    def autoscale_view(
+        self, tight: Optional[bool] = None, scalex: bool = True, scaley: bool = True
+    ) -> None:
+        axis = "both" if scalex and scaley else "x" if scalex else "y" if scaley else None
+        if axis is not None:
+            self._activate()
+            autoscale(True, axis, tight)
+
+    def set_facecolor(self, color: ColorLike) -> None:
+        """Set the background -- of the *whole figure*, as GLPlot has one background colour."""
+        if len(self._fig.panels) > 1:
+            _warn_unsupported_call(
+                "Axes.set_facecolor",
+                "sets the whole figure's background: GLPlot has one background colour "
+                "shared by every panel",
+            )
+        _figure_set_facecolor(self._fig, color)
+
+    set_fc = set_facecolor
+
+    @property
+    def patch(self) -> "_FigurePatch":
+        """Stand-in for the axes background rectangle. See :class:`_FigurePatch`."""
+        return _AxesPatch(self._fig)
+
+    def _layers_of(self, kind: str, call: Any = None) -> "_ArtistList":
+        """The layers of one matplotlib artist family on this axes, in draw order."""
+        layers = [layer for layer in self.panel.scene.layers if self._owns(layer)]
+        if kind == "lines":
+            picked = [l for l in layers if l.layer_type == "polyline"]
+        elif kind == "images":
+            picked = [l for l in layers if l.metadata.get("artist") == "imshow"]
+        elif kind == "collections":
+            picked = [
+                l
+                for l in layers
+                if l.layer_type in ("scatter", "scatter3d") and l.metadata.get("artist") != "imshow"
+            ]
+        elif kind == "patches":
+            picked = [l for l in layers if l.layer_type == "patch"]
+        else:
+            picked = [l for l in layers if l.layer_type == "text"]
+        return _ArtistList(picked, call)
+
+    @property
+    def lines(self) -> "_ArtistList":
+        """The polylines ``plot()`` drew (``ax.lines[0].set_ydata(...)``); called, ``lines()``."""
+
+        def _call(*args: Any, **kwargs: Any) -> Any:
+            self._activate()
+            return _sys.modules[__name__].lines(*args, **kwargs)
+
+        return self._layers_of("lines", _call)
+
+    @property
+    def collections(self) -> "_ArtistList":
+        return self._layers_of("collections")
+
+    @property
+    def patches(self) -> "_ArtistList":
+        return self._layers_of("patches")
+
+    @property
+    def texts(self) -> "_ArtistList":
+        return self._layers_of("texts")
+
+    @property
+    def images(self) -> "_ArtistList":
+        return self._layers_of("images")
+
+    def get_images(self) -> "_ArtistList":
+        return self._layers_of("images")
+
+    def get_legend(self) -> Optional["_LegendProxy"]:
+        """The legend while one is showing, else ``None``."""
+        return _LegendProxy(self) if self._fig.axes_attr(self.panel, "legend_show", False) else None
+
+    @property
+    def legend_(self) -> Optional["_LegendProxy"]:
+        return self.get_legend()
+
+    def get_children(self) -> list:
+        """Every artist on this axes -- GLPlot's layers, in draw order."""
+        return list(self.panel.scene.layers)
+
+    def get_window_extent(self, renderer: Any = None) -> Any:
+        """The axes box in figure pixels as a matplotlib ``Bbox`` (origin bottom-left)."""
+        from matplotlib.transforms import Bbox
+
+        x0, y0, w, h = self.panel.rect_frac
+        fw, fh = float(self._fig.width), float(self._fig.height)
+        return Bbox.from_bounds(x0 * fw, y0 * fh, w * fw, h * fh)
+
+    def get_visible(self) -> bool:
+        return bool(self.panel.visible)
+
+    def set_visible(self, visible: bool) -> None:
+        """Show or hide this axes -- the way a script blanks the spare cells of a grid."""
+        self.panel.visible = bool(visible)
+        _set_dirty(self._fig)
+
+    def add_line(self, line: Any) -> Any:
+        """Draw a ``matplotlib.lines.Line2D`` onto this axes, as ``plot()`` would."""
+        self._activate()
+        kwargs = dict(
+            color=line.get_color(),
+            linewidth=line.get_linewidth(),
+            linestyle=line.get_linestyle(),
+            label=line.get_label() if not line.get_label().startswith("_") else None,
+        )
+        marker = line.get_marker()
+        if marker not in (None, "None", "", " "):
+            kwargs["marker"] = marker
+        plot(line.get_xdata(), line.get_ydata(), **kwargs)
+        return line
+
+    def set_prop_cycle(self, *args: Any, **kwargs: Any) -> None:
+        """Set the colours the next lines cycle through: ``set_prop_cycle(color=["r", "g"])``.
+
+        GLPlot has one colour cycle per *figure*, so this applies to every axes of it. Only
+        ``color`` is used; other cycled properties (``linestyle``, ``marker`` ...) are said
+        to be ignored.
+        """
+        from matplotlib import cycler
+
+        by_key = (cycler(*args, **kwargs) if (args or kwargs) else cycler(color=[])).by_key()
+        colors = list(by_key.get("color") or [])
+        ignored = {k: v for k, v in by_key.items() if k != "color"}
+        _warn_unsupported(
+            "set_prop_cycle",
+            ignored,
+            {k: "is not cycled: GLPlot cycles colours only" for k in ignored},
+        )
+        self._fig._prop_cycle_colors = tuple(colors) or None
+        self._fig._color_cycle_index = 0
+
+    @property
+    def transAxes(self) -> "_AxesFractionTransform":
+        return _AxesFractionTransform(self)
+
+    @property
+    def transData(self) -> "_DataTransform":
+        return _DataTransform()
+
+    @property
+    def xaxis(self) -> "_AxisProxy":
+        """The x ``Axis``: ticks, formatter, locator, title. See :class:`_AxisProxy`."""
+        return _AxisProxy(self, "x")
+
+    @property
+    def yaxis(self) -> "_AxisProxy":
+        """The y ``Axis``. See :class:`_AxisProxy`."""
+        return _AxisProxy(self, "y")
+
+    def set(self, **kwargs: Any) -> None:
+        """Set several properties at once: ``ax.set(xlabel="t", ylabel="v", xlim=(0, 1))``.
+
+        Each ``name=value`` runs ``set_<name>(value)``, as in matplotlib. Scales go first so
+        a limit set in the same call is read against the scale it was written for.
+        """
+        ordered = sorted(kwargs.items(), key=lambda kv: kv[0] not in ("xscale", "yscale"))
+        for key, value in ordered:
+            setter = getattr(self, f"set_{key}", None)
+            if not callable(setter):
+                raise AttributeError(
+                    f"{type(self).__name__}.set() got an unexpected property {key!r}: "
+                    f"there is no set_{key}()"
+                )
+            setter(value)
+
+    def update(self, props: dict) -> None:
+        """``ax.update({...})`` -- :meth:`set` with a dict."""
+        self.set(**props)
 
     def __getattr__(self, name: str):
         # __getattr__ only fires for names not found normally, i.e. the plotting API surface;
@@ -1941,6 +2435,24 @@ def subplots(
         >>> axs[0, 1].scatter(x, y)
         >>> gplt.show()
     """
+    projection, grid_kwargs = _grid_options(kwargs, wspace, hspace, "subplots", stacklevel=4)
+    fig = figure(title=title, width=width, height=height, **kwargs)
+    return fig, _populate_grid(fig, nrows, ncols, sharex, sharey, squeeze, projection, grid_kwargs)
+
+
+def _grid_options(
+    kwargs: dict,
+    wspace: Optional[float],
+    hspace: Optional[float],
+    func: str,
+    stacklevel: int,
+) -> Tuple[Any, dict]:
+    """Pop the grid keywords off ``kwargs``; return ``(projection, grid_kwargs)``.
+
+    Shared by :func:`subplots` and ``Figure.subplots`` so the two spellings cannot drift on
+    which keywords they understand. ``kwargs`` is mutated: whatever is left over is the
+    caller's to hand to :func:`figure`, if it creates one.
+    """
     subplot_kw = dict(kwargs.pop("subplot_kw", None) or {})
     projection = subplot_kw.pop("projection", kwargs.pop("projection", None))
     # matplotlib takes the ratios either at top level or nested inside `gridspec_kw`, and
@@ -1950,8 +2462,11 @@ def subplots(
     height_ratios = kwargs.pop("height_ratios", None) or gridspec_kw.pop("height_ratios", None)
     wspace = wspace if wspace is not None else gridspec_kw.pop("wspace", None)
     hspace = hspace if hspace is not None else gridspec_kw.pop("hspace", None)
-    _warn_unsupported("subplots", {f"gridspec_kw[{k!r}]": v for k, v in gridspec_kw.items()})
-    fig = figure(title=title, width=width, height=height, **kwargs)
+    _warn_unsupported(
+        func,
+        {f"gridspec_kw[{k!r}]": v for k, v in gridspec_kw.items()},
+        stacklevel=stacklevel,
+    )
     grid_kwargs: dict = {}
     if wspace is not None:
         grid_kwargs["wspace"] = wspace
@@ -1961,6 +2476,20 @@ def subplots(
         grid_kwargs["width_ratios"] = width_ratios
     if height_ratios is not None:
         grid_kwargs["height_ratios"] = height_ratios
+    return projection, grid_kwargs
+
+
+def _populate_grid(
+    fig: GPULinePlot,
+    nrows: int,
+    ncols: int,
+    sharex: Any,
+    sharey: Any,
+    squeeze: bool,
+    projection: Any,
+    grid_kwargs: dict,
+) -> Any:
+    """Lay ``fig`` out as an ``nrows`` x ``ncols`` grid and return its axes."""
     specs = _layout.grid(nrows, ncols, **grid_kwargs)
     fig.set_panels(specs)
     if sharex or sharey:
@@ -1972,8 +2501,7 @@ def subplots(
         for panel in fig.panels:
             panel.set_ndim(ndim)
         fig.set_3d_view()
-    axes = _make_axes(fig, specs, nrows, ncols, squeeze)
-    return fig, axes
+    return _make_axes(fig, specs, nrows, ncols, squeeze)
 
 
 #: The scale names matplotlib's `xscale`/`yscale` take. "linear", "log", "symlog",
@@ -2731,8 +3259,8 @@ def pie(
         normalize (bool, optional): Scale the values to a full circle. When False the
             values must already sum to at most 1 and a short sum leaves a gap.
             Defaults to True.
-        hatch (str or sequence, optional): Accepted for matplotlib parity. GLPlot has no
-            hatch renderer. Ignored.
+        hatch (str or sequence, optional): A hatch pattern for the wedges (one per wedge, or
+            one cycled). Drawn in exported figures; the window fills the wedges solid.
         data (indexable, optional): If given, ``x`` may be a key into it.
 
     Returns:
@@ -2740,13 +3268,13 @@ def pie(
         given -- matching matplotlib's arity.
 
     Note:
-        Call ``axis('equal')`` to keep the pie round -- without it the wedges are
-        stretched by the viewport's aspect, exactly as in matplotlib.
+        As in matplotlib, the axes aspect is set to equal so the pie is round whatever shape
+        the window or figure is, and (unless ``frame`` is True) the view is framed to
+        ``center +- 1.25``.
 
     Examples:
         >>> gplt.pie([30, 20, 50], labels=['a', 'b', 'c'], autopct='%1.1f%%')
         >>> gplt.pie(shares, wedgeprops={'width': 0.4})   # a donut
-        >>> gplt.axis('equal')
     """
     (x,) = _resolve_data_args("pie", data, x)
     values = _as_signal(x, "x")
@@ -2768,11 +3296,8 @@ def pie(
 
     _warn_unsupported(
         "pie",
-        {"rotatelabels": rotatelabels or None, "hatch": hatch},
-        {
-            "rotatelabels": "has no effect: GLPlot's text renderer draws horizontally only",
-            "hatch": "has no effect: GLPlot has no hatch renderer, so wedges are drawn flat",
-        },
+        {"rotatelabels": rotatelabels or None},
+        {"rotatelabels": "has no effect: GLPlot's text renderer draws horizontally only"},
     )
 
     if explode is not None:
@@ -2864,10 +3389,18 @@ def pie(
 
     if not frame:
         # matplotlib hides the axes for a pie unless `frame` asks for them: a pie has no
-        # meaningful x or y, so ticks around it read as noise.
+        # meaningful x or y, so ticks around it read as noise. It also frames the view to
+        # centre +- 1.25 rather than fitting the data.
         set_axis_off()
+        plot_obj.set_view(
+            xlim=(center[0] - 1.25, center[0] + 1.25), ylim=(center[1] - 1.25, center[1] + 1.25)
+        )
+    # ...and always sets an equal aspect, which is what makes a pie a circle. Called last so it
+    # widens the view just set (nothing leaves the frame) rather than the other way round.
+    _apply_equal_aspect(plot_obj)
 
     _set_dirty(plot_obj)
+    _apply_hatch(wedges, hatch, "pie")
     return (wedges, texts, autotexts) if autopct is not None else (wedges, texts)
 
 
@@ -3016,51 +3549,104 @@ def subplot(*args: Any, **kwargs: Any) -> AxesProxy:
     return proxy
 
 
-def twinx(ax: Optional[GPULinePlot] = None) -> "AxesProxy":
-    """Return the current axes, as an :class:`AxesProxy`, *not* a twinned one.
+def _make_twin(axis: str, ax: Any = None) -> "_TwinAxesProxy":
+    """The twin of ``ax`` (default: the current axes) along ``axis`` -- see :func:`twinx`."""
+    if isinstance(ax, AxesProxy):
+        fig, index = ax._fig, ax._index
+    else:
+        fig = ax if isinstance(ax, GPULinePlot) else _get_or_create_plot()
+        index = fig.active_panel_index if 0 <= fig.active_panel_index < len(fig.panels) else 0
+    panel = fig.panels[index]
+    panel.twins.setdefault(axis, _TwinAxis(axis=axis))
+    return _TwinAxesProxy(
+        fig,
+        index,
+        axis,
+        name=getattr(panel, "name", None),
+        row=getattr(panel, "row", 0),
+        col=getattr(panel, "col", 0),
+    )
 
-    A second y-axis needs two independent y transforms in one viewport, which
-    GLPlot's single ortho projection cannot express. Accepted so a matplotlib
-    script runs; the returned axes shares the original's scale, so the second
-    series is drawn against the first's y-axis.
 
-    Returns an :class:`AxesProxy` (not the raw figure) specifically so the standard
-    ``ax2 = ax1.twinx(); ax2.plot(...)`` idiom -- what every matplotlib tutorial
-    teaches, and a strictly more common shape than the module-level
-    ``gplt.twinx(); gplt.plot(...)`` -- has a ``.plot``/``.scatter``/``.set_ylabel`` to
-    call. Returning the bare ``GPULinePlot`` here used to make exactly that line raise
-    ``AttributeError: 'GPULinePlot' object has no attribute 'plot'``.
+def twinx(ax: Optional[Any] = None) -> "AxesProxy":
+    """A second y axis sharing the x axis: ``ax2 = ax1.twinx()``.
+
+    Returns an axes whose ``plot``/``scatter``/``bar``/... draw against its *own* y scale,
+    with its own label, limits, scale, ticks and tick colour (``ax2.set_ylabel``,
+    ``ax2.set_ylim``, ``ax2.set_yscale``, ``ax2.tick_params(axis="y", colors="r")``), while
+    ``ax2.set_xlabel``/``set_xlim`` are the shared x axis'. The first axes' y range is fitted
+    to its own data only.
+
+    In a saved figure this is a real matplotlib twin. In the window the twin's values are
+    mapped onto the first axes' range by a fixed relation, so zooming and panning move the two
+    together; its ticks are drawn just inside the right-hand edge, in the twin's own units.
+
+    The call returns a new axes object and leaves the current axes alone, so
+    pyplot-style code that follows ``plt.twinx()`` with bare ``plt.plot(...)`` still draws on
+    the *first* axes: use the returned object (``ax2 = plt.twinx(); ax2.plot(...)``).
+
+    Layers that cannot be mapped (an image, a 3D layer, ``plot_lines``) stay on the first
+    axes, and say so.
 
     Returns:
-        AxesProxy: The current axes -- sharing the original's y-scale, not a real
-        second one.
+        AxesProxy: The twin axes.
+
+    Examples:
+        >>> fig, ax1 = gplt.subplots()
+        >>> ax1.plot(t, temperature, color="tab:red")
+        >>> ax2 = ax1.twinx()
+        >>> ax2.plot(t, pressure, color="tab:blue")
+        >>> ax2.set_ylabel("pressure (kPa)")
     """
-    _warn_unsupported(
-        "twinx",
-        {"twinx": True},
-        {
-            "twinx": "returns the same axes, not a twinned one: GLPlot has a single ortho "
-            "projection and cannot give one viewport two y scales. The second series is "
-            "drawn against the first's y-axis"
-        },
-    )
-    plot = ax if isinstance(ax, GPULinePlot) else _get_or_create_plot()
-    return _active_axes(plot)
+    return _make_twin("y", ax)
 
 
-def twiny(ax: Optional[GPULinePlot] = None) -> "AxesProxy":
-    """Return the current axes, as an :class:`AxesProxy`. See :func:`twinx`; the same
-    limitation applies to x."""
+def twiny(ax: Optional[Any] = None) -> "AxesProxy":
+    """A second x axis sharing the y axis: ``ax2 = ax1.twiny()``. See :func:`twinx`."""
+    return _make_twin("x", ax)
+
+
+def _make_secondary(
+    axis: str, location: Any, functions: Optional[Tuple[Any, Any]], transform: Any, kwargs: dict
+) -> "_SecondaryAxisProxy":
+    """Shared body of :func:`secondary_xaxis` / :func:`secondary_yaxis`."""
+    fig = _get_or_create_plot()
+    index = fig.active_panel_index if 0 <= fig.active_panel_index < len(fig.panels) else 0
+    panel = fig.panels[index]
+    allowed = _twin_core.SECONDARY_LOCATIONS[axis]
+    if isinstance(location, (int, float)) and not isinstance(location, bool):
+        # An axes fraction: put it on the nearest edge. Saved figures honour the exact value.
+        _warn_unsupported(
+            f"secondary_{axis}axis",
+            {"location": location},
+            {"location": "is an axes fraction; the window draws it on the nearest edge"},
+        )
+        location = sorted(allowed)[0] if location < 0.5 else sorted(allowed)[-1]
+        # sorted(): x -> bottom, top ; y -> left, right
+    if location not in allowed:
+        raise ValueError(
+            f"secondary_{axis}axis(): location must be one of {sorted(allowed)}, got {location!r}"
+        )
+    if functions is None:
+        functions = (lambda v: v, lambda v: v)
+    elif not (isinstance(functions, (tuple, list)) and len(functions) == 2):
+        raise TypeError("functions must be a (forward, inverse) pair of callables")
+    color = kwargs.pop("color", None)
     _warn_unsupported(
-        "twiny",
-        {"twiny": True},
-        {
-            "twiny": "returns the same axes, not a twinned one: GLPlot has a single ortho "
-            "projection and cannot give one viewport two x scales"
-        },
+        f"secondary_{axis}axis",
+        {"transform": transform, **kwargs},
+        {k: "is accepted for matplotlib parity and has no effect" for k in ("transform", *kwargs)},
     )
-    plot = ax if isinstance(ax, GPULinePlot) else _get_or_create_plot()
-    return _active_axes(plot)
+    state = _twin_core.SecondaryAxis(
+        axis=axis,
+        location=location,
+        functions=(functions[0], functions[1]),
+        tick_color=color,
+        label_color=color,
+    )
+    panel.secondaries.append(state)
+    _set_dirty(fig)
+    return _SecondaryAxisProxy(fig, index, state)
 
 
 def secondary_xaxis(
@@ -3069,44 +3655,35 @@ def secondary_xaxis(
     functions: Optional[Tuple[Any, Any]] = None,
     transform: Optional[Any] = None,
     **kwargs: Any,
-) -> "AxesProxy":
-    """Accepted for matplotlib parity; returns the current axes, not a real secondary one.
+) -> "_SecondaryAxisProxy":
+    """A second x axis in other units: ticks along ``location`` converted by ``functions``.
 
-    A secondary axis needs its own independent tick strip along an edge -- GLPlot's single
-    viewport has no renderer for a second one, the same fundamental limitation as
-    :func:`twinx` (which at least shares a data scale; a secondary axis doesn't even need
-    to, since matplotlib derives its ticks from ``functions`` rather than plotting new data
-    on it -- but there is still nowhere to draw that second tick strip). Returns an
-    :class:`AxesProxy` bound to the current panel, so a chained
-    ``ax.secondary_xaxis('top').set_xlabel(...)`` does not raise ``AttributeError`` on the
-    next line, which is what happened before this function existed at all -- unlike every
-    other single-viewport limitation in this module, it previously had no acknowledgment
-    whatsoever, not even a warning.
+    ``functions=(forward, inverse)`` maps the main axis' values to the secondary's units and
+    back, on arrays -- degrees <-> radians, Hz <-> period, Celsius <-> Fahrenheit. The ticks
+    are the round numbers *in the new units*, placed where ``inverse`` says they fall, so the
+    relation need not be linear. There is no data on it: it only relabels the axis.
+
+    In a saved figure this is matplotlib's own secondary axis. In the window its ticks are
+    drawn just inside the frame, along the top (or bottom) edge.
 
     Args:
-        location (str or float, optional): Accepted for matplotlib parity. Ignored.
-        functions (tuple, optional): The ``(forward, inverse)`` unit-conversion pair a real
-            secondary axis derives its ticks from. Accepted for matplotlib parity, but
-            ignored: there is no second tick strip to apply them to.
-        transform: Accepted for matplotlib parity. Ignored.
-        **kwargs: Accepted for matplotlib parity. Ignored.
+        location: ``"top"`` or ``"bottom"``.
+        functions: The ``(forward, inverse)`` pair. Identity when omitted.
+        transform: Accepted for matplotlib parity and ignored.
+        **kwargs: ``color`` colours the ticks and label; the rest are accepted and ignored.
 
     Returns:
-        AxesProxy: The current axes -- not a real secondary one.
+        An object with ``set_xlabel``, ``set_xticks``, ``set_color``, ``tick_params``,
+        ``set_functions``.
 
     Examples:
         >>> gplt.plot(celsius, y)
-        >>> secax = gplt.secondary_xaxis(
+        >>> top = gplt.secondary_xaxis(
         ...     "top", functions=(lambda c: c * 9 / 5 + 32, lambda f: (f - 32) * 5 / 9)
         ... )
-        >>> secax.set_xlabel("Fahrenheit")  # drawn, but on the same (Celsius-scaled) axis
+        >>> top.set_xlabel("Fahrenheit")
     """
-    _warn_unsupported_call(
-        "secondary_xaxis",
-        "returns the current axes, not a real secondary one: GLPlot's single viewport has "
-        "no independent tick strip to draw a second x-axis on",
-    )
-    return _active_axes(_get_or_create_plot())
+    return _make_secondary("x", location, functions, transform, kwargs)
 
 
 def secondary_yaxis(
@@ -3115,17 +3692,9 @@ def secondary_yaxis(
     functions: Optional[Tuple[Any, Any]] = None,
     transform: Optional[Any] = None,
     **kwargs: Any,
-) -> "AxesProxy":
-    """Accepted for matplotlib parity; returns the current axes, not a real secondary one.
-
-    See :func:`secondary_xaxis`; the same limitation applies to y.
-    """
-    _warn_unsupported_call(
-        "secondary_yaxis",
-        "returns the current axes, not a real secondary one: GLPlot's single viewport has "
-        "no independent tick strip to draw a second y-axis on",
-    )
-    return _active_axes(_get_or_create_plot())
+) -> "_SecondaryAxisProxy":
+    """A second y axis in other units, ``"left"`` or ``"right"``. See :func:`secondary_xaxis`."""
+    return _make_secondary("y", location, functions, transform, kwargs)
 
 
 def _resolve_colorbar_mapping(mappable: Optional[Any]) -> Tuple[str, Any]:
@@ -3263,6 +3832,28 @@ class _ColorbarAxesProxy:
     def set_xlabel(self, text: Optional[str], *args: Any, **kwargs: Any) -> None:
         self._spec.label = None if text is None else str(text)
         _set_dirty(self._fig)
+
+    def set_yticks(self, ticks: Any, *args: Any, **kwargs: Any) -> None:
+        """Explicit tick positions on the bar (a vertical bar's long axis is y)."""
+        self._spec.ticks = None if ticks is None else list(ticks)
+        _set_dirty(self._fig)
+
+    set_xticks = set_yticks
+
+    def __getattr__(self, name: str) -> Any:
+        # ``tick_params``, ``set_yticklabels``, ``yaxis.set_ticks_position`` ...: the bar's own
+        # chrome is drawn at fixed sizes, so these are accepted and said to be inert.
+        if name.startswith(("set_", "tick_", "get_")) or name in ("yaxis", "xaxis", "outline"):
+            if name in ("yaxis", "xaxis", "outline"):
+                return self
+
+            def _noop(*args: Any, **kwargs: Any) -> None:
+                _warn_unsupported_call(
+                    f"Colorbar.ax.{name}", "is accepted for matplotlib parity and has no effect"
+                )
+
+            return _noop
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
 
 #: Gap between an `inset=True` colorbar and the host panel's own border, as a fraction
@@ -3682,18 +4273,39 @@ for _name in _CMAP_SHORTCUTS:
 del _name
 
 
-def close(fig: Optional[GPULinePlot] = None) -> None:
-    """
-    Close a figure reference from pyplot state.
+def close(fig: Any = None) -> None:
+    """Close a figure, as matplotlib's ``plt.close`` does.
+
+    ``close()`` closes the current figure; ``close(fig)`` that figure; ``close(3)`` or
+    ``close("name")`` the figure registered under that number or name; ``close("all")`` every
+    figure. An unknown number or name is ignored, as in matplotlib.
+
+    Only the figure object was understood before, so ``plt.close("all")`` -- the line a script
+    that makes many figures ends each loop with -- silently closed nothing, and every figure
+    (a large image's scene included) stayed alive for the life of the process.
+
     Note: actual window destruction depends on backend lifecycle.
     """
+    if isinstance(fig, str) and fig == "all":
+        targets = list(_ALL_PLOTS)
+    elif fig is None:
+        targets = [] if _CURRENT_PLOT is None else [_CURRENT_PLOT]
+    elif isinstance(fig, (int, str)) and not isinstance(fig, bool):
+        found = _FIGURES_BY_NUM.get(fig)
+        if found is None and isinstance(fig, int):
+            # An unnumbered figure is still reachable by the number ``fig.number`` reports.
+            found = next((p for p in _ALL_PLOTS if _figure_number(p) == fig), None)
+        targets = [] if found is None else [found]
+    else:
+        targets = [fig]
+
+    for target in targets:
+        _close_figure(target)
+
+
+def _close_figure(fig: Any) -> None:
+    """Forget one figure: drop it from the registries and ask its backend to shut down."""
     global _CURRENT_PLOT
-
-    if fig is None:
-        fig = _CURRENT_PLOT
-
-    if fig is None:
-        return
 
     try:
         _ALL_PLOTS.remove(fig)
@@ -3907,6 +4519,263 @@ def waitforbuttonpress(timeout: float = -1) -> Optional[bool]:
     return None
 
 
+# ======================================================================================
+# Interactive controls -- sliders, buttons, toggles and menus shown in the Controls panel.
+#
+# Thin wrappers over glplot.controls: each builds a control, adds it to the current
+# figure's ControlSet and returns it. The model, the dispatch rules and the error policy
+# all live there; nothing here has behaviour of its own beyond "the current figure".
+# ======================================================================================
+
+
+def controls(fig: Optional[GPULinePlot] = None) -> _controls_mod.ControlSet:
+    """Return a figure's interactive controls (the current figure's by default).
+
+    The returned :class:`~glplot.controls.ControlSet` supports ``controls["key"]``,
+    ``controls.values()``, ``controls.reset()``, ``controls.snapshot()`` /
+    ``controls.restore(...)``, named presets and ``save(path)`` / ``load(path)``.
+
+    Returns:
+        ControlSet: The figure's control registry.
+
+    Examples:
+        >>> gplt.slider("Gain", 0, 10)
+        >>> gplt.controls().values()
+        {'gain': 5.0}
+    """
+    return (fig if fig is not None else _get_or_create_plot()).controls
+
+
+def control_group(name: str):
+    """Context manager: controls created inside it are drawn under the heading ``name``.
+
+    Returns:
+        A context manager.
+
+    Examples:
+        >>> with gplt.control_group("Filter"):
+        ...     cutoff = gplt.slider("Cut-off", 1, 500, log=True, unit="Hz")
+        ...     order = gplt.slider("Order", 1, 8, 2, step=1, integer=True)
+    """
+    return controls().group(name)
+
+
+def _add_control(control: _controls_mod.Control) -> Any:
+    return controls().add(control)
+
+
+def slider(
+    label: str,
+    min: float = 0.0,  # noqa: A002 - the name users write, as in ipywidgets
+    max: float = 1.0,  # noqa: A002
+    value: Optional[float] = None,
+    step: Optional[float] = None,
+    **kwargs: Any,
+) -> _controls_mod.Slider:
+    """Add a slider to the current figure's Controls panel and return it.
+
+    Read it with ``s.value``, react with ``@s.on_change`` or feed it to :func:`interact`.
+
+    Args:
+        label: Text beside the slider.
+        min, max: Range of the slider.
+        value: Initial value (default: the middle of the range).
+        step: Snap increment; ``None`` for continuous.
+        **kwargs: ``integer=True``, ``log=True`` (for ranges spanning decades),
+            ``fmt="%.2f"``, ``unit="Hz"``, ``live=False`` (update only on release, for
+            expensive callbacks), ``help="tooltip"``, ``key=``, ``group=``,
+            ``on_change=fn``, ``enabled=``, ``visible=``.
+
+    Returns:
+        Slider: The new control.
+
+    Examples:
+        >>> amp = gplt.slider("Amplitude", 0, 5, 1.0, step=0.1)
+        >>> @amp.on_change
+        ... def _(value):
+        ...     line.set_ydata(value * np.sin(x))
+    """
+    return _add_control(_controls_mod.Slider(label, min, max, value, step, **kwargs))
+
+
+def range_slider(
+    label: str,
+    min: float = 0.0,  # noqa: A002
+    max: float = 1.0,  # noqa: A002
+    value: Optional[Sequence[float]] = None,
+    step: Optional[float] = None,
+    **kwargs: Any,
+) -> _controls_mod.RangeSlider:
+    """Add a two-handled slider selecting an interval ``(low, high)``.
+
+    Returns:
+        RangeSlider: The new control; ``.value`` is a ``(low, high)`` tuple.
+
+    Examples:
+        >>> band = gplt.range_slider("Band", 0, 100, (20, 60))
+    """
+    return _add_control(_controls_mod.RangeSlider(label, min, max, value, step, **kwargs))
+
+
+def checkbox(label: str, value: bool = False, **kwargs: Any) -> _controls_mod.Checkbox:
+    """Add an on/off checkbox.
+
+    Returns:
+        Checkbox: The new control; ``.value`` is a bool.
+
+    Examples:
+        >>> show_fit = gplt.checkbox("Show fit", True)
+    """
+    return _add_control(_controls_mod.Checkbox(label, value, **kwargs))
+
+
+def dropdown(label: str, options: Any, value: Any = None, **kwargs: Any) -> _controls_mod.Dropdown:
+    """Add a drop-down menu choosing one of ``options``.
+
+    ``options`` is a list of values, a list of ``(label, value)`` pairs or a
+    ``{label: value}`` dict -- values may be anything, including functions.
+
+    Returns:
+        Dropdown: The new control; ``.value`` is the selected option's value.
+
+    Examples:
+        >>> wave = gplt.dropdown("Wave", {"Sine": np.sin, "Cosine": np.cos})
+        >>> y = wave.value(x)
+    """
+    return _add_control(_controls_mod.Dropdown(label, options, value, **kwargs))
+
+
+def radio(label: str, options: Any, value: Any = None, **kwargs: Any) -> _controls_mod.Dropdown:
+    """Like :func:`dropdown`, drawn as a row of radio buttons (best for 2-5 options).
+
+    Returns:
+        Dropdown: The new control, with ``style="radio"``.
+    """
+    kwargs.setdefault("style", "radio")
+    return _add_control(_controls_mod.Dropdown(label, options, value, **kwargs))
+
+
+def textbox(label: str, value: str = "", **kwargs: Any) -> _controls_mod.TextBox:
+    """Add a text field. Commits on Enter or when it loses focus (``live=True`` per key).
+
+    Returns:
+        TextBox: The new control; ``.value`` is a str.
+
+    Examples:
+        >>> title = gplt.textbox("Title", "Run 12", on_change=gplt.title)
+    """
+    return _add_control(_controls_mod.TextBox(label, value, **kwargs))
+
+
+def number(label: str, value: float = 0.0, **kwargs: Any) -> _controls_mod.Number:
+    """Add a numeric field with no fixed range (drag it, or double-click to type).
+
+    Returns:
+        Number: The new control. ``min=``/``max=`` clamp it, ``integer=True`` holds an int.
+    """
+    return _add_control(_controls_mod.Number(label, value, **kwargs))
+
+
+def color_picker(label: str, value: Any = "#1f77b4", **kwargs: Any) -> _controls_mod.ColorPicker:
+    """Add a colour swatch with a picker. ``.value`` is an RGBA tuple, ``.hex`` a string.
+
+    Returns:
+        ColorPicker: The new control.
+
+    Examples:
+        >>> col = gplt.color_picker("Colour", "tab:orange")
+        >>> col.on_change(lambda rgba: gplt.setp(line, color=rgba))
+    """
+    return _add_control(_controls_mod.ColorPicker(label, value, **kwargs))
+
+
+def readout(label: str, value: Any = "", **kwargs: Any) -> _controls_mod.Readout:
+    """Add a read-only value to the panel -- a statistic or a status a callback updates.
+
+    Returns:
+        Readout: The new control; assign ``.value`` to update the display.
+
+    Examples:
+        >>> rms = gplt.readout("RMS", fmt="%.4f")
+        >>> rms.value = float(np.sqrt(np.mean(y ** 2)))
+    """
+    return _add_control(_controls_mod.Readout(label, value, **kwargs))
+
+
+def button(label: Any = None, callback: Optional[Any] = None, **kwargs: Any) -> Any:
+    """Add a push button that runs ``callback`` on every click.
+
+    Usable three ways::
+
+        gplt.button("Reset", on_reset)             # returns the Button
+
+        @gplt.button("Randomize", shortcut="Mod+R")  # decorator: label given
+        def randomize(): ...
+
+        @gplt.button                                 # decorator: label from the name
+        def export_csv(): ...
+
+    Every button is also a command in the palette (``Mod+K``), and ``shortcut=`` binds a
+    key to it. ``confirm="Discard all points?"`` asks before running; ``icon="refresh"``
+    draws an icon on it.
+
+    Returns:
+        Button (direct form) or the decorated function (decorator forms).
+    """
+    if callable(label) and not isinstance(label, str):
+        fn = label
+        name = getattr(fn, "__name__", "button")
+        _add_control(_controls_mod.Button(_controls_mod._pretty(name), fn, **kwargs))
+        return fn
+    if label is None:
+        raise TypeError("button() needs a label, or use it as a bare @gplt.button decorator")
+    return _add_control(_controls_mod.Button(label, callback, **kwargs))
+
+
+def interact(
+    fn: Optional[Any] = None,
+    *,
+    autoscale: bool = False,
+    kind: str = "line",
+    label: Optional[str] = None,
+    plot_kwargs: Optional[dict] = None,
+    **specs: Any,
+) -> Any:
+    """Build controls for a function's parameters and re-run it whenever they change.
+
+    Each keyword becomes a control named after the parameter::
+
+        (0, 10)            float slider            (1, 100, 1)   integer slider
+        (0, 10, 0.5)       slider with a step      True/False    checkbox
+        ["a", "b"] / dict  dropdown                "text"        text box
+        3.5                number field            Control       used as-is
+
+    Parameters without a keyword are matched to an existing control of the same key,
+    else keep their default. The function runs once immediately, then on every change
+    (at most once per frame while the window is open). What it returns is put to use:
+
+    * ``(x, y)`` or a 1-D ``y`` -- drawn as a curve the binding owns and updates in place
+      (``kind="scatter"`` draws points; ``plot_kwargs`` are passed to plot/scatter);
+    * a ``dict`` -- shown in the Controls panel as a table of results;
+    * ``None`` -- nothing; the function updates the figure itself.
+
+    Returns:
+        Binding: Callable (re-runs the function); ``.result``, ``.outputs``, ``.layer``,
+        ``.error``, ``.remove()``. As a decorator, the name is bound to the Binding.
+
+    Examples:
+        >>> x = np.linspace(0, 10, 2000)
+        >>> @gplt.interact(amp=(0, 5), freq=(0.1, 10), wave=["sin", "cos"])
+        ... def signal(amp=1.0, freq=1.0, wave="sin"):
+        ...     y = amp * getattr(np, wave)(freq * x)
+        ...     return x, y
+    """
+    options = dict(autoscale=autoscale, kind=kind, label=label, plot_kwargs=plot_kwargs)
+    if fn is None:
+        return lambda f: controls().interact(f, **options, **specs)
+    return controls().interact(fn, **options, **specs)
+
+
 def install_repl_displayhook() -> None:
     """Accepted for matplotlib parity; GLPlot has no REPL display integration. No-op."""
 
@@ -3987,20 +4856,47 @@ def axes(arg: Any = None, **kwargs: Any) -> AxesProxy:
     return _active_axes(plot)
 
 
-def sca(ax: GPULinePlot) -> None:
+def sca(ax: Union[GPULinePlot, AxesProxy]) -> None:
     """Set the current axes.
 
-    With a single viewport there is one axes, so this makes ``ax``'s figure current
-    if it is a known figure, and is otherwise a no-op.
+    An :class:`AxesProxy` -- what :func:`subplots`, :func:`subplot` and :func:`gca` hand
+    back -- makes its figure current *and* points that figure at the proxy's panel, so the
+    next ``plt.plot(...)`` lands there. A bare figure only becomes the current figure, and
+    anything else is a no-op.
+
+    This used to compare ``ax`` against the known figures only, which an ``AxesProxy`` never
+    equals: ``plt.sca(axs[1])`` silently did nothing and the following call drew into
+    whichever panel was already active.
     """
     global _CURRENT_PLOT
-    if ax in _ALL_PLOTS:
+    if isinstance(ax, AxesProxy):
+        ax._activate()
+    elif ax in _ALL_PLOTS:
         _CURRENT_PLOT = ax
 
 
-def delaxes(ax: Optional[GPULinePlot] = None) -> None:
-    """Remove an axes. With one viewport, this clears the current figure."""
-    clf()
+def delaxes(ax: Optional[Any] = None) -> None:
+    """Remove an axes (the current one when none is given).
+
+    On a grid the axes' cell is left blank and every other axes keeps its size and place,
+    as in matplotlib. A figure's *only* axes cannot be left blank -- GLPlot always keeps one
+    -- so removing it clears the figure instead, which is what this used to do for every call.
+    """
+    plot = _get_or_create_plot()
+    target = ax if isinstance(ax, AxesProxy) else _active_axes(plot)
+    visible = [p for p in target._fig.panels if not getattr(p, "removed", False)]
+    if len(visible) <= 1:
+        clf()
+        return
+    panel = target.panel
+    panel.removed = True
+    panel.visible = False
+    if target._fig.active_panel is panel:
+        for i, p in enumerate(target._fig.panels):
+            if not getattr(p, "removed", False):
+                target._fig.active_panel_index = i
+                break
+    _set_dirty(target._fig)
 
 
 def subplot2grid(shape, loc, rowspan: int = 1, colspan: int = 1, **kwargs: Any) -> AxesProxy:
@@ -4339,6 +5235,10 @@ def _iter_all_layers():
             yield from scene.layers
 
 
+#: matplotlib's short property spellings, for ``setp(..., lw=2, c="r")``.
+_SETP_ALIASES = {"lw": "linewidth", "c": "color", "ls": "linestyle", "ms": "markersize"}
+
+
 def setp(obj: Any, *args: Any, **kwargs: Any) -> Optional[list]:
     """Set a property on one artist or a list of them.
 
@@ -4361,17 +5261,34 @@ def setp(obj: Any, *args: Any, **kwargs: Any) -> Optional[list]:
     if not props:
         return ["alpha", "color", "linewidth", "visible", "zorder", "label"]
 
+    unapplied: dict = {}
     for target in targets:
         style = getattr(target, "style", None)
         for name, value in props.items():
-            if name == "label":
+            # The artist's own ``set_<name>`` first -- what matplotlib's setp calls -- so a
+            # layer's ``set_linewidth`` and a tick label's ``set_rotation`` are honoured
+            # alike. Property aliases (``lw``, ``c``) resolve through the same door.
+            alias = _SETP_ALIASES.get(name, name)
+            setter = getattr(target, f"set_{alias}", None)
+            if callable(setter):
+                setter(value)
+            elif name == "label":
                 target.label = str(value)
             elif name == "color" and style is not None:
                 style.color = _normalize_rgba(value)
-            elif style is not None and hasattr(style, name):
-                setattr(style, name, value)
+            elif style is not None and hasattr(style, alias):
+                setattr(style, alias, value)
+            else:
+                unapplied[name] = value
         if hasattr(target, "dirty"):
             target.dirty.gpu_dirty = True
+    # Said rather than dropped: a property that took no effect reads, in the caller's own
+    # source, as one that did.
+    _warn_unsupported(
+        "setp",
+        unapplied,
+        {k: "is not a property GLPlot can set on this artist and was ignored" for k in unapplied},
+    )
     _set_dirty(_get_or_create_plot())
     return None
 
@@ -4793,7 +5710,12 @@ def plot(*args: Any, **kwargs: Any) -> list[BaseLayer]:
         args = _resolve_plot_data_args("plot", data, args)
     artists = []
     for x, y, fmt in _parse_plot_groups(args):
-        artists.extend(_plot_single(x, y, fmt, **kwargs))
+        columns = _plot_columns(x, y)
+        labels = kwargs.get("label")
+        per_column = isinstance(labels, (list, tuple)) and len(labels) == len(columns) > 1
+        for index, (xs, ys) in enumerate(columns):
+            call_kwargs = {**kwargs, "label": labels[index]} if per_column else kwargs
+            artists.extend(_plot_single(xs, ys, fmt, **call_kwargs))
     return artists
 
 
@@ -5367,7 +6289,7 @@ def plot_styles() -> List[Tuple[str, str, str]]:
     return [(s.key, s.name, s.description) for s in _styles.STYLES]
 
 
-def plot_style(name: Optional[str] = None, *, layers: bool = True) -> str:
+def plot_style(name: Optional[str] = None, *, layers: bool = True, colormap: bool = True) -> str:
     """Apply a global style preset, or return the current one's key when ``name`` is None.
 
     A preset restyles the whole figure at once — background, palette, line width, point
@@ -5382,6 +6304,12 @@ def plot_style(name: Optional[str] = None, *, layers: bool = True) -> str:
         layers: When True (default) existing layers take the preset's palette, width and
             point size — except those whose colours carry data, which are never repainted.
             False restyles only the page and leaves every layer's own colour alone.
+        colormap: When True (default) the preset's own colormap is used for everything
+            coloured *by value*: layers that already carry one (an image, a colour-by-column
+            scatter, a surface) are re-mapped through it -- their data is untouched, only the
+            ramp changes -- and so is whatever this figure draws next without naming a
+            colormap. An explicit ``cmap=`` or :func:`set_cmap` still wins. False leaves
+            every colormap alone.
 
     Returns:
         The key of the applied preset (or the current one when ``name`` is None).
@@ -5414,7 +6342,7 @@ def plot_style(name: Optional[str] = None, *, layers: bool = True) -> str:
         keys = ", ".join(s.key for s in _styles.STYLES)
         raise ValueError(f"unknown style {name!r}; expected one of {keys}")
 
-    _styles.apply_style(plot_obj, style, layers=bool(layers))
+    _styles.apply_style(plot_obj, style, layers=bool(layers), colormaps=bool(colormap))
     # apply_style() itself records plot_obj._style_key now, so plot_style() with no argument
     # reports the current preset regardless of whether it was set from code or by clicking a
     # card in the Style panel. The Style panel still tracks its own selection separately (on
@@ -6136,6 +7064,10 @@ def fill(*args: Any, **kwargs: Any) -> list:
         args = _resolve_plot_data_args("fill", data, args)
     alpha = kwargs.pop("alpha", None)
     label = kwargs.pop("label", None)
+    hatch = kwargs.pop("hatch", None)
+    edgecolor = kwargs.pop("edgecolor", kwargs.pop("ec", None))
+    linewidth = kwargs.pop("linewidth", kwargs.pop("lw", None))
+    facecolor = kwargs.pop("facecolor", kwargs.pop("fc", None))
     # Reuse plot()'s argument splitter rather than re-deriving the x,y,[fmt] grammar --
     # the one place that grammar is allowed to live, so fill() and plot() cannot drift.
     groups = _parse_plot_groups(args)
@@ -6151,7 +7083,13 @@ def fill(*args: Any, **kwargs: Any) -> list:
             raise ValueError("each x and y in fill() must have the same length")
         parsed = _parse_plot_format(fmt)
         color = (
-            parsed.get("color") if parsed.get("color") else _color_cycle()[i % len(_color_cycle())]
+            facecolor
+            if facecolor is not None
+            else (
+                parsed.get("color")
+                if parsed.get("color")
+                else _color_cycle()[i % len(_color_cycle())]
+            )
         )
         rgba = list(_normalize_rgba(color))
         if alpha is not None:
@@ -6175,8 +7113,10 @@ def fill(*args: Any, **kwargs: Any) -> list:
         )
         layer = plot_obj.scene.layers[-1]
         layer.metadata["artist"] = "fill"
+        _apply_patch_edge(layer, rgba, edgecolor, linewidth, alpha)
         layers.append(layer)
 
+    _apply_hatch(layers, hatch, "fill")
     _set_dirty(plot_obj)
     return layers
 
@@ -6193,6 +7133,10 @@ def fill_betweenx(
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     data: Optional[Any] = None,
+    facecolor: Optional[ColorLike] = None,
+    edgecolor: Optional[ColorLike] = None,
+    linewidth: Optional[float] = None,
+    hatch: Optional[str] = None,
 ):
     """Fill the area between two curves of x, as functions of y.
 
@@ -6221,7 +7165,11 @@ def fill_betweenx(
     """
     y, x1, x2, where = _resolve_data_args("fill_betweenx", data, y, x1, x2, where)
     y_arr = _as_float_array(y, ndim=1, name="y")
-    x1_arr = _as_float_array(x1, ndim=1, name="x1")
+    x1_arr = (
+        np.full(len(y_arr), float(x1), dtype=np.float32)
+        if np.isscalar(x1)
+        else _as_float_array(x1, ndim=1, name="x1")
+    )
     x2_arr = (
         np.full_like(y_arr, float(x2))
         if np.isscalar(x2)
@@ -6241,7 +7189,7 @@ def fill_betweenx(
     # it with x and y exchanged and a second chance to get the winding wrong.
     verts, indices = _fill_between_geometry(y_arr, x1_arr, x2_arr, where_arr, interpolate, step)
     verts = verts[:, ::-1].copy()  # (y, x) -> (x, y)
-    rgba = list(_normalize_rgba(color))
+    rgba = list(_normalize_rgba(facecolor if facecolor is not None else color))
     if alpha is not None:
         rgba[3] *= float(alpha)
     plot_obj = _get_or_create_plot()
@@ -6255,6 +7203,8 @@ def fill_betweenx(
     )
     layer = plot_obj.scene.layers[-1]
     layer.metadata["artist"] = "fill_betweenx"
+    _apply_patch_edge(layer, rgba, edgecolor, linewidth, alpha)
+    _apply_hatch([layer], hatch, "fill_betweenx")
     return layer
 
 
@@ -6293,11 +7243,8 @@ def stackplot(
         x, *ys = _resolve_data_args("stackplot", data, x, *ys)
     _warn_unsupported(
         "stackplot",
-        {"baseline": baseline if baseline != "zero" else None, "hatch": hatch},
-        {
-            "baseline": "is not supported; the stack is drawn from a zero baseline",
-            "hatch": "has no effect: GLPlot has no hatch renderer, so fills are drawn flat",
-        },
+        {"baseline": baseline if baseline != "zero" else None},
+        {"baseline": "is not supported; the stack is drawn from a zero baseline"},
     )
     x_arr = _as_float_array(x, ndim=1, name="x")
     # A single 2-D array is matplotlib's other calling convention; unpack it to rows.
@@ -6330,6 +7277,7 @@ def stackplot(
         layer.metadata["artist"] = "stackplot"
         layers.append(layer)
         lower = upper  # the next series stacks on this one's top
+    _apply_hatch(layers, hatch, "stackplot")
 
     _set_dirty(_get_or_create_plot())
     return layers
@@ -6347,6 +7295,10 @@ def fill_between(
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     data: Optional[Any] = None,
+    facecolor: Optional[ColorLike] = None,
+    edgecolor: Optional[ColorLike] = None,
+    linewidth: Optional[float] = None,
+    hatch: Optional[str] = None,
 ):
     """Fill the area between two curves or a curve and baseline.
 
@@ -6402,7 +7354,13 @@ def fill_between(
     """
     x, y1, y2, where = _resolve_data_args("fill_between", data, x, y1, y2, where)
     x_arr = _as_float_array(x, ndim=1, name="x")
-    y1_arr = _as_float_array(y1, ndim=1, name="y1")
+    # Either boundary may be a scalar -- `fill_between(x, 0, y)` is the commonest call there
+    # is, and matplotlib broadcasts it against x.
+    y1_arr = (
+        np.full(len(x_arr), float(y1), dtype=np.float32)
+        if np.isscalar(y1)
+        else _as_float_array(y1, ndim=1, name="y1")
+    )
     y2_arr = (
         np.full_like(y1_arr, float(y2))
         if np.isscalar(y2)
@@ -6432,7 +7390,7 @@ def fill_between(
     verts, indices = _fill_between_geometry(
         x_arr, y1_arr, y2_arr, where_arr, bool(interpolate), step
     )
-    rgba = list(_normalize_rgba(color, n=None))
+    rgba = list(_normalize_rgba(facecolor if facecolor is not None else color, n=None))
     if alpha is not None:
         rgba[3] *= float(alpha)
     plot_obj = _get_or_create_plot()
@@ -6447,7 +7405,60 @@ def fill_between(
         edge_color=tuple(rgba),
         label=label,
     )
-    return plot_obj.scene.layers[-1]
+    layer = plot_obj.scene.layers[-1]
+    _apply_patch_edge(layer, rgba, edgecolor, linewidth, alpha)
+    _apply_hatch([layer], hatch, "fill_between")
+    return layer
+
+
+def _apply_patch_edge(
+    layer: Any,
+    face_rgba: Sequence[float],
+    edgecolor: Any,
+    linewidth: Optional[float],
+    alpha: Any = None,
+) -> None:
+    """Give a filled patch layer the edge colour / width the caller asked for.
+
+    A patch's ``edge_color`` is not drawn by the live renderer, but its silhouette (``outline_*``)
+    is, so the edge is set as both and the export -- which draws ``edge_color`` itself -- is told
+    not to stroke the outline a second time. A no-op when neither was given: the edge then
+    stays the face colour, as in matplotlib.
+    """
+    if edgecolor is None and linewidth is None:
+        return
+    edge = list(_normalize_rgba(edgecolor, n=None)) if edgecolor is not None else list(face_rgba)
+    if edgecolor is not None and alpha is not None:
+        edge[3] *= float(alpha)
+    layer.style.edge_color = tuple(edge)
+    if linewidth is not None:
+        layer.style.line_width = float(linewidth)
+    layer.style.outline_enabled = True
+    layer.style.outline_color = tuple(edge)
+    layer.style.outline_width = 1.0 if linewidth is None else float(linewidth)
+    layer.style.outline_alpha = 1.0
+    layer.metadata["edge_as_outline"] = True
+
+
+def _apply_hatch(layers: Sequence[Any], hatch: Any, func: str) -> None:
+    """Record a hatch pattern (or one per layer, cycled) on patch ``layers``.
+
+    Drawn by the export, which is a real matplotlib figure; the GL renderers fill solid, so the
+    call says so once instead of leaving the caller to find out from the window.
+    """
+    if hatch is None:
+        return
+    patterns = [hatch] if isinstance(hatch, str) else [str(h) for h in hatch]
+    if not patterns:
+        return
+    for index, layer in enumerate(layers):
+        layer.metadata["hatch"] = patterns[index % len(patterns)]
+    _warn_unsupported(
+        func,
+        {"hatch": hatch},
+        {"hatch": "is drawn in exported figures only; the window fills solid"},
+        stacklevel=4,
+    )
 
 
 def _rect_patch(
@@ -6630,6 +7641,13 @@ def barh(
     capsize: Optional[float] = None,
     error_kw: Optional[dict] = None,
     data: Optional[Any] = None,
+    edgecolor: Optional[ColorLike] = None,
+    linewidth: Optional[float] = None,
+    ec: Optional[ColorLike] = None,
+    lw: Optional[float] = None,
+    hatch: Optional[str] = None,
+    tick_label: Optional[Sequence[str]] = None,
+    log: bool = False,
 ) -> list:
     """Draw a horizontal bar chart -- :func:`bar` with the axes swapped.
 
@@ -6665,6 +7683,13 @@ def barh(
     """
     if align not in ("center", "edge"):
         raise ValueError(f"unsupported align: {align!r}. Expected 'center' or 'edge'.")
+    edgecolor = edgecolor if edgecolor is not None else ec
+    linewidth = linewidth if linewidth is not None else lw
+    _warn_unsupported(
+        "barh",
+        {"log": log or None},
+        {"log": "has no effect on the bar itself: use xscale('log') for a log axis"},
+    )
     y, width, left = _resolve_data_args("barh", data, y, width, left)
     y_arr = _as_float_array(_coerce_axis_values(y, "y", "barh"), ndim=1, name="y")
     w_arr = _as_float_array(width, ndim=1, name="width")
@@ -6689,7 +7714,11 @@ def barh(
             x0, x0 + w, yc + lo, yc + hi, tuple(rgba), None, label if idx == 0 else None
         )
         layer.metadata["artist"] = "barh"
+        _apply_patch_edge(layer, rgba, edgecolor, linewidth, alpha)
         patches.append(layer)
+    _apply_hatch(patches, hatch, "barh")
+    if tick_label is not None:
+        yticks(y_arr, [str(t) for t in tick_label])
     if xerr is not None or yerr is not None:
         kw = dict(error_kw or {})
         kw.setdefault("s", 0)
@@ -6725,6 +7754,13 @@ def bar(
     capsize: Optional[float] = None,
     error_kw: Optional[dict] = None,
     data: Optional[Any] = None,
+    edgecolor: Optional[ColorLike] = None,
+    linewidth: Optional[float] = None,
+    ec: Optional[ColorLike] = None,
+    lw: Optional[float] = None,
+    hatch: Optional[str] = None,
+    tick_label: Optional[Sequence[str]] = None,
+    log: bool = False,
 ) -> list:
     """Create a bar chart.
 
@@ -6790,6 +7826,13 @@ def bar(
     """
     if align not in ("center", "edge"):
         raise ValueError(f"unsupported align: {align!r}. Expected 'center' or 'edge'.")
+    edgecolor = edgecolor if edgecolor is not None else ec
+    linewidth = linewidth if linewidth is not None else lw
+    _warn_unsupported(
+        "bar",
+        {"log": log or None},
+        {"log": "has no effect on the bar itself: use yscale('log') for a log axis"},
+    )
     x, height, bottom = _resolve_data_args("bar", data, x, height, bottom)
     x_arr = _as_float_array(_coerce_axis_values(x, "x", "bar"), ndim=1, name="x")
     h_arr = _as_float_array(height, ndim=1, name="height")
@@ -6813,6 +7856,11 @@ def bar(
     if alpha is not None:
         rgba[3] *= float(alpha)
     _QUAD_INDICES = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
+    # matplotlib's default edge is the face colour, so an unstyled bar has no visible outline.
+    edge_rgba = rgba if edgecolor is None else list(_normalize_rgba(edgecolor, n=None))
+    if edgecolor is not None and alpha is not None:
+        edge_rgba[3] *= float(alpha)
+    bar_layers: list = []
     for idx, (xc, h, btm) in enumerate(zip(x_arr, h_arr, b_arr)):
         left, right = xc + lo, xc + hi
         verts = np.array(
@@ -6824,14 +7872,20 @@ def bar(
             indices=_QUAD_INDICES,
             mode="triangles",
             face_color=tuple(rgba),
-            edge_color=tuple(rgba),
+            edge_color=tuple(edge_rgba),
             label=label if idx == 0 else None,
         )
         # The bar's Layer, not `add_patch`'s figure: the docstring promises patch layers,
         # and `bar_label` / any per-bar work needs the artist. `add_patch` predates that
         # contract and returns the figure, so appending its result gave N copies of it.
-        _get_or_create_plot().scene.layers[-1].metadata["artist"] = "bar"
-        patches.append(_get_or_create_plot().scene.layers[-1])
+        bar_layer = _get_or_create_plot().scene.layers[-1]
+        bar_layer.metadata["artist"] = "bar"
+        _apply_patch_edge(bar_layer, rgba, edgecolor, linewidth, alpha)
+        patches.append(bar_layer)
+        bar_layers.append(bar_layer)
+    _apply_hatch(bar_layers, hatch, "bar")
+    if tick_label is not None:
+        xticks(x_arr, [str(t) for t in tick_label])
     if yerr is not None or xerr is not None:
         kw = dict(error_kw or {})
         kw.setdefault("s", 0)
@@ -6969,6 +8023,13 @@ def hist(
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     data: Optional[Any] = None,
+    edgecolor: Optional[ColorLike] = None,
+    linewidth: Optional[float] = None,
+    ec: Optional[ColorLike] = None,
+    lw: Optional[float] = None,
+    facecolor: Optional[ColorLike] = None,
+    fc: Optional[ColorLike] = None,
+    hatch: Optional[str] = None,
 ):
     """Create a histogram from data values.
 
@@ -7037,6 +8098,11 @@ def hist(
         >>> gplt.hist(data, bins=custom_bins, color='green')
     """
     x, weights = _resolve_data_args("hist", data, x, weights)
+    face = facecolor if facecolor is not None else fc
+    if face is not None:
+        color = face
+    edgecolor = edgecolor if edgecolor is not None else ec
+    linewidth = linewidth if linewidth is not None else lw
     _warn_unsupported(
         "hist",
         {
@@ -7087,6 +8153,12 @@ def hist(
         xs = np.concatenate(([edges[0]], edges))
         ys = np.concatenate(([base], counts, [base]))
         artists = step(xs, ys, where="post", color=color, alpha=alpha, label=label)
+        # The outline of a step histogram *is* its edge: matplotlib colours it `edgecolor`.
+        for artist in artists:
+            if edgecolor is not None:
+                artist.style.color = tuple(_normalize_rgba(edgecolor, n=None))
+            if linewidth is not None:
+                artist.style.line_width = float(linewidth)
         return counts, edges, artists
 
     if histtype not in ("bar", "barstacked"):
@@ -7107,6 +8179,9 @@ def hist(
         color=color,
         alpha=alpha,
         label=label,
+        edgecolor=edgecolor,
+        linewidth=linewidth,
+        hatch=hatch,
     )
     return counts, edges, artists
 
@@ -8038,7 +9113,14 @@ def imshow(
         matrix = _as_float_array(X, ndim=2, name="X")
         rows, cols = matrix.shape
     if extent is None:
-        xmin, xmax, ymin, ymax = -0.5, cols - 0.5, -0.5, rows - 0.5
+        # matplotlib's own defaults, which differ by origin: for 'upper' the image's top
+        # edge is y = -0.5, so row 0 sits at y = 0 and the y axis runs *downward*. Using the
+        # 'lower' extent for both put row 0 at y = rows - 1 and made every overlay in pixel
+        # coordinates -- `imshow(img); scatter(kx, ky)` -- land vertically mirrored.
+        if origin == "upper":
+            xmin, xmax, ymin, ymax = -0.5, cols - 0.5, rows - 0.5, -0.5
+        else:
+            xmin, xmax, ymin, ymax = -0.5, cols - 0.5, -0.5, rows - 0.5
     else:
         xmin, xmax, ymin, ymax = map(float, extent)
     xs = np.linspace(xmin, xmax, cols, dtype=np.float32)
@@ -8068,6 +9150,12 @@ def imshow(
     plot_obj = _get_or_create_plot()
     plot_obj.add_scatter(xx.ravel(), yy.ravel(), colors, float(size), label=label)
     layer = plot_obj.scene.layers[-1]
+    # As in matplotlib, an image sets the direction of the axes from its extent: (bottom, top)
+    # given as (hi, lo) -- the default for origin='upper' -- is an inverted y axis. It only
+    # ever turns an inversion *on*: contour()/contourf() draw through here with a sorted
+    # extent, and must not un-invert the image they are overlaid on.
+    plot_obj.camera.flip_x = plot_obj.camera.flip_x or bool(xmin > xmax)
+    plot_obj.camera.flip_y = plot_obj.camera.flip_y or bool(ymin > ymax)
     # 'equal' is the matplotlib default for an image -- what stops a square matrix from
     # being drawn as a rectangle -- so unset (None) resolves to it here too; 'auto' is the
     # explicit opt-out (`specgram` relies on it to leave its time axis alone). Stored on the
@@ -11779,7 +12867,17 @@ def errorbar(
     elinewidth = 1.0 if elinewidth is None else float(elinewidth)
     cap_lw = elinewidth if capthick is None else float(capthick)
     capsize = 0.0 if capsize is None else float(capsize)
-    err_color = ecolor if ecolor is not None else kwargs.get("color", "k")
+    # matplotlib's ecolor defaults to the colour the data is drawn in, whether that came from
+    # color=, a colour letter in fmt, or the next slot of the cycle. Resolved once, up front,
+    # and handed to the data layer, so the bars and the points cannot end up disagreeing --
+    # they used to: the bars were always black, the data whatever the cycle gave it.
+    data_color = kwargs.get("color")
+    if data_color is None and fmt not in (None, "", "none", "None"):
+        data_color = _parse_plot_format(fmt).get("color")
+    if data_color is None:
+        data_color = _next_cycle_color(_get_or_create_plot())
+    kwargs["color"] = data_color
+    err_color = ecolor if ecolor is not None else data_color
     artists: list = []
 
     def _bars(err, dep, indep, lo_flags, hi_flags, bar_func, cap_func, caret_lo, caret_hi):
@@ -11979,6 +13077,19 @@ def text(
     fontsize, color = _merge_fontdict("text", fontdict, fontsize, color)
     ha = ha if ha is not None else horizontalalignment
     va = va if va is not None else verticalalignment
+    # ``transform=ax.transAxes`` places the text in axes fractions (0..1), the usual way to pin
+    # a label to a corner. ``transData`` is what text() does anyway. Both are handled here, so
+    # neither is reported as an ignored keyword below.
+    transform = kwargs.pop("transform", None)
+    axes_fraction = None
+    if isinstance(transform, _AxesFractionTransform):
+        axes_fraction = (float(x), float(y))
+        xlo, xhi = plot_obj.get_xlim()
+        ylo, yhi = plot_obj.get_ylim()
+        x = xlo + axes_fraction[0] * (xhi - xlo)
+        y = ylo + axes_fraction[1] * (yhi - ylo)
+    elif transform is not None and not isinstance(transform, _DataTransform):
+        kwargs["transform"] = transform
     _warn_unsupported(
         "text",
         {"ha": ha, "va": va, "rotation": rotation, **kwargs},
@@ -12005,6 +13116,11 @@ def text(
         fontsize=int(fontsize if fontsize is not None else 12),
         color=rgba,
         label=label,
+    )
+    # What the live renderer cannot draw but the headless export can: alignment, rotation, and
+    # an anchor that stays put in axes fractions however the view is later fitted.
+    plot_obj.scene.layers[-1].metadata.update(
+        {"ha": ha, "va": va, "rotation": rotation, "axes_fraction": axes_fraction}
     )
     if bbox is not None:
         plot_obj.scene.layers[-1].metadata["bbox"] = bbox
@@ -12215,6 +13331,7 @@ def add_patch(
 # ------------------------------------------------------------------
 
 
+@_accept_text_props
 def title(
     label: Optional[str] = None,
     fontdict: Optional[dict] = None,
@@ -12315,9 +13432,24 @@ def suptitle(
             "options.axis_margin_t to move it",
         },
     )
+    if len(plot.panels) > 1:
+        # With several axes the figure title is its own text above all of them. Routed through
+        # `_set_title` it landed on the *active panel* -- `subplots(2, 2); suptitle("Run 42")`
+        # silently replaced one panel's title. Drawn in exported figures; the live window has
+        # no figure-level text, and the window caption is left alone so it cannot leak back
+        # into a panel (see `_resolve_axes_title`).
+        plot._suptitle = (text, {"fontsize": fontsize, "color": color})
+        _warn_unsupported_call(
+            "suptitle",
+            "is drawn in exported figures only when the figure has several axes; the live "
+            "window has no figure-level title",
+        )
+        _set_dirty(plot)
+        return
     _set_title(plot, text, fontsize=fontsize, color=color)
 
 
+@_accept_text_props
 def xlabel(
     xlabel: Optional[str] = None,
     fontdict: Optional[dict] = None,
@@ -12380,6 +13512,7 @@ def xlabel(
     _set_dirty(plot)
 
 
+@_accept_text_props
 def ylabel(
     ylabel: Optional[str] = None,
     fontdict: Optional[dict] = None,
@@ -12458,17 +13591,48 @@ def _refresh_axis_ticks(plot: GPULinePlot) -> None:
     from .options import RenderMode
 
     width, height = int(plot.width), int(plot.height)
-    plot.axis_manager.update(
-        RenderContext(
-            mvp=plot.camera_controller.mvp(width, height),
-            window_world=plot.camera_controller.world_window(width, height),
-            width_px=width,
-            height_px=height,
-            fb_width=width,
-            fb_height=height,
-            mode=RenderMode.EXACT,
+    # Inside the preview: until the first render the camera still holds its (-1, 1) default,
+    # and ticks generated for *that* window are ticks for a view the plot will never show.
+    with plot.autoscale_preview():
+        plot.axis_manager.update(
+            RenderContext(
+                mvp=plot.camera_controller.mvp(width, height),
+                window_world=plot.camera_controller.world_window(width, height),
+                width_px=width,
+                height_px=height,
+                fb_width=width,
+                fb_height=height,
+                mode=RenderMode.EXACT,
+            )
         )
+
+
+def _apply_tick_rotation(func: str, plot: GPULinePlot, axes: str, rotation: Any) -> None:
+    """Store a tick-label rotation: degrees, or matplotlib's ``"vertical"``/``"horizontal"``.
+
+    Honoured by the headless export, which is a real matplotlib figure; the live window draws
+    tick labels horizontally, and the call says so rather than leaving the caller to find out.
+    """
+    if rotation is None:
+        return
+    if isinstance(rotation, str):
+        rotation = {"vertical": 90.0, "horizontal": 0.0}.get(rotation.lower())
+        if rotation is None:
+            raise ValueError(
+                f"{func}(): rotation must be a number of degrees, 'vertical' or 'horizontal'"
+            )
+    for axis in axes:
+        setattr(plot.options, f"axis_tick_rotation_{axis}", float(rotation))
+    _warn_unsupported(
+        func,
+        {"rotation": rotation},
+        {
+            "rotation": "rotates the tick labels in exported figures only; the live window "
+            "draws them horizontally"
+        },
+        stacklevel=6,
     )
+    _set_dirty(plot)
 
 
 def _ticks(
@@ -12479,6 +13643,7 @@ def _ticks(
     minor: bool,
     fontsize: Optional[float],
     color: Optional[ColorLike],
+    rotation: Any = None,
 ) -> Tuple[np.ndarray, List[str]]:
     """The shared body of :func:`xticks` and :func:`yticks`.
 
@@ -12518,12 +13683,14 @@ def _ticks(
         _set_dirty(plot)
     elif labels is not None:
         raise TypeError(f"{func}(): labels= cannot be set without ticks=")
+    _apply_tick_rotation(func, plot, axis, rotation)
 
     _refresh_axis_ticks(plot)
     live = getattr(plot.axis_manager, f"ticks_{axis}")
     return np.asarray(live.major), list(live.labels)
 
 
+@_accept_text_props
 def xticks(
     ticks: Optional[ArrayLike] = None,
     labels: Optional[Sequence[str]] = None,
@@ -12531,6 +13698,7 @@ def xticks(
     minor: bool = False,
     fontsize: Optional[float] = None,
     color: Optional[ColorLike] = None,
+    rotation: Optional[Any] = None,
 ) -> Tuple[np.ndarray, List[str]]:
     """Get or set the x-axis tick positions and labels.
 
@@ -12562,9 +13730,10 @@ def xticks(
         >>> locs, labels = gplt.xticks()
         >>> gplt.xticks([])  # hide the x ticks
     """
-    return _ticks("x", "xticks", ticks, labels, minor, fontsize, color)
+    return _ticks("x", "xticks", ticks, labels, minor, fontsize, color, rotation)
 
 
+@_accept_text_props
 def yticks(
     ticks: Optional[ArrayLike] = None,
     labels: Optional[Sequence[str]] = None,
@@ -12572,6 +13741,7 @@ def yticks(
     minor: bool = False,
     fontsize: Optional[float] = None,
     color: Optional[ColorLike] = None,
+    rotation: Optional[Any] = None,
 ) -> Tuple[np.ndarray, List[str]]:
     """Get or set the y-axis tick positions and labels.
 
@@ -12594,7 +13764,7 @@ def yticks(
         >>> gplt.yticks([0, 0.5, 1.0])
         >>> locs, labels = gplt.yticks()
     """
-    return _ticks("y", "yticks", ticks, labels, minor, fontsize, color)
+    return _ticks("y", "yticks", ticks, labels, minor, fontsize, color, rotation)
 
 
 def _tick_labels(
@@ -12620,20 +13790,25 @@ def _tick_labels(
     """
     _warn_unsupported(
         func,
-        {"rotation": rotation, "ha": ha, "va": va},
+        {"ha": ha, "va": va},
         {
-            "rotation": "has no effect: tick labels are always drawn horizontally",
             "ha": "has no effect: tick label alignment is fixed",
             "va": "has no effect: tick label alignment is fixed",
         },
         stacklevel=4,
     )
     plot = _get_or_create_plot()
+    _apply_tick_rotation(func, plot, axis, rotation)
     _refresh_axis_ticks(plot)
     live = getattr(plot.axis_manager, f"ticks_{axis}")
     if labels is None:
         return list(live.labels)
-    current = np.asarray(live.major, dtype=float)
+    # Ticks the caller pinned are the ones being labelled, wherever they fall: matplotlib's
+    # `set_xticks([0, 5, 10]); set_xticklabels([...])` pairs the labels with those three even
+    # though only the ones inside the view are *drawn*. Counting the drawn ticks instead
+    # made that two-line idiom raise whenever the pinned ticks were not all in view.
+    pinned = getattr(plot.options, f"axis_tick_values_{axis}", None)
+    current = np.asarray(live.major if pinned is None else pinned, dtype=float)
     if len(labels) != len(current):
         raise ValueError(
             f"{func}(): got {len(labels)} labels but {len(current)} ticks are currently "
@@ -12922,6 +14097,9 @@ def tick_params(axis: str = "both", **kwargs: Any) -> None:
         plot.options.axis_tick_fontsize = float(kwargs["labelsize"])
     if "labelcolor" in kwargs:
         plot.options.axis_tick_color = kwargs["labelcolor"]
+    rotation = kwargs.get("labelrotation", kwargs.get("rotation"))
+    _apply_tick_rotation("tick_params", plot, "xy" if axis == "both" else axis[0].lower(), rotation)
+    supported |= {"labelrotation", "rotation"}
     unsupported = {k: v for k, v in kwargs.items() if k not in supported}
     _warn_unsupported("tick_params", unsupported)
     _set_dirty(plot)
@@ -13152,6 +14330,12 @@ def xlim(
     if left is not None and right is None and isinstance(left, (tuple, list, np.ndarray)):
         left, right = left[0], left[1]
 
+    # An end that is not given stays where it is, as in matplotlib: `set_xlim(left=0)` moves
+    # only the left edge. This used to pass the None straight through and fail inside the
+    # camera, on one of the most common limit calls there is.
+    current = plot.get_xlim()
+    left = current[0] if left is None else left
+    right = current[1] if right is None else right
     plot.set_view(xlim=(left, right))
     _set_dirty(plot)
     return (left, right)
@@ -13198,6 +14382,10 @@ def ylim(
     if bottom is not None and top is None and isinstance(bottom, (tuple, list, np.ndarray)):
         bottom, top = bottom[0], bottom[1]
 
+    # See xlim(): an end that is not given stays where it is -- `set_ylim(bottom=0)`.
+    current = plot.get_ylim()
+    bottom = current[0] if bottom is None else bottom
+    top = current[1] if top is None else top
     plot.set_view(ylim=(bottom, top))
     _set_dirty(plot)
     return (bottom, top)
@@ -13300,6 +14488,9 @@ def axis(
         if m in ("auto", "tight"):
             if _call_if_exists(plot, ("autoscale", "auto_view", "fit_view")) is _MISSING:
                 raise AttributeError("Backend does not expose autoscale()/fit_view()")
+            if m == "auto":
+                # matplotlib's axis('auto') also puts the aspect back; 'tight' leaves it.
+                _set_panel_aspect_equal(plot, False)
             _set_dirty(plot)
             return None
         if m in ("reset", "home"):
@@ -13378,6 +14569,7 @@ def set_aspect(
     if isinstance(aspect, str) and aspect == "auto":
         if _call_if_exists(plot, ("autoscale", "auto_view", "fit_view")) is _MISSING:
             raise AttributeError("Backend does not expose autoscale()/fit_view()")
+        _set_panel_aspect_equal(plot, False)
         _set_dirty(plot)
         return
     if isinstance(aspect, str) and aspect == "equal":
@@ -13549,6 +14741,28 @@ def export(filename: Optional[str] = None, scale: float = 2.0):
             raise AttributeError("Backend does not expose export functions")
 
 
+#: The engine's own ``savefig``: reads the GPU framebuffer back, so it needs a live GL window.
+#: Captured before :func:`_figure_savefig` replaces ``GPULinePlot.savefig``, because that
+#: replacement routes through :func:`savefig` below, which must reach *this* when a window
+#: exists rather than call itself.
+_ENGINE_SAVEFIG = GPULinePlot.savefig
+
+
+def _gl_framebuffer_savefig(plot: Any, filename: str, scale: float) -> None:
+    """Export ``plot`` through the GL framebuffer path, whatever kind of object it is.
+
+    Calls ``plot.savefig`` -- so a figure whose ``savefig`` was replaced on the instance (a
+    test double, a custom backend) is honoured -- except when that is :func:`_figure_savefig`
+    itself, which routes back here and would recurse; the engine's own implementation is
+    called directly in that case.
+    """
+    method = plot.savefig
+    if getattr(method, "__func__", None) is _figure_savefig:
+        _ENGINE_SAVEFIG(plot, filename, scale=scale)
+    else:
+        method(filename, scale=scale)
+
+
 def savefig(
     filename: str,
     density: Optional[bool] = None,
@@ -13655,7 +14869,7 @@ def savefig(
     )
 
     if hasattr(plot, "savefig"):
-        plot.savefig(filename, scale=scale)
+        _gl_framebuffer_savefig(plot, filename, scale)
         return
 
     _call_if_exists(plot, ("save_current_view",), filename, scale=scale)
@@ -13812,6 +15026,1213 @@ GPULinePlot.add_gridspec = _figure_add_gridspec
 
 
 # ------------------------------------------------------------------
+# The rest of the Figure surface
+# ------------------------------------------------------------------
+#
+# The constructors above get a script its axes; this is everything it then does to the
+# ``fig`` it got back from ``plt.subplots()`` or ``plt.figure()``: ``fig.tight_layout()``,
+# ``fig.suptitle(...)``, ``fig.colorbar(...)``, ``fig.axes``, ``fig.savefig(...)``. Each was
+# an ``AttributeError`` -- and ``fig.savefig(...)`` was worse, a segfault, because the
+# engine's own ``savefig`` reads the GPU framebuffer and there is no GL context before
+# ``show()``. Same placement reasoning as above: this is facade, so it lives here and the
+# engine never has to import ``AxesProxy``.
+#
+# Nearly all of it is the module-level function of the same name run with *this* figure made
+# current, which is also what keeps one implementation of each behaviour rather than two.
+# The previous current figure is put back afterwards: in matplotlib ``fig.savefig()`` or
+# ``fig.suptitle()`` does not change what ``plt.plot()`` draws into, and a script juggling two
+# figures relies on that.
+
+
+def _call_as_current(fig: GPULinePlot, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run ``fn`` with ``fig`` as the current figure, then restore whichever was current."""
+    global _CURRENT_PLOT
+    previous = _CURRENT_PLOT
+    _CURRENT_PLOT = fig
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        _CURRENT_PLOT = previous
+
+
+def _figure_delegate(name: str, target: Optional[str] = None) -> Any:
+    """A ``Figure`` method that runs module-level ``target`` against the figure it is called on."""
+    target = target or name
+
+    def method(self: GPULinePlot, *args: Any, **kwargs: Any) -> Any:
+        return _call_as_current(self, globals()[target], *args, **kwargs)
+
+    method.__name__ = name
+    method.__qualname__ = f"GPULinePlot.{name}"
+    method.__doc__ = (
+        f"``fig.{name}(...)`` -- matplotlib's ``Figure.{name}``: :func:`{target}` applied to "
+        f"this figure rather than to whichever one happens to be current."
+    )
+    return method
+
+
+for _name, _target in (
+    ("tight_layout", None),
+    ("subplots_adjust", None),
+    ("suptitle", None),
+    ("colorbar", None),
+    ("legend", None),
+    ("text", "figtext"),
+    ("clf", None),
+    ("gca", None),
+    ("sca", None),
+):
+    setattr(GPULinePlot, _name, _figure_delegate(_name, _target))
+del _name, _target
+
+
+def _figure_savefig(self: GPULinePlot, fname: Any, scale: float = 2.0, **kwargs: Any) -> Any:
+    """``fig.savefig(fname, ...)`` -- matplotlib's ``Figure.savefig``.
+
+    Goes through :func:`savefig`, so it takes every keyword that does (``dpi``,
+    ``bbox_inches``, ``transparent``, ``facecolor`` ...) and uses the headless matplotlib
+    export when no GL window exists. The engine's own method it replaces took only
+    ``(filename, scale)`` and, with no window, crashed the interpreter inside OpenGL.
+    """
+    return _call_as_current(self, savefig, fname, scale=scale, **kwargs)
+
+
+def _figure_show(self: GPULinePlot, warn: bool = True, **kwargs: Any) -> None:
+    """``fig.show()`` -- matplotlib's ``Figure.show``. ``warn`` is accepted and unused."""
+    _call_as_current(self, show, **kwargs)
+
+
+def _figure_subplots(
+    self: GPULinePlot,
+    nrows: int = 1,
+    ncols: int = 1,
+    *,
+    sharex: Any = False,
+    sharey: Any = False,
+    squeeze: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """``fig.subplots(...)`` -- matplotlib's ``Figure.subplots``: a grid of axes in *this* figure.
+
+    The module-level :func:`subplots` makes a figure of its own; this lays out the one it is
+    called on, which is the spelling modern matplotlib code uses::
+
+        fig = plt.figure(figsize=(8, 4))
+        ax1, ax2 = fig.subplots(1, 2, sharey=True)
+    """
+    wspace = kwargs.pop("wspace", None)
+    hspace = kwargs.pop("hspace", None)
+    projection, grid_kwargs = _grid_options(kwargs, wspace, hspace, "Figure.subplots", 4)
+    return _populate_grid(self, nrows, ncols, sharex, sharey, squeeze, projection, grid_kwargs)
+
+
+def _figure_axes(self: GPULinePlot) -> List[AxesProxy]:
+    """``fig.axes`` -- one :class:`AxesProxy` per panel, in creation order."""
+    return [
+        AxesProxy(
+            self,
+            i,
+            name=getattr(panel, "name", None),
+            row=getattr(panel, "row", 0),
+            col=getattr(panel, "col", 0),
+        )
+        for i, panel in enumerate(self.panels)
+        if not getattr(panel, "removed", False)
+    ]
+
+
+def _figure_number(self: GPULinePlot) -> int:
+    """``fig.number`` -- the number it was registered under, else its 1-based creation rank."""
+    for num, plot in _FIGURES_BY_NUM.items():
+        if plot is self:
+            return num
+    return _ALL_PLOTS.index(self) + 1 if self in _ALL_PLOTS else 1
+
+
+def _figure_get_size_inches(self: GPULinePlot) -> np.ndarray:
+    """``fig.get_size_inches()`` -- ``[width, height]``, from pixels and the figure's dpi."""
+    dpi = float(getattr(self, "_figure_dpi", 100.0)) or 100.0
+    return np.array([self.width / dpi, self.height / dpi], dtype=float)
+
+
+def _figure_set_size_inches(
+    self: GPULinePlot, w: Any, h: Optional[float] = None, forward: bool = True
+) -> None:
+    """``fig.set_size_inches(w, h)`` -- resize before the window opens.
+
+    Accepts ``(w, h)`` or one ``(w, h)`` pair, as matplotlib does. A window that is already
+    open keeps its size -- GLFW owns it -- and the call says so; the new size still applies
+    to anything exported afterwards.
+    """
+    if h is None:
+        w, h = w
+    dpi = float(getattr(self, "_figure_dpi", 100.0)) or 100.0
+    width, height = max(1, int(round(float(w) * dpi))), max(1, int(round(float(h) * dpi)))
+    self.width, self.height = width, height
+    self.options.window_width, self.options.window_height = width, height
+    if getattr(self, "window", None) is not None:
+        _warn_unsupported_call(
+            "Figure.set_size_inches",
+            "cannot resize a window that is already open; the new size applies to exports only",
+        )
+    _set_dirty(self)
+
+
+def _figure_set_facecolor(self: GPULinePlot, color: ColorLike) -> None:
+    """``fig.set_facecolor(c)`` -- the figure background; alpha is dropped (nothing to blend)."""
+    self.options.visual.background_color = tuple(float(v) for v in _normalize_rgba(color)[:3])
+    _set_dirty(self)
+
+
+def _figure_get_facecolor(self: GPULinePlot) -> Tuple[float, float, float, float]:
+    """``fig.get_facecolor()`` -- the background as an opaque RGBA tuple."""
+    r, g, b = (float(v) for v in self.options.visual.background_color[:3])
+    return (r, g, b, 1.0)
+
+
+class _FigurePatch:
+    """Stand-in for ``fig.patch``, the rectangle matplotlib draws behind a figure.
+
+    Only the background colour is real, because it is the only thing the engine has. The
+    rest of the ``Patch`` setters are accepted so ``fig.patch.set_alpha(0)`` -- the
+    transparent-background idiom -- runs, and say that they do nothing.
+    """
+
+    def __init__(self, fig: GPULinePlot) -> None:
+        self._fig = fig
+
+    def set_facecolor(self, color: ColorLike) -> None:
+        _figure_set_facecolor(self._fig, color)
+
+    set_fc = set_facecolor
+
+    def get_facecolor(self) -> Tuple[float, float, float, float]:
+        return _figure_get_facecolor(self._fig)
+
+    get_fc = get_facecolor
+
+    def _unsupported(self, name: str, *args: Any, **kwargs: Any) -> None:
+        _warn_unsupported_call(
+            f"Figure.patch.{name}", "is accepted for matplotlib parity and has no effect", 4
+        )
+
+    def set_alpha(self, *args: Any, **kwargs: Any) -> None:
+        self._unsupported("set_alpha")
+
+    def set_edgecolor(self, *args: Any, **kwargs: Any) -> None:
+        self._unsupported("set_edgecolor")
+
+    def set_linewidth(self, *args: Any, **kwargs: Any) -> None:
+        self._unsupported("set_linewidth")
+
+    def set_visible(self, *args: Any, **kwargs: Any) -> None:
+        self._unsupported("set_visible")
+
+
+def _apply_locator(plot: GPULinePlot, axis: str, locator: Any) -> None:
+    """``ax.xaxis.set_major_locator(locator)``: map the common locators onto tick options.
+
+    The headless export is real matplotlib and receives the locator itself. The live ticker
+    is GLPlot's own, so only the locators with a direct counterpart translate --
+    ``MaxNLocator`` (a tick count), ``MultipleLocator`` (a step), ``FixedLocator`` (explicit
+    positions), ``NullLocator`` (none), ``LinearLocator`` (a count) and ``AutoLocator`` (back
+    to automatic). Anything else is kept for the export and warned about for the live view.
+    """
+    options = plot.options
+    setattr(options, f"axis_tick_locator_{axis}", locator)
+    setattr(options, f"axis_tick_count_{axis}", 0)
+    setattr(options, f"axis_tick_step_{axis}", 0.0)
+    setattr(options, f"axis_tick_values_{axis}", None)
+    setattr(options, f"axis_tick_labels_{axis}", None)
+    name = type(locator).__name__
+    try:
+        if name == "MaxNLocator":
+            nbins = getattr(locator, "_nbins", None)
+            if isinstance(nbins, (int, float)):
+                setattr(options, f"axis_tick_count_{axis}", int(nbins) + 1)
+        elif name == "LinearLocator":
+            setattr(options, f"axis_tick_count_{axis}", int(locator.numticks))
+        elif name == "MultipleLocator":
+            setattr(options, f"axis_tick_step_{axis}", float(locator._edge.step))
+        elif name == "FixedLocator":
+            setattr(options, f"axis_tick_values_{axis}", tuple(float(v) for v in locator.locs))
+        elif name == "NullLocator":
+            setattr(options, f"axis_tick_values_{axis}", ())
+        elif name != "AutoLocator":
+            raise AttributeError(name)
+    except (AttributeError, TypeError, ValueError):
+        _warn_unsupported_call(
+            f"{axis}axis.set_major_locator",
+            f"has no live equivalent for {name}; the exported figure uses it, the window "
+            "keeps its automatic ticks",
+            stacklevel=4,
+        )
+    _set_dirty(plot)
+
+
+class _AxisLabelProxy:
+    """``ax.xaxis.label`` / ``ax.yaxis.label``: the axis title, as scripts poke at it."""
+
+    def __init__(self, axes: "AxesProxy", axis: str) -> None:
+        self._axes, self._axis = axes, axis
+
+    def get_text(self) -> str:
+        return getattr(self._axes, f"get_{self._axis}label")()
+
+    def set_text(self, text: str) -> None:
+        self._axes._activate()
+        (xlabel if self._axis == "x" else ylabel)(text)
+
+    def set_fontsize(self, size: float) -> None:
+        setattr(self._axes._fig.options, f"axis_{self._axis}label_fontsize", float(size))
+        _set_dirty(self._axes._fig)
+
+    set_size = set_fontsize
+
+    def set_color(self, color: ColorLike) -> None:
+        setattr(self._axes._fig.options, f"axis_{self._axis}label_color", color)
+        _set_dirty(self._axes._fig)
+
+    def __getattr__(self, name: str) -> Any:
+        # Every other `Text` setter (weight, rotation, family ...): accepted, said once.
+        if name.startswith("set_"):
+
+            def _noop(*args: Any, **kwargs: Any) -> None:
+                _warn_unsupported_call(
+                    f"{self._axis}axis.label.{name}",
+                    "is accepted for matplotlib parity and has no effect: axis titles use "
+                    "one fixed text style",
+                )
+
+            return _noop
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+
+class _AxisProxy:
+    """``ax.xaxis`` / ``ax.yaxis``: the matplotlib ``Axis`` object scripts configure ticks on.
+
+    A thin facade over the axes it belongs to. Ticks, formatters, locators, the axis title and
+    direction are real; the rest of the ``Axis`` surface (tick position, label position,
+    visibility) is accepted and said to be inert.
+    """
+
+    def __init__(self, axes: "AxesProxy", axis: str) -> None:
+        self._axes, self._axis = axes, axis
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, _AxisProxy)
+            and self._axes == other._axes
+            and self._axis == other._axis
+        )
+
+    def __hash__(self) -> int:
+        return hash((self._axes, self._axis))
+
+    @property
+    def _fn(self) -> Any:
+        return xticks if self._axis == "x" else yticks
+
+    @property
+    def label(self) -> _AxisLabelProxy:
+        return _AxisLabelProxy(self._axes, self._axis)
+
+    # -- ticks ----------------------------------------------------------------------------
+
+    def set_ticks(
+        self, ticks: Any, labels: Any = None, *, minor: bool = False, **kwargs: Any
+    ) -> None:
+        self._axes._activate()
+        self._fn(ticks, labels, minor=minor, **kwargs)
+
+    def set_ticklabels(self, labels: Any, *, minor: bool = False, **kwargs: Any) -> None:
+        self._axes._activate()
+        (xticklabels if self._axis == "x" else yticklabels)(labels, **kwargs)
+
+    def get_ticklocs(self, *, minor: bool = False) -> np.ndarray:
+        return getattr(self._axes, f"get_{self._axis}ticks")()
+
+    get_majorticklocs = get_ticklocs
+
+    def get_ticklabels(self, minor: bool = False, which: Optional[str] = None) -> list:
+        return getattr(self._axes, f"get_{self._axis}ticklabels")()
+
+    get_majorticklabels = get_ticklabels
+
+    def set_tick_params(self, which: str = "major", reset: bool = False, **kwargs: Any) -> None:
+        self._axes._activate()
+        tick_params(axis=self._axis, **kwargs)
+
+    # -- formatter / locator --------------------------------------------------------------
+
+    def set_major_formatter(self, formatter: Any) -> None:
+        """Format this axis' tick labels with a matplotlib ``Formatter`` (or a callable)."""
+        if isinstance(formatter, str):
+            from matplotlib.ticker import StrMethodFormatter
+
+            formatter = StrMethodFormatter(formatter)
+        elif callable(formatter) and not hasattr(formatter, "set_axis"):
+            from matplotlib.ticker import FuncFormatter
+
+            formatter = FuncFormatter(formatter)
+        plot = self._axes._activate()
+        setattr(plot.options, f"axis_tick_formatter_{self._axis}", formatter)
+        _set_dirty(plot)
+
+    def get_major_formatter(self) -> Any:
+        return self._axes._fig.axes_option(self._axes.panel, f"axis_tick_formatter_{self._axis}")
+
+    def set_major_locator(self, locator: Any) -> None:
+        _apply_locator(self._axes._activate(), self._axis, locator)
+
+    def get_major_locator(self) -> Any:
+        return self._axes._fig.axes_option(self._axes.panel, f"axis_tick_locator_{self._axis}")
+
+    # -- direction, scale, title ----------------------------------------------------------
+
+    def get_inverted(self) -> bool:
+        return getattr(self._axes, f"{self._axis}axis_inverted")()
+
+    def set_inverted(self, inverted: bool) -> None:
+        if bool(inverted) != self.get_inverted():
+            getattr(self._axes, f"invert_{self._axis}axis")()
+
+    def get_scale(self) -> str:
+        return getattr(self._axes, f"get_{self._axis}scale")()
+
+    def set_scale(self, value: str, **kwargs: Any) -> None:
+        getattr(self._axes, f"set_{self._axis}scale")(value, **kwargs)
+
+    def set_label_text(self, text: str, **kwargs: Any) -> None:
+        self.label.set_text(text)
+
+    def get_label_text(self) -> str:
+        return self.label.get_text()
+
+    def grid(self, visible: Optional[bool] = None, which: str = "major", **kwargs: Any) -> None:
+        self._axes._activate()
+        grid(visible, which=which, axis=self._axis, **kwargs)
+
+    def get_view_interval(self) -> Tuple[float, float]:
+        return getattr(self._axes, f"get_{self._axis}lim")()
+
+    def __getattr__(self, name: str) -> Any:
+        # ``tick_top``/``set_ticks_position``/``set_label_position``/``set_visible``/
+        # ``set_minor_locator`` ... : accepted for parity, inert, said once.
+        if name.startswith(("set_", "tick_")):
+
+            def _noop(*args: Any, **kwargs: Any) -> None:
+                _warn_unsupported_call(
+                    f"{self._axis}axis.{name}",
+                    "is accepted for matplotlib parity and has no effect",
+                )
+
+            return _noop
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+
+class _ArtistList(list):
+    """``ax.lines`` / ``ax.collections`` ...: the layers of one kind, indexable like matplotlib's.
+
+    Also *callable*, because GLPlot's own ``lines()`` -- many lines in one GPU call -- is
+    reached through the same attribute name, and ``ax.lines(...)`` must keep working beside
+    ``ax.lines[0].set_ydata(...)``.
+    """
+
+    def __init__(self, items: Any, call: Any = None) -> None:
+        super().__init__(items)
+        self._call = call
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if self._call is None:
+            raise TypeError("this artist list is not callable")
+        return self._call(*args, **kwargs)
+
+
+class _LegendProxy:
+    """What ``ax.get_legend()`` returns while a legend is showing: enough to remove or hide it."""
+
+    def __init__(self, axes: "AxesProxy") -> None:
+        self._axes = axes
+
+    def remove(self) -> None:
+        self.set_visible(False)
+
+    def set_visible(self, visible: bool) -> None:
+        self._axes._activate()  # the legend flag is per axes: write it to *this* one
+        self._axes._fig.legend_show = bool(visible)
+        _set_dirty(self._axes._fig)
+
+    def get_visible(self) -> bool:
+        return bool(self._axes._fig.axes_attr(self._axes.panel, "legend_show", False))
+
+    def get_texts(self) -> list:
+        from matplotlib.text import Text
+
+        return [Text(0.0, 0.0, label) for label in self._axes.get_legend_handles_labels()[1]]
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("set_"):
+
+            def _noop(*args: Any, **kwargs: Any) -> None:
+                _warn_unsupported_call(
+                    f"Legend.{name}", "is accepted for matplotlib parity and has no effect"
+                )
+
+            return _noop
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+
+def _twin_scaled_range(proxy: "_TwinAxesProxy") -> Optional[Tuple[float, float]]:
+    """The twin's range in its scaled space before it has been fitted: its limit, else its data."""
+    tw, fig = proxy._twin, proxy._fig
+    explicit = _twin_core.scaled_limit(tw)
+    if explicit is not None:
+        return explicit
+    layers = _twin_core.layers_of(proxy.panel.scene.layers, proxy._twin_axis)
+    return _twin_core.data_range(
+        layers, proxy._twin_axis, tw, float(getattr(fig.options, "autoscale_margin", 0.05))
+    )
+
+
+def _twin_ticks(proxy: "_TwinAxesProxy") -> Tuple[np.ndarray, List[str]]:
+    """``(values, labels)`` the twin's ticks have, in its own data units."""
+    tw, fig = proxy._twin, proxy._fig
+    if tw.ticks is not None:
+        values = np.asarray(tw.ticks, dtype=float)
+        if tw.tick_labels is not None:
+            return values, list(tw.tick_labels)
+        from .managers.axis import _auto_format
+
+        step = float(np.min(np.diff(np.sort(values)))) if len(values) > 1 else 1.0
+        return values, _auto_format(values, step if step > 0 else 1.0)
+    rng = _twin_scaled_range(proxy) or (0.0, 1.0)
+    target = max(4, int(fig.height / 120))
+    ticks = fig.axis_manager._generate_ticks(rng[0], rng[1], target, 0.0, tw.scale, tw.scale_params)
+    return np.asarray(_scale_utils.inverse(ticks.major, tw.scale, tw.scale_params)), list(
+        ticks.labels
+    )
+
+
+class _TwinLabelProxy:
+    """``ax2.yaxis.label``: the twin's axis title."""
+
+    def __init__(self, axes: "_TwinAxesProxy") -> None:
+        self._axes = axes
+
+    def get_text(self) -> str:
+        return self._axes._twin.label
+
+    def set_text(self, text: str) -> None:
+        self._axes._twin.label = str(text)
+        _set_dirty(self._axes._fig)
+
+    def set_fontsize(self, size: float) -> None:
+        self._axes._twin.label_fontsize = float(size)
+        _set_dirty(self._axes._fig)
+
+    set_size = set_fontsize
+
+    def set_color(self, color: ColorLike) -> None:
+        self._axes._twin.label_color = color
+        _set_dirty(self._axes._fig)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("set_"):
+
+            def _noop(*args: Any, **kwargs: Any) -> None:
+                _warn_unsupported_call(
+                    f"twin.axis.label.{name}", "is accepted for matplotlib parity and has no effect"
+                )
+
+            return _noop
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+
+class _TwinAxisProxy(_AxisProxy):
+    """``ax2.yaxis`` for a twin: the *twin's* ticks, formatter, locator, scale and title."""
+
+    @property
+    def _tw(self) -> "_TwinAxis":
+        return self._axes._twin
+
+    @property
+    def label(self) -> _TwinLabelProxy:  # type: ignore[override]
+        return _TwinLabelProxy(self._axes)
+
+    def _changed(self, reset: bool = False) -> None:
+        fig, panel = self._axes._fig, self._axes.panel
+        if reset:
+            fig.refit_twins(panel, reset=(self._axis,))
+        _set_dirty(fig)
+
+    def set_ticks(
+        self, ticks: Any, labels: Any = None, *, minor: bool = False, **kwargs: Any
+    ) -> None:
+        tw = self._tw
+        tw.ticks = None if ticks is None else tuple(float(t) for t in np.atleast_1d(ticks))
+        tw.tick_labels = None if labels is None else tuple(str(t) for t in labels)
+        self._changed()
+
+    def set_ticklabels(self, labels: Any, *, minor: bool = False, **kwargs: Any) -> None:
+        tw = self._tw
+        if tw.ticks is None:
+            values, _ = _twin_ticks(self._axes)
+            tw.ticks = tuple(float(v) for v in values)
+        if len(labels) != len(tw.ticks):
+            raise ValueError(
+                f"set_ticklabels(): got {len(labels)} labels for {len(tw.ticks)} ticks"
+            )
+        tw.tick_labels = tuple(str(t) for t in labels)
+        self._changed()
+
+    def get_ticklocs(self, *, minor: bool = False) -> np.ndarray:
+        return _twin_ticks(self._axes)[0]
+
+    get_majorticklocs = get_ticklocs
+
+    def get_ticklabels(self, minor: bool = False, which: Optional[str] = None) -> list:
+        from matplotlib.text import Text
+
+        values, labels = _twin_ticks(self._axes)
+        return [Text(0.0, float(v), str(t)) for v, t in zip(values, labels)]
+
+    get_majorticklabels = get_ticklabels
+
+    def set_tick_params(self, which: str = "major", reset: bool = False, **kwargs: Any) -> None:
+        self._axes._twin_tick_params(**kwargs)
+
+    def set_major_formatter(self, formatter: Any) -> None:
+        if isinstance(formatter, str):
+            from matplotlib.ticker import StrMethodFormatter
+
+            formatter = StrMethodFormatter(formatter)
+        elif callable(formatter) and not hasattr(formatter, "set_axis"):
+            from matplotlib.ticker import FuncFormatter
+
+            formatter = FuncFormatter(formatter)
+        self._tw.formatter = formatter
+        self._changed()
+
+    def get_major_formatter(self) -> Any:
+        return self._tw.formatter
+
+    def set_major_locator(self, locator: Any) -> None:
+        tw = self._tw
+        tw.locator = locator
+        name = type(locator).__name__
+        if name == "FixedLocator":
+            tw.ticks = tuple(float(v) for v in locator.locs)
+            tw.tick_labels = None
+        elif name == "NullLocator":
+            tw.ticks = ()
+        elif name == "AutoLocator":
+            tw.ticks = None
+        else:
+            tw.ticks = None
+            _warn_unsupported_call(
+                f"twin.{self._axis}axis.set_major_locator",
+                f"has no live equivalent for {name}; the saved figure uses it, the window "
+                "keeps its automatic ticks",
+            )
+        self._changed()
+
+    def get_major_locator(self) -> Any:
+        return self._tw.locator
+
+    def get_inverted(self) -> bool:
+        return bool(self._tw.inverted)
+
+    def set_inverted(self, inverted: bool) -> None:
+        self._tw.inverted = bool(inverted)
+        self._changed(reset=False)
+        fig = self._axes._fig
+        fig.refit_twins(self._axes.panel)
+
+    def get_scale(self) -> str:
+        return self._tw.scale
+
+    def set_scale(self, value: str, **kwargs: Any) -> None:
+        self._axes._t_set_scale(value, **kwargs)
+
+    def grid(self, visible: Optional[bool] = None, which: str = "major", **kwargs: Any) -> None:
+        _warn_unsupported_call(
+            f"twin.{self._axis}axis.grid", "is not drawn: the grid belongs to the first axes"
+        )
+
+    def get_view_interval(self) -> Tuple[float, float]:
+        return self._axes._t_get_lim()
+
+
+class _TwinAxesProxy(AxesProxy):
+    """An axes that shares its host's panel but has its own y scale (``twinx``) or x (``twiny``).
+
+    Everything about the *shared* axis (``set_xlim``, ``set_xlabel``, ``grid``, the title,
+    ``legend``) is the host's. Everything about the *twinned* axis -- label, limits, scale,
+    ticks, direction, tick colour -- is the twin's own, held in a
+    :class:`~glplot.core.twin.TwinAxis` on the panel. The artists drawn through it are marked
+    as the twin's: see :mod:`glplot.core.twin` for how they are mapped onto the host viewport.
+    """
+
+    def __init__(
+        self,
+        fig: GPULinePlot,
+        index: int,
+        axis: str,
+        name: Optional[str] = None,
+        row: int = 0,
+        col: int = 0,
+    ) -> None:
+        super().__init__(fig, index, name=name, row=row, col=col)
+        self._twin_axis = axis
+
+    @property
+    def _twin(self) -> "_TwinAxis":
+        return self.panel.twins[self._twin_axis]
+
+    def __repr__(self) -> str:
+        twin = "twinx" if self._twin_axis == "y" else "twiny"
+        return f"<TwinAxesProxy panel={self._index} twin={twin}>"
+
+    # -- drawing: layers added through this proxy belong to the twin ---------------------------
+
+    def _adopt(self, fresh: List[Any], via: str) -> None:
+        fig, panel = self._fig, self.panel
+        adopted, left_behind = [], []
+        for layer in fresh:
+            (adopted if _twin_core.capture(layer, self._twin_axis) else left_behind).append(layer)
+        if left_behind:
+            _warn_unsupported_call(
+                f"{'twinx' if self._twin_axis == 'y' else 'twiny'}().{via}",
+                "cannot be drawn against its own scale (only lines, markers, bars, fills and "
+                "text can): it stays on the first axes",
+            )
+        for layer in adopted:
+            layer.metadata["twin_rebake"] = lambda ly, _fig=fig, _panel=panel: (
+                _fig.rebake_twin_layer(_panel, ly)
+            )
+        if adopted:
+            fig.refit_twins(panel)
+
+    def __getattr__(self, name: str) -> Any:
+        attr = AxesProxy.__getattr__(self, name)
+        if not callable(attr) or name.startswith("_"):
+            return attr
+
+        def tagged(*args: Any, **kwargs: Any) -> Any:
+            before = len(self.panel.scene.layers)
+            result = attr(*args, **kwargs)
+            fresh = list(self.panel.scene.layers[before:])
+            if fresh:
+                self._adopt(fresh, name)
+            return result
+
+        tagged.__name__ = name
+        return tagged
+
+    def add_line(self, line: Any) -> Any:
+        before = len(self.panel.scene.layers)
+        result = super().add_line(line)
+        fresh = list(self.panel.scene.layers[before:])
+        if fresh:
+            self._adopt(fresh, "add_line")
+        return result
+
+    # -- the twinned axis: label, limits, scale, ticks, direction -------------------------------
+
+    def _t_get_label(self) -> str:
+        return self._twin.label
+
+    def _t_set_label(
+        self,
+        label: Optional[str] = None,
+        fontdict: Optional[dict] = None,
+        labelpad: Optional[float] = None,
+        *,
+        loc: Optional[str] = None,
+        fontsize: Optional[float] = None,
+        color: Optional[ColorLike] = None,
+        s: Optional[str] = None,
+        **text_props: Any,
+    ) -> None:
+        tw = self._twin
+        tw.label = str(_mpl_text_arg("set_ylabel", label, s, "label"))
+        fontsize, color = _merge_fontdict("twin label", fontdict, fontsize, color)
+        if fontsize is not None:
+            tw.label_fontsize = float(fontsize)
+        if color is not None:
+            tw.label_color = color
+        _warn_unsupported(
+            "twin label",
+            {"labelpad": labelpad, "loc": loc, **text_props},
+            {k: "has no effect: axis titles use one fixed text style" for k in text_props},
+        )
+        _set_dirty(self._fig)
+
+    def _t_get_lim(self) -> Tuple[float, float]:
+        tw = self._twin
+        if tw.lim is not None:
+            lo, hi = tw.lim
+        else:
+            rng = _twin_scaled_range(self)
+            if rng is None:
+                lo, hi = 0.0, 1.0
+            else:
+                lo, hi = (
+                    float(v) for v in _scale_utils.inverse(np.array(rng), tw.scale, tw.scale_params)
+                )
+        return (hi, lo) if tw.inverted else (lo, hi)
+
+    def _t_set_lim(
+        self, bottom: Optional[float] = None, top: Optional[float] = None, **kwargs: Any
+    ) -> Tuple[float, float]:
+        if bottom is not None and top is None and isinstance(bottom, (tuple, list, np.ndarray)):
+            bottom, top = bottom[0], bottom[1]
+        current = self._t_get_lim()
+        lo = float(current[0] if bottom is None else bottom)
+        hi = float(current[1] if top is None else top)
+        tw = self._twin
+        tw.inverted = lo > hi
+        tw.lim = (min(lo, hi), max(lo, hi))
+        self._fig.refit_twins(self.panel, reset=(self._twin_axis,))
+        _set_dirty(self._fig)
+        return (lo, hi)
+
+    def _t_get_bound(self) -> Tuple[float, float]:
+        lo, hi = self._t_get_lim()
+        return (min(lo, hi), max(lo, hi))
+
+    def _t_set_bound(self, lower: Optional[float] = None, upper: Optional[float] = None) -> None:
+        lo, hi = self._t_get_bound()
+        self._t_set_lim(lo if lower is None else lower, hi if upper is None else upper)
+
+    def _t_get_scale(self) -> str:
+        return self._twin.scale
+
+    def _t_set_scale(self, value: str, **kwargs: Any) -> None:
+        name = str(value).strip().lower()
+        if name not in _REAL_SCALE_NAMES:
+            raise ValueError(f"unsupported scale: {value!r}. Expected one of {_REAL_SCALE_NAMES}.")
+        tw = self._twin
+        tw.scale, tw.scale_params = name, (dict(kwargs) or None)
+        tw.lim = None if tw.lim is not None and name == "log" and tw.lim[0] <= 0 else tw.lim
+        self._fig.refit_twins(self.panel, reset=(self._twin_axis,))
+        _set_dirty(self._fig)
+
+    def _t_get_ticks(self, *, minor: bool = False) -> np.ndarray:
+        return _twin_ticks(self)[0]
+
+    def _t_set_ticks(
+        self, ticks: Any, labels: Any = None, *, minor: bool = False, **kw: Any
+    ) -> None:
+        _TwinAxisProxy(self, self._twin_axis).set_ticks(ticks, labels)
+
+    def _t_get_ticklabels(self, minor: bool = False, which: Optional[str] = None) -> list:
+        return _TwinAxisProxy(self, self._twin_axis).get_ticklabels()
+
+    def _t_set_ticklabels(self, labels: Any, *, minor: bool = False, **kwargs: Any) -> None:
+        _TwinAxisProxy(self, self._twin_axis).set_ticklabels(labels)
+
+    def _t_invert(self) -> None:
+        tw = self._twin
+        tw.inverted = not tw.inverted
+        self._fig.refit_twins(self.panel)
+        _set_dirty(self._fig)
+
+    def _t_inverted(self) -> bool:
+        return bool(self._twin.inverted)
+
+    def _twin_tick_params(self, **kwargs: Any) -> None:
+        tw = self._twin
+        color = kwargs.get("labelcolor", kwargs.get("colors"))
+        if color is not None:
+            tw.tick_color = color
+        handled = {"colors", "labelcolor", "which", "axis", "reset"}
+        _warn_unsupported(
+            "twin tick_params",
+            {k: v for k, v in kwargs.items() if k not in handled},
+            {k: "has no effect on a twin axis" for k in kwargs if k not in handled},
+        )
+        _set_dirty(self._fig)
+
+    def tick_params(self, axis: str = "both", **kwargs: Any) -> None:
+        """Tick styling: the twinned axis' colour is the twin's own; anything for the other
+        axis (or ``both``) also reaches the shared one."""
+        if axis in (self._twin_axis, "both"):
+            self._twin_tick_params(**kwargs)
+        other = "x" if self._twin_axis == "y" else "y"
+        if axis in (other, "both"):
+            self._activate()
+            tick_params(axis=other, **kwargs)
+
+    @property
+    def xaxis(self) -> Any:  # type: ignore[override]
+        return _TwinAxisProxy(self, "x") if self._twin_axis == "x" else AxesProxy.xaxis.fget(self)
+
+    @property
+    def yaxis(self) -> Any:  # type: ignore[override]
+        return _TwinAxisProxy(self, "y") if self._twin_axis == "y" else AxesProxy.yaxis.fget(self)
+
+
+def _host_method(proxy: Any, name: str) -> Any:
+    """``proxy``'s *host* implementation of ``name``: the real method, or the delegating one."""
+    if name in AxesProxy.__dict__:
+        return AxesProxy.__dict__[name].__get__(proxy)
+    return AxesProxy.__getattr__(proxy, name)
+
+
+#: Methods about one axis, by name template: the twinned letter's go to the twin, the other
+#: letter's to the shared (host) axis.
+_TWIN_AXIS_METHODS = {
+    "get_{a}label": "_t_get_label",
+    "set_{a}label": "_t_set_label",
+    "get_{a}lim": "_t_get_lim",
+    "set_{a}lim": "_t_set_lim",
+    "get_{a}bound": "_t_get_bound",
+    "set_{a}bound": "_t_set_bound",
+    "get_{a}scale": "_t_get_scale",
+    "set_{a}scale": "_t_set_scale",
+    "get_{a}ticks": "_t_get_ticks",
+    "set_{a}ticks": "_t_set_ticks",
+    "get_{a}ticklabels": "_t_get_ticklabels",
+    "set_{a}ticklabels": "_t_set_ticklabels",
+    "invert_{a}axis": "_t_invert",
+    "{a}axis_inverted": "_t_inverted",
+}
+
+
+def _install_twin_axis_methods() -> None:
+    for letter in ("x", "y"):
+        for template, impl in _TWIN_AXIS_METHODS.items():
+            name = template.format(a=letter)
+
+            def method(self: Any, *args: Any, __name=name, __impl=impl, __letter=letter, **kw: Any):
+                if self._twin_axis == __letter:
+                    return getattr(self, __impl)(*args, **kw)
+                return _host_method(self, __name)(*args, **kw)
+
+            method.__name__ = name
+            setattr(_TwinAxesProxy, name, method)
+
+
+_install_twin_axis_methods()
+
+
+class _SecondaryAxisProxy:
+    """What ``secondary_xaxis`` / ``secondary_yaxis`` return: a strip of converted ticks.
+
+    Matplotlib's is an ``Axes`` subclass; this carries what scripts actually do with one --
+    label it, colour it, pin its ticks, change its conversion.
+    """
+
+    def __init__(self, fig: GPULinePlot, index: int, state: Any) -> None:
+        self._fig, self._index, self._state = fig, index, state
+
+    def _changed(self) -> None:
+        _set_dirty(self._fig)
+
+    def _set_label(
+        self, label: Any, fontdict: Any, fontsize: Any, color: Any, **ignored: Any
+    ) -> None:
+        self._state.label = str(label)
+        fontsize, color = _merge_fontdict("secondary axis label", fontdict, fontsize, color)
+        if fontsize is not None:
+            self._state.label_fontsize = float(fontsize)
+        if color is not None:
+            self._state.label_color = color
+        _warn_unsupported(
+            "secondary axis label",
+            ignored,
+            {k: "has no effect: axis titles use one fixed text style" for k in ignored},
+        )
+        self._changed()
+
+    def set_xlabel(
+        self, xlabel: str, fontdict: Optional[dict] = None, labelpad: Any = None, *,
+        loc: Any = None, fontsize: Optional[float] = None, color: Any = None, **text_props: Any,
+    ) -> None:  # fmt: skip
+        self._set_label(xlabel, fontdict, fontsize, color, labelpad=labelpad, loc=loc, **text_props)
+
+    def set_ylabel(
+        self, ylabel: str, fontdict: Optional[dict] = None, labelpad: Any = None, *,
+        loc: Any = None, fontsize: Optional[float] = None, color: Any = None, **text_props: Any,
+    ) -> None:  # fmt: skip
+        self._set_label(ylabel, fontdict, fontsize, color, labelpad=labelpad, loc=loc, **text_props)
+
+    def get_xlabel(self) -> str:
+        return self._state.label
+
+    get_ylabel = get_xlabel
+
+    def set_ticks(
+        self, ticks: Any, labels: Any = None, *, minor: bool = False, **kwargs: Any
+    ) -> None:
+        self._state.ticks = None if ticks is None else tuple(float(t) for t in np.atleast_1d(ticks))
+        self._state.tick_labels = None if labels is None else tuple(str(t) for t in labels)
+        self._changed()
+
+    set_xticks = set_ticks
+    set_yticks = set_ticks
+
+    def set_ticklabels(self, labels: Any, **kwargs: Any) -> None:
+        if self._state.ticks is None or len(labels) != len(self._state.ticks):
+            raise ValueError(
+                "set_ticklabels(): pin the ticks with set_ticks() first, one label each"
+            )
+        self._state.tick_labels = tuple(str(t) for t in labels)
+        self._changed()
+
+    set_xticklabels = set_ticklabels
+    set_yticklabels = set_ticklabels
+
+    def get_xticks(self) -> np.ndarray:
+        return np.asarray(self._state.ticks if self._state.ticks is not None else (), dtype=float)
+
+    get_yticks = get_xticks
+
+    def set_functions(self, functions: Tuple[Any, Any]) -> None:
+        """Change the unit conversion: ``(forward, inverse)``."""
+        self._state.functions = (functions[0], functions[1])
+        self._changed()
+
+    def set_color(self, color: ColorLike) -> None:
+        """Colour the ticks, their labels and the title, as matplotlib does the whole axis."""
+        self._state.tick_color = self._state.label_color = color
+        self._changed()
+
+    def tick_params(self, axis: str = "both", **kwargs: Any) -> None:
+        color = kwargs.get("labelcolor", kwargs.get("colors"))
+        if color is not None:
+            self._state.tick_color = color
+        handled = {"colors", "labelcolor", "which", "reset"}
+        _warn_unsupported(
+            "secondary axis tick_params",
+            {k: v for k, v in kwargs.items() if k not in handled},
+            {k: "has no effect on a secondary axis" for k in kwargs if k not in handled},
+        )
+        self._changed()
+
+    @property
+    def xaxis(self) -> "_SecondaryAxisProxy":
+        return self
+
+    yaxis = xaxis
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith(("set_", "tick_")):
+
+            def _noop(*args: Any, **kwargs: Any) -> None:
+                _warn_unsupported_call(
+                    f"secondary axis.{name}", "is accepted for matplotlib parity and has no effect"
+                )
+
+            return _noop
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+    def __repr__(self) -> str:
+        return f"<SecondaryAxis {self._state.axis} location={self._state.location!r}>"
+
+
+class _AxesFractionTransform:
+    """``ax.transAxes``: a point given as fractions (0..1) of the axes box.
+
+    Only :func:`text` understands it. GLPlot positions text in data coordinates, so the
+    fraction is resolved against the view *at call time*; the headless export keeps the exact
+    fraction and so stays pinned to the corner however the data is later fitted.
+    """
+
+    def __init__(self, axes: Optional["AxesProxy"] = None) -> None:
+        self.axes = axes
+
+
+class _DataTransform:
+    """``ax.transData``: the default, data coordinates -- what every GLPlot artist uses."""
+
+
+_TICK_LABEL_TEXT: Any = None
+
+
+def _tick_label_text_class() -> Any:
+    """``matplotlib.text.Text`` subclass for tick labels, built on first use.
+
+    matplotlib is not imported at ``glplot.pyplot`` import time, hence the factory.
+    ``plt.setp(ax.get_xticklabels(), rotation=45)`` and ``label.set_rotation(45)`` are how
+    most scripts rotate tick labels; a plain ``Text`` would take the value and drop it.
+    The rotation is stored on the *axis*, where the export reads it. Alignment and the
+    other text properties stay on the (detached) Text and so have no effect.
+    """
+    global _TICK_LABEL_TEXT
+    if _TICK_LABEL_TEXT is None:
+        from matplotlib.text import Text
+
+        class _TickLabelText(Text):
+            def __init__(self, proxy: "AxesProxy", axis: str, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self._glplot_proxy, self._glplot_axis = proxy, axis
+
+            def set_rotation(self, s: Any) -> None:
+                super().set_rotation(s)
+                proxy = getattr(self, "_glplot_proxy", None)
+                if proxy is None or s is None:
+                    return
+                degrees = (
+                    {"vertical": 90.0, "horizontal": 0.0}.get(s, s) if isinstance(s, str) else s
+                )
+                # Written to *this label's* axes, not whichever one is active: a script
+                # that rotates one panel's labels after drawing in another is the normal case.
+                proxy._fig.set_axes_option(
+                    proxy.panel, f"axis_tick_rotation_{self._glplot_axis}", float(degrees)
+                )
+                _warn_unsupported_call(
+                    "Text.set_rotation",
+                    "rotates tick labels in exported figures only; the live window draws "
+                    "them horizontally",
+                )
+                _set_dirty(proxy._fig)
+
+        _TICK_LABEL_TEXT = _TickLabelText
+    return _TICK_LABEL_TEXT
+
+
+class _AxesPatch(_FigurePatch):
+    """``ax.patch``: the same background, but with a panel count to be honest about."""
+
+    def set_facecolor(self, color: ColorLike) -> None:
+        if len(self._fig.panels) > 1:
+            _warn_unsupported_call(
+                "Axes.patch.set_facecolor",
+                "sets the whole figure's background: GLPlot has one background colour "
+                "shared by every panel",
+                3,
+            )
+        _figure_set_facecolor(self._fig, color)
+
+    set_fc = set_facecolor
+
+
+def _axes_noop(name: str) -> Any:
+    """An ``Axes`` setter GLPlot accepts for parity and warns, once, that it ignores."""
+
+    def method(self: AxesProxy, *args: Any, **kwargs: Any) -> None:
+        _warn_unsupported_call(
+            f"Axes.{name}", "is accepted for matplotlib parity and has no effect"
+        )
+
+    method.__name__ = name
+    method.__qualname__ = f"AxesProxy.{name}"
+    method.__doc__ = f"``ax.{name}(...)`` -- accepted for matplotlib parity; has no effect."
+    return method
+
+
+for _name in (
+    "set_axisbelow",
+    "set_adjustable",
+    "set_anchor",
+    "label_outer",
+    "set_rasterized",
+    "set_animated",
+    "set_in_layout",
+    "set_clip_on",
+    "set_navigate",
+    "set_picker",
+    "set_mouseover",
+    "set_zorder",
+):
+    setattr(AxesProxy, _name, _axes_noop(_name))
+del _name
+
+
+def _figure_layout_noop(name: str) -> Any:
+    """A ``Figure`` layout method GLPlot accepts for parity and warns, once, that it ignores."""
+
+    def method(self: GPULinePlot, *args: Any, **kwargs: Any) -> None:
+        _warn_unsupported_call(
+            f"Figure.{name}",
+            "is accepted for matplotlib parity and has no effect: GLPlot places panels itself",
+        )
+
+    method.__name__ = name
+    method.__qualname__ = f"GPULinePlot.{name}"
+    method.__doc__ = f"``fig.{name}(...)`` -- accepted for matplotlib parity; has no effect."
+    return method
+
+
+for _name in (
+    "align_labels",
+    "align_xlabels",
+    "align_ylabels",
+    "autofmt_xdate",
+    "set_tight_layout",
+    "set_constrained_layout",
+    "set_layout_engine",
+):
+    setattr(GPULinePlot, _name, _figure_layout_noop(_name))
+del _name
+
+
+def _figure_get_dpi(self: GPULinePlot) -> float:
+    return float(getattr(self, "_figure_dpi", 100.0) or 100.0)
+
+
+def _figure_set_dpi(self: GPULinePlot, value: float) -> None:
+    """``fig.dpi = n``: the design dpi. Resizes nothing -- pixel size is kept; only the
+    inches it works out to (``get_size_inches``) and the export's physical size change."""
+    self._figure_dpi = float(value)
+    _set_dirty(self)
+
+
+def _figure_suplabel(axis: str) -> Any:
+    def method(self: GPULinePlot, t: str, **kwargs: Any) -> None:
+        """``fig.supxlabel`` / ``fig.supylabel`` -- a label shared by every panel."""
+        self._suplabels = {**getattr(self, "_suplabels", {}), axis: (str(t), kwargs)}
+        _warn_unsupported_call(
+            f"Figure.sup{axis}label",
+            "is drawn in exported figures only; the live window has no figure-level label",
+        )
+        _set_dirty(self)
+
+    method.__name__ = f"sup{axis}label"
+    return method
+
+
+def _figure_delaxes(self: GPULinePlot, ax: Any) -> None:
+    _call_as_current(self, delaxes, ax)
+
+
+def _figure_get_children(self: GPULinePlot) -> list:
+    return list(_figure_axes(self))
+
+
+GPULinePlot.dpi = property(_figure_get_dpi, _figure_set_dpi)
+GPULinePlot.get_dpi = _figure_get_dpi
+GPULinePlot.set_dpi = _figure_set_dpi
+GPULinePlot.supxlabel = _figure_suplabel("x")
+GPULinePlot.supylabel = _figure_suplabel("y")
+GPULinePlot.delaxes = _figure_delaxes
+GPULinePlot.get_children = _figure_get_children
+GPULinePlot.savefig = _figure_savefig
+GPULinePlot.show = _figure_show
+GPULinePlot.subplots = _figure_subplots
+GPULinePlot.axes = property(_figure_axes)
+GPULinePlot.get_axes = _figure_axes
+GPULinePlot.number = property(_figure_number)
+GPULinePlot.get_size_inches = _figure_get_size_inches
+GPULinePlot.set_size_inches = _figure_set_size_inches
+GPULinePlot.get_figwidth = lambda self: float(_figure_get_size_inches(self)[0])
+GPULinePlot.get_figheight = lambda self: float(_figure_get_size_inches(self)[1])
+GPULinePlot.set_figwidth = lambda self, val, forward=True: _figure_set_size_inches(
+    self, val, _figure_get_size_inches(self)[1]
+)
+GPULinePlot.set_figheight = lambda self, val, forward=True: _figure_set_size_inches(
+    self, _figure_get_size_inches(self)[0], val
+)
+GPULinePlot.set_facecolor = _figure_set_facecolor
+GPULinePlot.get_facecolor = _figure_get_facecolor
+GPULinePlot.patch = property(_FigurePatch)
+GPULinePlot.get_layout_engine = lambda self: None
+
+
+# ------------------------------------------------------------------
 # Convenience aliases
 # ------------------------------------------------------------------
 
@@ -13919,20 +16340,19 @@ _LAZY_EXPORTS: dict = {
     "matplotlib": ("matplotlib", None),
 }
 
+# matplotlib's interactive widgets. These used to be refused (a matplotlib widget needs a
+# matplotlib canvas and would have built a dead control); ``glplot.widgets`` now provides
+# them on GLPlot's own controls, drawn in the Controls panel, so they resolve like matplotlib's.
+_LAZY_EXPORTS.update(
+    {
+        "Slider": ("glplot.widgets", "Slider"),
+        "Button": ("glplot.widgets", "Button"),
+        "Widget": ("glplot.widgets", "Widget"),
+    }
+)
+
 #: Deliberately *not* re-exported, with the reason, so the omission reads as a decision.
-#:
-#: matplotlib's interactive widgets (``Slider``, ``Button``, ``CheckButtons``...) bind to a
-#: matplotlib canvas and event loop. GLPlot has neither: a widget constructed here would
-#: build without error and then never draw or fire a callback, which is the exact failure
-#: the compat policy exists to avoid. GLPlot's own GUI panels are the equivalent. An
-#: `AttributeError` naming the class is a better answer than a dead control.
 _NOT_EXPORTED: dict = {
-    "Slider": "matplotlib widgets need a matplotlib canvas and event loop; use GLPlot's "
-    "GUI panels instead",
-    "Button": "matplotlib widgets need a matplotlib canvas and event loop; use GLPlot's "
-    "GUI panels instead",
-    "Widget": "matplotlib widgets need a matplotlib canvas and event loop; use GLPlot's "
-    "GUI panels instead",
     "FigureCanvasBase": "GLPlot renders through its own GPU backend and has no matplotlib "
     "canvas",
     "FigureManagerBase": "GLPlot manages its own windows; see figure() and close()",

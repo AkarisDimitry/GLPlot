@@ -32,13 +32,10 @@ How a frame is produced
 -----------------------
 :func:`figure_to_rgb` is the whole bridge, and it has two modes:
 
-* **Live GL** — when ``fig.window`` exists, ``fig.export.savefig()`` renders the scene
-  offscreen through the real pipeline at full quality, to a temporary PNG that is read back
-  immediately after. That round trip is a deliberate trade: reimplementing
-  ``ExportManager.savefig``'s ``glReadPixels`` here to skip the file would duplicate the
-  panel/scissor/projection logic and go stale the first time the render pipeline changed —
-  there is no "give me the pixels" entry point to call instead, and this is the one GL render
-  mode this module has, so paying that cost once here beats maintaining a second copy.
+* **OpenGL** — when ``fig.window`` exists, or ``Animation.save`` is explicitly given
+  ``savefig_kwargs={"renderer": "opengl"}``, the scene is rendered offscreen through the
+  real GPU pipeline at full quality. ``ExportManager.render_rgb`` returns the framebuffer
+  directly, so animation frames do not make a temporary PNG round trip.
 * **Headless** — when it does not,
   :func:`glplot.utils.preview.render_preview_array` draws the same scene through
   matplotlib's Agg backend and hands back the rendered pixels directly, with no file
@@ -52,11 +49,12 @@ How a frame is produced
   ``savefig()`` call uses) is unchanged; :func:`render_preview_array` is a second entry
   point onto the same figure-building code, not a rewrite of it — see its docstring.
 
-**The headless path is not pixel-identical to the GL path.** ``render_preview`` is a
+**The matplotlib path is not pixel-identical to the GL path.** ``render_preview`` is a
 matplotlib re-drawing of the scene, not the GPU renderer; it approximates. An animation
-saved without a window looks like a matplotlib plot of the same data, which is usually
-what a user wants from CI and never quite what they want from a demo reel. Call
-``fig.run()`` first if the GPU look matters.
+saved without a window uses this backwards-compatible path unless a renderer is requested.
+Pass ``savefig_kwargs={"renderer": "opengl"}`` when the GPU look matters, ``"matplotlib"``
+to force the portable preview, or ``"auto"`` to try an invisible GL context and warn before
+falling back to matplotlib when no context can be created.
 
 Limitations, stated plainly
 ---------------------------
@@ -95,7 +93,9 @@ import itertools
 import json
 import os
 import shutil
+import sys
 import tempfile
+import threading
 import uuid
 import warnings
 from pathlib import Path
@@ -235,8 +235,19 @@ def _is_mpl_figure(fig: Any) -> bool:
     Duck-typed on ``get_size_inches`` instead of ``isinstance(fig, Figure)`` so this module
     never has to import pyplot just to answer the question — importing pyplot has global
     side effects (backend selection) that a library must not trigger on import.
+
+    A GLPlot engine now answers to ``get_size_inches``/``savefig``/``canvas`` as well --
+    ``fig.get_size_inches()`` is part of the matplotlib ``Figure`` surface it imitates -- so
+    those three alone cannot tell the two apart. ``scene`` is what separates them: only the
+    engine has one, and it is also what routes a GLPlot figure down the faster frame-grab
+    path in :func:`figure_to_rgb` instead of a PNG round-trip through ``savefig``.
     """
-    return hasattr(fig, "get_size_inches") and hasattr(fig, "savefig") and hasattr(fig, "canvas")
+    return (
+        hasattr(fig, "get_size_inches")
+        and hasattr(fig, "savefig")
+        and hasattr(fig, "canvas")
+        and not hasattr(fig, "scene")
+    )
 
 
 def _dpi_to_scale(dpi: Optional[float]) -> float:
@@ -309,12 +320,121 @@ def figure_to_rgb(fig: Any, dpi: Optional[float] = None) -> np.ndarray:
     )
 
 
-def _render_glplot_frame(fig: Any, scale: float) -> np.ndarray:
-    """Render one frame of a GLPlot engine, through GL if there is a context and Agg if not.
+def _normalize_frame_renderer(renderer: Any) -> Optional[str]:
+    """Validate the GLPlot-only renderer option carried inside ``savefig_kwargs``."""
+    if renderer is None:
+        return None
+    value = str(renderer).strip().lower()
+    if value not in {"auto", "opengl", "matplotlib"}:
+        raise ValueError(
+            "animation renderer must be 'auto', 'opengl', or 'matplotlib'; " f"got {renderer!r}"
+        )
+    return value
 
-    **Live GL** still round-trips through a temporary PNG — see the module docstring's
-    "Rejected: reimplementing ExportManager.savefig's glReadPixels here", unchanged reasoning
-    so this stays unchanged.
+
+@contextlib.contextmanager
+def _frame_renderer_override(fig: Any, renderer: str) -> Iterator[None]:
+    """Temporarily select the route used by :func:`figure_to_rgb`."""
+    missing = object()
+    previous = getattr(fig, "_animation_renderer_override", missing)
+    fig._animation_renderer_override = renderer
+    try:
+        yield
+    finally:
+        if previous is missing:
+            with contextlib.suppress(AttributeError):
+                del fig._animation_renderer_override
+        else:
+            fig._animation_renderer_override = previous
+
+
+def _headless_linux_hint() -> str:
+    """How to get OpenGL back when the fallback happened on a Linux box with no display.
+
+    GLFW needs an X11 or Wayland display even for an invisible window, so over SSH, in CI
+    or in a container the context always fails, and the matplotlib fallback cannot depth-
+    test per pixel: a 3D scatter on a surface comes out buried under it. The fix is one
+    command, so the warning says it rather than leaving the user to diff two machines.
+    """
+    if not sys.platform.startswith("linux"):
+        return ""
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return ""
+    return (
+        " No X11/Wayland display is set: run the script under a virtual one, e.g. "
+        "'xvfb-run -a python your_script.py', to keep the OpenGL renderer."
+    )
+
+
+@contextlib.contextmanager
+def _animation_render_context(fig: Any, renderer: Optional[str]) -> Iterator[None]:
+    """Keep the selected animation renderer ready for one complete save operation.
+
+    ``None`` preserves the historical behaviour: use GL only if the caller already opened
+    a context, otherwise use matplotlib. Explicit ``auto`` is opt-in and tries to create an
+    invisible context once before falling back. Explicit ``opengl`` reports setup failure
+    instead of silently producing a visually different animation.
+    """
+    renderer = _normalize_frame_renderer(renderer)
+
+    if not hasattr(fig, "scene"):
+        if renderer == "opengl":
+            raise ValueError("renderer='opengl' requires a GLPlot figure")
+        yield
+        return
+
+    if renderer is None:
+        with _frame_renderer_override(fig, "auto"):
+            yield
+        return
+
+    if renderer == "matplotlib":
+        with _frame_renderer_override(fig, "matplotlib"):
+            yield
+        return
+
+    setup_error: Optional[BaseException] = None
+    stack = contextlib.ExitStack()
+    try:
+        if (
+            getattr(fig, "window", None) is None
+            and sys.platform == "darwin"
+            and threading.current_thread() is not threading.main_thread()
+        ):
+            raise RuntimeError(
+                "macOS requires creation of the GLFW/OpenGL context on the main thread"
+            )
+
+        context_factory = getattr(fig, "_offscreen_export_context", None)
+        if not callable(context_factory):
+            raise RuntimeError("this GLPlot figure cannot create an offscreen OpenGL context")
+        stack.enter_context(context_factory())
+    except Exception as exc:
+        setup_error = exc
+        stack.close()
+
+    if setup_error is not None:
+        if renderer == "opengl":
+            raise RuntimeError(
+                "Could not create the OpenGL context requested for animation export"
+            ) from setup_error
+        warnings.warn(
+            "OpenGL animation export is unavailable; falling back to the matplotlib "
+            f"renderer ({setup_error}).{_headless_linux_hint()}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        with _frame_renderer_override(fig, "matplotlib"):
+            yield
+        return
+
+    with stack:
+        with _frame_renderer_override(fig, "opengl"):
+            yield
+
+
+def _render_glplot_frame(fig: Any, scale: float) -> np.ndarray:
+    """Render one GLPlot frame through the selected OpenGL or matplotlib route.
 
     **Headless** does not: :func:`glplot.utils.preview.render_preview_array` hands back the
     rendered pixels directly from matplotlib's Agg canvas, skipping the PNG encode and the
@@ -323,17 +443,18 @@ def _render_glplot_frame(fig: Any, scale: float) -> np.ndarray:
     common case, since a saved animation is usually built without ever calling ``fig.run()``
     — this removes roughly a third of each frame's cost with no change in what gets drawn.
 
-    ``ExportManager.savefig`` prints a "Exported high-res image to ..." line on every call.
-    That is fine for one interactive export and intolerable at 300 frames, so stdout is
-    swallowed for the duration of the GL branch — this is the only place that print reaches,
-    and suppressing it here beats every alternative that would require editing the engine.
+    The OpenGL branch calls ``ExportManager.render_rgb`` so it shares the export pipeline's
+    panel, scissor, projection, depth and shader logic without touching the filesystem.
     """
-    if getattr(fig, "window", None) is not None and hasattr(fig, "export"):
-        with tempfile.TemporaryDirectory(prefix="glplot-anim-") as tmpdir:
-            target = os.path.join(tmpdir, "frame.png")
-            with contextlib.redirect_stdout(io.StringIO()):
-                fig.export.savefig(target, scale=scale)
-            return _read_png(target)
+    renderer = getattr(fig, "_animation_renderer_override", "auto")
+    if renderer != "matplotlib" and getattr(fig, "window", None) is not None:
+        export = getattr(fig, "export", None)
+        render_rgb = getattr(export, "render_rgb", None)
+        if callable(render_rgb):
+            return render_rgb(scale=scale)
+
+    if renderer == "opengl":
+        raise RuntimeError("OpenGL animation rendering was requested, but no context is active")
 
     from .utils.preview import render_preview_array
 
@@ -688,7 +809,10 @@ class AbstractMovieWriter(abc.ABC):
 
 def _default_dpi(fig: Any) -> float:
     """The dpi to use when a caller passes none: the figure's own, else matplotlib's."""
-    dpi = getattr(fig, "dpi", None)
+    # An engine now has a ``dpi`` too (``fig.dpi`` is part of the matplotlib surface it
+    # imitates), but it is the *design* dpi that sizes the window, not a frame-grab setting:
+    # honouring it here would change the frame size of every ``figure(dpi=...)`` animation.
+    dpi = None if hasattr(fig, "scene") else getattr(fig, "dpi", None)
     if isinstance(dpi, (int, float)) and dpi > 0:
         return float(dpi)
     value = _rc("savefig.dpi", BASE_DPI)
@@ -1340,8 +1464,10 @@ class Animation:
         twice the default size. See :func:`figure_pixel_size` for what that works out to.
 
         ``extra_anim`` is honoured: the animations are stepped together, one saved frame per
-        tick, as in matplotlib. ``savefig_kwargs`` is accepted and ignored except for
-        ``dpi``; see :meth:`AbstractMovieWriter.grab_frame`.
+        tick, as in matplotlib. Most ``savefig_kwargs`` are accepted for compatibility and
+        ignored; GLPlot additionally consumes ``renderer`` with values ``"opengl"``,
+        ``"matplotlib"`` or ``"auto"``. Omitting it preserves the historical behaviour:
+        an already-live GL context is used, otherwise rendering stays headless through Agg.
         """
         all_anim: List[Animation] = [self]
         if extra_anim is not None:
@@ -1371,6 +1497,7 @@ class Animation:
         else:
             savefig_kwargs = dict(savefig_kwargs)
         savefig_kwargs.pop("bbox_inches", None)
+        renderer = _normalize_frame_renderer(savefig_kwargs.pop("renderer", None))
 
         if fps is None and hasattr(self, "_interval"):
             fps = MS_PER_SECOND / float(self._interval)
@@ -1390,17 +1517,18 @@ class Animation:
             writer = writer_cls(fps if fps is not None else 5, **writer_kwargs)
 
         total_frames = _total_frames(all_anim)
-        with writer.saving(self._fig, str(filename), dpi):
-            for anim in all_anim:
-                anim._init_draw()
-            frame_number = 0
-            for data in zip(*[anim.new_saved_frame_seq() for anim in all_anim]):
-                for anim, datum in zip(all_anim, data):
-                    anim._draw_next_frame(datum, blit=False)
-                    if progress_callback is not None:
-                        progress_callback(frame_number, total_frames)
-                        frame_number += 1
-                writer.grab_frame(**savefig_kwargs)
+        with _animation_render_context(self._fig, renderer):
+            with writer.saving(self._fig, str(filename), dpi):
+                for anim in all_anim:
+                    anim._init_draw()
+                frame_number = 0
+                for data in zip(*[anim.new_saved_frame_seq() for anim in all_anim]):
+                    for anim, datum in zip(all_anim, data):
+                        anim._draw_next_frame(datum, blit=False)
+                        if progress_callback is not None:
+                            progress_callback(frame_number, total_frames)
+                            frame_number += 1
+                    writer.grab_frame(**savefig_kwargs)
 
     # -- HTML ------------------------------------------------------------------------
 
@@ -1723,6 +1851,9 @@ class TimedAnimation(Animation):
         timeline.set_loop("loop" if self._repeat else "once")
         timeline.play()
         self._live_timeline = timeline
+        register_timeline = getattr(fig, "register_live_animation_timeline", None)
+        if callable(register_timeline):
+            register_timeline(timeline)
 
         live_seq = {"iter": self.frame_seq}
         state = {"last_index": None}

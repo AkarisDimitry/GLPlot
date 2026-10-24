@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 import glplot.animation as animation
-from glplot.engine import GPULinePlot
+from glplot.engine import GPULinePlot, glfw
 from glplot.gui import layerops, layerops3d
 
 #: Several tests below build a ``FuncAnimation`` without binding it (they only care about
@@ -205,6 +205,43 @@ class TestFuncAnimationLivePlayback:
         t += 0.05
         _engine_frame(fig, t)
         assert len(seen) > frozen_at, "resuming must let it advance again"
+
+    def test_camera_focus_change_does_not_detach_transport_from_live_animation(self):
+        """Orbiting another subplot while paused must not make Play target that subplot."""
+        from glplot.core import layout
+
+        fig = GPULinePlot()
+        fig.set_panels(layout.grid(1, 2))
+        fig.active_panel_index = 1
+        seen = []
+        ani = animation.FuncAnimation(
+            fig, lambda i: seen.append(i), frames=200, interval=10, repeat=False
+        )
+        bound = fig.panels[1].timeline
+
+        t = 0.0
+        _engine_frame(fig, t)
+        t += 0.03
+        _engine_frame(fig, t)
+        ani.pause()
+        frozen_at = len(seen)
+
+        # A camera gesture activates the subplot under the cursor. It has its own empty,
+        # paused timeline and used to receive the subsequent Play command by mistake.
+        fig.active_panel_index = 0
+        fig.set_3d_view(azim=25.0, elev=40.0)
+        assert fig.transport_timeline() is bound
+
+        fig.options.enable_hud = False
+        fig.hud.on_key = lambda *args: None
+        fig.hud.wants_keyboard = lambda: False
+        fig._on_key(None, glfw.KEY_SPACE, 0, glfw.PRESS, 0)
+        t += 0.05
+        _engine_frame(fig, t)
+
+        assert bound.playing is True
+        assert fig.panels[0].timeline.playing is False
+        assert len(seen) > frozen_at
 
     def test_the_timeline_panels_own_transport_controls_it(self):
         """Play/Pause/Stop/seek as the GUI's Timeline panel actually invokes them.

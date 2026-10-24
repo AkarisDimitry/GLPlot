@@ -62,6 +62,12 @@ class CameraState:
     zoom_y: float = 1.0
     zoom_min: float = 1e-12
     zoom_max: float = 1e12
+    #: An inverted axis: larger values towards the origin of the screen axis (``ax.invert_yaxis()``,
+    #: ``set_ylim(top, bottom)``). Deliberately *not* a negative zoom: ``zoom_*`` and the world
+    #: window stay positive and ``l < r``, which culling, LOD and tick generation all rely on.
+    #: Only the projection (``CameraController.mvp`` / ``screen_to_world``) mirrors.
+    flip_x: bool = False
+    flip_y: bool = False
 
     @property
     def zoom(self) -> float:

@@ -235,6 +235,13 @@ class TestPerVertexColourExport:
         n = self._facecolor_count(lambda: gplt.pcolor(np.arange(30.0).reshape(5, 6)))
         assert n > 1
 
+    def test_pcolormesh_exports_per_cell_colours(self):
+        """``pcolormesh`` tags its patch like ``pcolor`` but used to crash the export outright
+        (``KeyError: 'X'``): the export had a branch for an older implementation's metadata."""
+        x, y = np.meshgrid(np.arange(6.0), np.arange(5.0))
+        n = self._facecolor_count(lambda: gplt.pcolormesh(x, y, np.arange(30.0).reshape(5, 6)))
+        assert n > 1
+
     def test_tripcolor_exports_per_face_colours(self):
         rng = np.random.default_rng(0)
         n = self._facecolor_count(
@@ -243,8 +250,18 @@ class TestPerVertexColourExport:
         assert n > 1
 
     def test_a_flat_patch_still_exports_one_colour(self):
-        """The fix must not overshoot: a bar carries no colour buffer, so one colour."""
-        assert self._facecolor_count(lambda: gplt.bar([0, 1, 2], [3, 4, 5])) == 1
+        """The fix must not overshoot: a bar carries no colour buffer, so one colour.
+
+        Checked on the exported figure itself: a bar is exported as one ``Polygon`` now
+        (see ``preview._draw_layers``), no longer as a ``PolyCollection`` of two triangles,
+        so spying on the collection constructor would see nothing at all.
+        """
+        from glplot.utils.preview import _build_preview_figure
+
+        gplt.bar([0, 1, 2], [3, 4, 5])
+        patches = _build_preview_figure(gplt.gcf(), 1.0).axes[0].patches
+        assert len(patches) == 3
+        assert len({tuple(p.get_facecolor()) for p in patches}) == 1
 
 
 class TestMultiPanelExport:
@@ -487,3 +504,87 @@ class TestNewArtistsExportVisibly:
         finally:
             if os.path.exists(path):
                 os.unlink(path)
+
+
+class TestRenderPreviewBytes:
+    """``render_preview_bytes()`` is the in-memory sibling of ``render_preview()`` (the MCP
+    server returns the picture to a model, so a temp file would only be read straight back)."""
+
+    def test_matches_render_preview_pixel_for_pixel(self):
+        import io
+
+        from PIL import Image
+
+        from glplot.utils.preview import render_preview, render_preview_bytes
+
+        gplt.plot([0, 1, 2, 3], [0, 1, 4, 9], color="blue")
+        gplt.title("parity")
+        data = render_preview_bytes(gplt.gcf())
+        path = tempfile.mktemp(suffix=".png")
+        try:
+            render_preview(gplt.gcf(), path)
+            assert np.array_equal(
+                np.asarray(Image.open(io.BytesIO(data)).convert("RGB")),
+                np.asarray(Image.open(path).convert("RGB")),
+            )
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_formats_and_savefig_keywords_are_honoured(self):
+        from glplot.utils.preview import render_preview_bytes
+
+        gplt.plot([0, 1, 2], [0, 1, 4])
+        assert render_preview_bytes(gplt.gcf(), format="svg").lstrip().startswith(b"<?xml")
+        assert render_preview_bytes(gplt.gcf(), format="pdf").startswith(b"%PDF")
+        assert render_preview_bytes(gplt.gcf(), format="png", dpi=20) != render_preview_bytes(
+            gplt.gcf(), format="png", dpi=80
+        )
+
+    def test_inspect_sees_the_resolved_axes_before_the_figure_closes(self):
+        import matplotlib.pyplot as mpl
+
+        from glplot.utils.preview import render_preview_bytes
+
+        gplt.plot([0, 10], [0, 5])
+        gplt.xlabel("time")
+        seen = {}
+
+        def inspect(fig):
+            ax = fig.axes[0]
+            seen.update(xlabel=ax.get_xlabel(), xlim=ax.get_xlim(), open=len(mpl.get_fignums()))
+
+        before = len(mpl.get_fignums())
+        render_preview_bytes(gplt.gcf(), inspect=inspect)
+        assert seen["xlabel"] == "time" and seen["xlim"][0] <= 0 and seen["xlim"][1] >= 10
+        assert seen["open"] == before + 1  # alive during the callback ...
+        assert len(mpl.get_fignums()) == before  # ... and closed after
+
+    def test_inspect_may_override_savefig_keywords(self):
+        """``fig.set_dpi`` does not change what ``savefig`` writes, so the hook returns it."""
+        import io
+
+        from PIL import Image
+
+        from glplot.utils.preview import render_preview_bytes
+
+        gplt.plot([0, 1, 2], [0, 1, 4])
+        plain = render_preview_bytes(gplt.gcf(), dpi=100)
+        small = render_preview_bytes(gplt.gcf(), dpi=100, inspect=lambda fig: {"dpi": 20})
+        # 20 dpi against 100: the override won, by exactly the ratio of the two.
+        assert Image.open(io.BytesIO(small)).size[0] * 5 == Image.open(io.BytesIO(plain)).size[0]
+
+    def test_the_figure_is_closed_when_inspect_raises(self):
+        import matplotlib.pyplot as mpl
+
+        from glplot.utils.preview import render_preview_bytes
+
+        gplt.plot([0, 1], [0, 1])
+        before = len(mpl.get_fignums())
+
+        def boom(fig):
+            raise RuntimeError("inspector failed")
+
+        with pytest.raises(RuntimeError, match="inspector failed"):
+            render_preview_bytes(gplt.gcf(), inspect=boom)
+        assert len(mpl.get_fignums()) == before

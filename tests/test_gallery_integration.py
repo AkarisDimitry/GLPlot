@@ -35,6 +35,7 @@ EXPECTED_FILES = [
     "26_logit_scale.png",
     "27_inset_axes_image.png",
     "29_colorbar_gallery.png",
+    "30_low_poly_potential_energy_surface.png",
 ]
 
 

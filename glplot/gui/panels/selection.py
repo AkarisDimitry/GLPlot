@@ -486,7 +486,7 @@ class SelectionPanel(Panel):
         plot = self.plot
 
         def run() -> None:
-            plot.set_view(xlim=(x0 - px, x1 + px), ylim=(y0 - py, y1 + py))
+            plot.set_view(xlim=(x0 - px, x1 + px), ylim=(y0 - py, y1 + py), twin_follow=True)
 
         self.submit(run)
 

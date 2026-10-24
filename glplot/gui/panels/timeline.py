@@ -1074,7 +1074,7 @@ def queue_playback(panel: Panel) -> None:
     if engine_drives_playback(panel):
         return
 
-    timeline = panel.plot.active_panel.timeline
+    timeline = panel.timeline
     now = _time.perf_counter()
 
     def apply() -> None:
@@ -1161,8 +1161,14 @@ class TimelinePanel(Panel):
 
     @property
     def timeline(self) -> Timeline:
-        """The active panel's timeline. One per panel, like the cameras."""
-        return self.plot.active_panel.timeline
+        """The timeline currently addressed by the figure's transport controls.
+
+        Ordinarily this is the active panel's timeline. A sole live ``FuncAnimation``
+        keeps ownership after a camera click activates another subplot, so pausing,
+        orbiting and resuming cannot accidentally toggle an empty timeline instead.
+        """
+        resolve = getattr(self.plot, "transport_timeline", None)
+        return resolve() if callable(resolve) else self.plot.active_panel.timeline
 
     def _sync_selection(self) -> None:
         """Drop a selection whose track or keyframe has left the timeline."""

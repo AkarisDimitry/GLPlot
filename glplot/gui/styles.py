@@ -51,6 +51,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .. import colormaps as colormaps_module
 from ..options import BlendMode
 from . import layerops
 from .history import Command
@@ -66,6 +67,7 @@ __all__ = [
     "STYLES",
     "STYLE_KEYS",
     "TickSettings",
+    "apply_colormaps",
     "apply_style",
     "auto_grid_color",
     "oversized_layers",
@@ -278,6 +280,14 @@ class PlotStyle:
     # -- density ---------------------------------------------------------------
     #: Index into ``shaders.DENSITY_SCHEMES``; the heatmap look that goes with this style.
     colormap_index: int = 5
+    #: The matplotlib colormap that goes with this look, for anything coloured *by value*: an
+    #: image, a colour-by-column scatter, a surface. ``colormap_index`` is the GPU density
+    #: ramp (eleven fixed schemes, used by the density/line-family shaders); this is the
+    #: other half, the ramp ``imshow``/``scatter(c=)``/``plot_surface`` map their values
+    #: through, and the one a preset previously had no say in -- so a chalk page got a
+    #: viridis heat map and a synthwave page a stock chart. A name matplotlib resolves, or
+    #: one of :mod:`glplot.colormaps`'s own.
+    cmap: str = "viridis"
     light_bg_mode: bool = True
 
     # -- effects ---------------------------------------------------------------
@@ -548,6 +558,80 @@ _GRUVBOX_PALETTE: Tuple[RGBA, ...] = (
 )
 
 
+#: Northern-lights hues on a polar night: mint green first (the curtain), then ice, violet,
+#: pink, lime, aqua and peach. Every entry is light and saturated because on a gradient page
+#: that is darkest at the top a mid-tone line simply sinks into it.
+_AURORA_PALETTE: Tuple[RGBA, ...] = (
+    (0.300, 1.000, 0.720, 1.0),  # mint
+    (0.400, 0.800, 1.000, 1.0),  # ice
+    (0.760, 0.580, 1.000, 1.0),  # violet
+    (1.000, 0.500, 0.780, 1.0),  # pink
+    (0.880, 1.000, 0.450, 1.0),  # lime
+    (0.200, 0.950, 0.950, 1.0),  # aqua
+    (1.000, 0.720, 0.450, 1.0),  # peach
+)
+
+#: Outrun: hot magenta and electric cyan lead (the two colours every synthwave cover is made
+#: of), then sun orange and yellow, with violet, pink and mint as supporting cast.
+_SYNTHWAVE_PALETTE: Tuple[RGBA, ...] = (
+    (1.000, 0.250, 0.750, 1.0),  # magenta
+    (0.150, 0.950, 1.000, 1.0),  # cyan
+    (1.000, 0.620, 0.180, 1.0),  # sun orange
+    (1.000, 0.930, 0.350, 1.0),  # yellow
+    (0.680, 0.450, 1.000, 1.0),  # violet
+    (1.000, 0.500, 0.620, 1.0),  # pink
+    (0.350, 1.000, 0.800, 1.0),  # mint
+)
+
+#: Dusk: the warm half of the spectrum first (orange, gold, coral), cooled by orchid and a
+#: single dusk blue so a seven-series plot still has something to rest the eye on.
+_SUNSET_PALETTE: Tuple[RGBA, ...] = (
+    (1.000, 0.580, 0.300, 1.0),  # orange
+    (1.000, 0.820, 0.420, 1.0),  # gold
+    (0.960, 0.380, 0.460, 1.0),  # coral
+    (0.820, 0.500, 0.880, 1.0),  # orchid
+    (0.520, 0.720, 1.000, 1.0),  # dusk blue
+    (1.000, 0.660, 0.720, 1.0),  # pink
+    (0.580, 0.950, 0.800, 1.0),  # mint
+)
+
+#: Shallows over deep water: aqua and seafoam first, coral and sand as the warm contrast a
+#: reef has, then sky, lilac and sea-foam white.
+_OCEAN_PALETTE: Tuple[RGBA, ...] = (
+    (0.250, 0.920, 0.920, 1.0),  # aqua
+    (0.550, 1.000, 0.750, 1.0),  # seafoam
+    (1.000, 0.500, 0.450, 1.0),  # coral
+    (0.980, 0.880, 0.580, 1.0),  # sand
+    (0.450, 0.700, 1.000, 1.0),  # sky
+    (0.780, 0.620, 0.960, 1.0),  # lilac
+    (0.920, 0.980, 1.000, 1.0),  # foam
+)
+
+#: Printed-ink pigments on aged paper: brick red first, then the teal, mustard, plum, olive,
+#: navy and rust a mid-century poster was limited to. All dark enough to read as ink.
+_VINTAGE_PALETTE: Tuple[RGBA, ...] = (
+    (0.620, 0.220, 0.160, 1.0),  # brick
+    (0.100, 0.400, 0.420, 1.0),  # teal
+    (0.740, 0.520, 0.080, 1.0),  # mustard
+    (0.420, 0.200, 0.380, 1.0),  # plum
+    (0.380, 0.440, 0.140, 1.0),  # olive
+    (0.120, 0.200, 0.380, 1.0),  # navy
+    (0.800, 0.400, 0.140, 1.0),  # rust
+)
+
+#: Sweet-shop colours, saturated enough to hold up against a near-white page: raspberry
+#: first, then sky, grape, orange, mint-teal, bubblegum and honey.
+_CANDY_PALETTE: Tuple[RGBA, ...] = (
+    (0.800, 0.100, 0.450, 1.0),  # raspberry
+    (0.100, 0.500, 0.850, 1.0),  # sky
+    (0.500, 0.250, 0.800, 1.0),  # grape
+    (0.950, 0.450, 0.100, 1.0),  # orange
+    (0.050, 0.620, 0.550, 1.0),  # mint-teal
+    (0.950, 0.350, 0.700, 1.0),  # bubblegum
+    (0.850, 0.620, 0.050, 1.0),  # honey
+)
+
+
 # -- shared 3D decorations -----------------------------------------------------------
 # Named rather than repeated, because these are three *policies* and the presets that share
 # one should visibly share it.
@@ -598,6 +682,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_alpha=0.08,
         grid_color=None,
         colormap_index=5,  # Ink Fire (White BG)
+        cmap="viridis",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -632,6 +717,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_color=(0.0, 0.0, 0.0),
         ticks=TickSettings(show=True, length_px=4.0, minor=True, minor_subdivisions=5),
         colormap_index=1,  # Viridis — the perceptually uniform default most journals ask for
+        cmap="viridis",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -669,6 +755,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_color=None,
         ticks=TickSettings(show=True, length_px=5.0, minor=False),
         colormap_index=1,  # Viridis: monotonic lightness, safe under all three deficiencies
+        cmap="cividis",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -692,6 +779,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_alpha=0.06,
         grid_color=(0.0, 0.0, 0.0),
         colormap_index=7,  # Grayscale
+        cmap="Greys",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -729,6 +817,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_color=None,
         ticks=TickSettings(show=True, length_px=9.0, minor=False),
         colormap_index=4,  # Turbo: the most separable ramp once a projector has flattened it
+        cmap="turbo",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -766,6 +855,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_color=None,
         ticks=TickSettings(show=True, length_px=9.0, minor=False),
         colormap_index=2,  # Plasma: bright across its whole range, so it holds up unlit
+        cmap="plasma",
         light_bg_mode=False,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -786,6 +876,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_alpha=0.16,
         grid_color=None,
         colormap_index=1,  # Viridis
+        cmap="viridis",
         light_bg_mode=False,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -817,6 +908,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_color=(0.36, 0.40, 0.47),
         ticks=TickSettings(show=True, length_px=5.0, minor=False),
         colormap_index=1,  # Viridis
+        cmap="viridis",
         light_bg_mode=False,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -859,6 +951,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         # the axis means, and they cost four short marks.
         ticks=TickSettings(show=True, length_px=4.0, minor=False),
         colormap_index=1,  # Viridis — the scheme density mode is actually for
+        cmap="viridis",
         light_bg_mode=False,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -894,6 +987,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_color=(0.62, 0.80, 0.95),
         ticks=TickSettings(show=True, length_px=6.0, minor=True, minor_subdivisions=5),
         colormap_index=10,  # Cool — stays inside the drawing's own blue-cyan world
+        cmap="lagoon",
         light_bg_mode=False,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -915,6 +1009,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         show_labels=True,
         grid_alpha=0.0,
         colormap_index=1,
+        cmap="cividis",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -941,6 +1036,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_alpha=0.12,
         grid_color=(0.80, 0.82, 0.78),
         colormap_index=10,  # Cool
+        cmap="lagoon",
         light_bg_mode=False,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -976,6 +1072,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         show_labels=True,
         grid_alpha=0.0,
         colormap_index=5,  # Ink Fire (White BG)
+        cmap="plasma",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -1002,6 +1099,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         show_labels=True,
         grid_alpha=0.06,
         colormap_index=5,
+        cmap="parchment",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -1045,6 +1143,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         show_labels=True,
         grid_alpha=0.0,
         colormap_index=4,  # Turbo — the rainbow a kid actually reaches for
+        cmap="turbo",
         light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -1066,7 +1165,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         background=(0.0, 0.0, 0.0),
         palette=_NEON_PALETTE,
         ink=(0.90, 0.95, 1.0, 1.0),
-        line_width=1.4,
+        line_width=2.0,
         point_size=5.0,
         blend_mode=BlendMode.ADDITIVE,
         antialiasing=True,
@@ -1074,11 +1173,12 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_alpha=0.12,
         grid_color=None,
         colormap_index=9,  # Hot
+        cmap="plasma",
         light_bg_mode=False,
         # ACES, not Reinhard: additive neon overshoots 1.0 constantly, and ACES rolls the
         # highlights off instead of halving the midtones the way Reinhard does. This is
         # the one preset that asks for a tone map, and it asks explicitly.
-        glow=GlowSettings(enabled=True, threshold=0.65, intensity=0.85, radius_px=8.0, knee=0.5),
+        glow=GlowSettings(enabled=True, threshold=0.50, intensity=0.95, radius_px=10.0, knee=0.55),
         tonemap=TONEMAP_ACES,
         axes3d=_AXES3D_DEFAULT,
     ),
@@ -1110,6 +1210,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_alpha=0.16,
         grid_color=(0.345, 0.431, 0.459),  # base01 #586E75
         colormap_index=8,  # Ocean — stays in the palette's own teal-blue register
+        cmap="cividis",
         light_bg_mode=False,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -1143,6 +1244,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_alpha=0.15,
         grid_color=(0.384, 0.447, 0.643),  # #6272A4 "Comment"
         colormap_index=6,  # Magma — echoes the palette's own purple-pink-orange range
+        cmap="magma",
         light_bg_mode=False,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
@@ -1176,7 +1278,205 @@ STYLES: Tuple[PlotStyle, ...] = (
         grid_alpha=0.16,
         grid_color=(0.314, 0.286, 0.271),  # #504945 dark2
         colormap_index=3,  # Inferno — echoes the palette's own black-to-orange warmth
+        cmap="inferno",
         light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_DEFAULT,
+    ),
+    PlotStyle(
+        # FOR: the figure that has to stop someone scrolling. A polar-night gradient, light
+        # saturated lines with a soft bloom, and the one colormap here that was drawn for the
+        # look rather than borrowed: navy through teal to aurora green and a pale lime.
+        #
+        # SACRIFICES: it is a screen look. The bloom is additive light, so it does not
+        # survive a photocopier or a projector in a lit room, and a dozen overlapping series
+        # start to glow into one another -- use Clean when the numbers are the point.
+        key="aurora",
+        name="Aurora",
+        description="Polar-night gradient, luminous mint and ice lines with a soft bloom.",
+        background=(0.020, 0.055, 0.110),
+        gradient=((0.020, 0.040, 0.100), (0.030, 0.140, 0.170)),
+        palette=_AURORA_PALETTE,
+        ink=(0.90, 0.98, 1.0, 1.0),
+        line_width=2.2,
+        point_size=6.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.10,
+        grid_color=(0.45, 0.75, 0.80),
+        colormap_index=1,  # Viridis: the nearest GPU ramp to the aurora colormap's own
+        cmap="aurora",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=True, threshold=0.38, intensity=0.95, radius_px=14.0, knee=0.6),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_PRESENTATION,
+    ),
+    PlotStyle(
+        # FOR: the cover slide, the poster, the figure whose job is atmosphere. Hot magenta
+        # and electric cyan on an ultraviolet-to-plum gradient, a retro magenta grid, and a
+        # strong additive bloom -- the loudest preset in the gallery on purpose.
+        #
+        # SACRIFICES: legibility of anything small. Additive blending turns overlaps into
+        # white, magenta on violet is a low-lightness pair for anyone with a colour-vision
+        # deficiency, and the bloom softens thin text-like detail. A look, not a measuring tool.
+        key="synthwave",
+        name="Synthwave",
+        description="Ultraviolet night, magenta grid, cyan and sun-orange glow. Loud on purpose.",
+        background=(0.080, 0.020, 0.150),
+        gradient=((0.040, 0.010, 0.100), (0.240, 0.030, 0.300)),
+        palette=_SYNTHWAVE_PALETTE,
+        ink=(0.98, 0.90, 1.0, 1.0),
+        line_width=2.4,
+        point_size=6.5,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.24,
+        grid_color=(0.95, 0.25, 0.75),
+        colormap_index=6,  # Magma: the nearest GPU ramp to the synthwave colormap
+        cmap="synthwave",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=True, threshold=0.50, intensity=0.95, radius_px=15.0, knee=0.5),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_PRESENTATION,
+    ),
+    PlotStyle(
+        # FOR: a warm presentation page that is not a white rectangle. A plum-to-ember
+        # gradient with orange, gold and coral leading, and a colormap that climbs from plum
+        # through rose and orange to cream -- the look of the hour after the sun goes down.
+        #
+        # SACRIFICES: the warmth is a colour decision a colour-managed projector may not
+        # honour, and the three leading hues (orange, gold, coral) sit close in hue, so a
+        # plot with more than four series wants direct labels rather than a legend.
+        key="sunset",
+        name="Sunset",
+        description="Plum-to-ember gradient, orange, gold and coral. A warm night page.",
+        background=(0.150, 0.060, 0.170),
+        gradient=((0.090, 0.040, 0.170), (0.420, 0.130, 0.220)),
+        palette=_SUNSET_PALETTE,
+        ink=(1.0, 0.95, 0.90, 1.0),
+        line_width=2.2,
+        point_size=6.5,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.12,
+        grid_color=(1.0, 0.75, 0.65),
+        colormap_index=3,  # Inferno: the nearest GPU ramp to the sunset colormap
+        cmap="sunset",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_PRESENTATION,
+    ),
+    PlotStyle(
+        # FOR: the cool counterpart to Sunset -- deep water fading to teal, with aqua and
+        # seafoam leading and coral as the one warm accent a reef actually has. It is the
+        # look for anything about flow, waves, fields, signal in a medium.
+        #
+        # SACRIFICES: two of the lead colours (aqua and seafoam) are close in lightness, so
+        # greyscale or colour-blind readers lose the distinction -- the coral and sand are
+        # what carry a plot that has to survive that, and they are deliberately 3rd and 4th.
+        key="ocean",
+        name="Ocean",
+        description="Deep-water gradient, aqua and seafoam with a coral accent.",
+        background=(0.005, 0.100, 0.190),
+        gradient=((0.010, 0.060, 0.140), (0.000, 0.200, 0.300)),
+        palette=_OCEAN_PALETTE,
+        ink=(0.92, 0.98, 1.0, 1.0),
+        line_width=2.0,
+        point_size=6.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.12,
+        grid_color=(0.55, 0.85, 0.95),
+        colormap_index=8,  # Ocean
+        cmap="lagoon",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_PRESENTATION,
+    ),
+    PlotStyle(
+        # FOR: the figure that should look printed a long time ago -- an essay, a history of
+        # something, a poster for a talk about old instruments. Aged paper with a fine grain,
+        # sepia ink, and the limited, slightly-off pigments of mid-century printing; the
+        # colormap runs from paper to deep aubergine like an overinked woodcut.
+        #
+        # SACRIFICES: precision. The paper tone costs contrast against pure white (still well
+        # inside the readable range), the grain is static texture that a vector export will
+        # not reproduce, and mustard-on-cream is the weakest pair in the palette.
+        key="vintage",
+        name="Vintage Print",
+        description="Aged paper with fine grain, sepia ink and mid-century pigments.",
+        background=(0.955, 0.915, 0.820),
+        palette=_VINTAGE_PALETTE,
+        ink=(0.19, 0.13, 0.10, 1.0),
+        line_width=1.9,
+        point_size=5.5,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.18,
+        grid_color=(0.45, 0.35, 0.25),
+        ticks=TickSettings(show=True, length_px=5.0, minor=True, minor_subdivisions=5),
+        colormap_index=5,  # Ink Fire (White BG): ink on paper
+        cmap="parchment",
+        light_bg_mode=True,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        grain=0.08,
+        axes3d=_AXES3D_TECHNICAL,
+    ),
+    PlotStyle(
+        # FOR: a friendly, high-energy page -- a workshop handout, a product dashboard, a
+        # figure for an audience that is not going to be shown a p-value. Thick strokes,
+        # large outlined markers like stickers, saturated sweet-shop colours on a faintly
+        # pink white, and a raspberry-to-grape colormap.
+        #
+        # SACRIFICES: seriousness, and a little precision -- fat lines and big markers hide
+        # fine structure. Raspberry and bubblegum are near neighbours in hue, so they are
+        # kept apart in the palette order rather than side by side.
+        key="candy",
+        name="Candy",
+        description="Thick strokes, sticker-outlined markers, sweet-shop colours on pink-white.",
+        background=(0.995, 0.972, 0.985),
+        palette=_CANDY_PALETTE,
+        ink=(0.16, 0.09, 0.24, 1.0),
+        line_width=2.6,
+        point_size=8.0,
+        point_outline=True,
+        point_outline_color=(1.0, 1.0, 1.0, 1.0),
+        point_outline_width=1.2,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.10,
+        grid_color=(0.55, 0.30, 0.55),
+        colormap_index=6,  # Magma
+        cmap="candy",
+        light_bg_mode=True,
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_DEFAULT,
@@ -1518,6 +1818,33 @@ def _apply_layer(plot: Any, layer: Any, index: int, style: PlotStyle) -> None:
             _repaint_uniform_colors(layer, color)
 
 
+#: The :func:`layerops.layer_colormap_kind` answers a preset's colormap can re-map. The
+#: fourth, ``"gl_line"``, is a *shader* ramp indexed by vertex id, not by data -- a different
+#: namespace, driven by ``colormap_index`` -- so it is deliberately not in this tuple.
+_COLORMAP_KINDS = ("image", "values2d", "values3d")
+
+
+def apply_colormaps(plot: Any, style: PlotStyle) -> int:
+    """Re-map every value-coloured layer through ``style.cmap``; return how many changed.
+
+    **Queued commands only.** Layers a colormap cannot reach (a patch, text, a scatter whose
+    colours were handed in as literal RGBA) are skipped silently: they have no scalars to
+    re-map, and a preset that raised on them would make "restyle" fail on any figure that
+    mixed data layers with a plain one.
+    """
+    name = colormaps_module.resolve(style.cmap)
+    changed = 0
+    for layer in list(getattr(plot.scene, "layers", [])):
+        if layerops.layer_colormap_kind(layer) not in _COLORMAP_KINDS:
+            continue
+        try:
+            if layerops.set_layer_colormap(plot, layer, cmap=name):
+                changed += 1
+        except (ValueError, TypeError):
+            continue
+    return changed
+
+
 def _axes3d_targets(plot: Any) -> List[Any]:
     """Every :class:`~glplot.core.camera3d.Axes3DOptions` in the figure, panels included.
 
@@ -1567,7 +1894,9 @@ def _rebuild_axes3d(plot: Any) -> None:
         rebuild()
 
 
-def apply_style(plot: Any, style: PlotStyle, *, layers: bool = True) -> int:
+def apply_style(
+    plot: Any, style: PlotStyle, *, layers: bool = True, colormaps: bool = False
+) -> int:
     """Apply ``style`` to the live scene. **The** one function that applies a preset.
 
     **Queued commands only** (CONTRACT §1.1): it writes options and layer arrays, and the
@@ -1578,6 +1907,14 @@ def apply_style(plot: Any, style: PlotStyle, *, layers: bool = True) -> int:
     default look at startup, where the user's own ``gplt.plot(..., color=...)`` must win.
     The *page* includes the 3D box: axis decoration is decoration whoever set it, so it is
     written in both modes, while the 3D camera is never touched in either.
+
+    ``colormaps=True`` additionally re-maps every layer coloured *by value* -- an image, a
+    colour-by-column scatter, a surface -- through the preset's own :attr:`PlotStyle.cmap`.
+    That is a different operation from ``layers``: repainting a uniform colour replaces a
+    choice, while re-mapping keeps the scalars each element was coloured from and only
+    changes the ramp they go through, exactly what the Scene panel's colormap picker does.
+    So it is its own switch (and off by default, so the callers that predate it, and any
+    script that chose a colormap on purpose, see no change).
 
     Returns the number of layers the hand-drawn transform skipped for being too large; 0
     for every preset that is not hand-drawn. Callers surface it, per SPEC_FIX P1-F.
@@ -1641,6 +1978,10 @@ def apply_style(plot: Any, style: PlotStyle, *, layers: bool = True) -> int:
         for index, layer in enumerate(list(getattr(plot.scene, "layers", []))):
             _apply_layer(plot, layer, index, style)
         skipped = hand_drawn_layers(plot, style)
+    if colormaps:
+        apply_colormaps(plot, style)
+        # And remember it for what is drawn next on this figure (``pyplot._resolve_cmap``).
+        plot._style_cmap = colormaps_module.resolve(style.cmap)
 
     # Last, and after ``set_background_mode``: rebuilding the 3D decoration re-reads
     # ``light_bg_mode`` for its ink (``engine._axis3d_color``), so doing it earlier would
@@ -1703,7 +2044,7 @@ _LAYER_STYLE_FIELDS = (
 )
 
 
-def capture_state(plot: Any, *, layers: bool = True) -> Dict[str, Any]:
+def capture_state(plot: Any, *, layers: bool = True, colormaps: bool = False) -> Dict[str, Any]:
     """Everything :func:`apply_style` is about to overwrite, as plain data.
 
     Snapshot/restore rather than a hand-written inverse, because the inverse of "apply a
@@ -1732,7 +2073,14 @@ def capture_state(plot: Any, *, layers: bool = True) -> Dict[str, Any]:
             for axes in _axes3d_targets(plot)
         ],
         "layers": [],
+        "colormaps": [],
     }
+    if colormaps:
+        state["colormaps"] = [
+            {"layer_id": getattr(layer, "layer_id", None), "meta": _colormap_meta(layer)}
+            for layer in list(getattr(plot.scene, "layers", []))
+            if layerops.layer_colormap_kind(layer) in _COLORMAP_KINDS
+        ]
     if not layers:
         return state
 
@@ -1756,6 +2104,16 @@ def capture_state(plot: Any, *, layers: bool = True) -> Dict[str, Any]:
 
     state["layers"] = entries
     return state
+
+
+def _colormap_meta(layer: Any) -> Dict[str, Any]:
+    """A layer's ``cmap``/``vmin``/``vmax`` exactly as stored -- ``None`` means autoscale.
+
+    Read straight from ``metadata`` rather than through ``layer_colormap``: restoring the
+    *resolved* range would turn an autoscaling end into a pinned one.
+    """
+    metadata = getattr(layer, "metadata", None) or {}
+    return {name: metadata.get(name) for name in ("cmap", "vmin", "vmax")}
 
 
 def _restore_layer(plot: Any, entry: Dict[str, Any]) -> None:
@@ -1828,11 +2186,25 @@ def restore_state(plot: Any, state: Dict[str, Any]) -> None:
     for entry in state.get("layers", []):
         _restore_layer(plot, entry)
 
+    for entry in state.get("colormaps", []):
+        layer = layerops.find_layer(plot, entry.get("layer_id"))
+        if layer is None:
+            continue
+        meta = entry["meta"]
+        try:
+            layerops.set_layer_colormap(
+                plot, layer, cmap=meta["cmap"], vmin=meta["vmin"], vmax=meta["vmax"]
+            )
+        except (ValueError, TypeError):
+            continue
+
     _rebuild_axes3d(plot)
     layerops.mark_scene_dirty(plot)
 
 
-def style_command(plot: Any, style: PlotStyle, *, layers: bool = True) -> Command:
+def style_command(
+    plot: Any, style: PlotStyle, *, layers: bool = True, colormaps: bool = False
+) -> Command:
     """An undoable "apply this preset", for ``Panel.push_command``.
 
     The state is captured when ``do`` first *runs* (inside the drain), not when the command
@@ -1843,8 +2215,8 @@ def style_command(plot: Any, style: PlotStyle, *, layers: bool = True) -> Comman
 
     def do() -> None:
         if not captured:
-            captured.update(capture_state(plot, layers=layers))
-        apply_style(plot, style, layers=layers)
+            captured.update(capture_state(plot, layers=layers, colormaps=colormaps))
+        apply_style(plot, style, layers=layers, colormaps=colormaps)
 
     def undo() -> None:
         if captured:

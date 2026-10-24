@@ -19,6 +19,8 @@ High-performance GPU-accelerated plotting library for Python, designed to handle
    guide/3d-visualization
    guide/advanced-features
    guide/performance-tips
+   guide/mcp-server
+   guide/gallery-recipes
 
 .. toctree::
    :maxdepth: 2

@@ -21,7 +21,7 @@ import pytest
 from PIL import Image
 
 import glplot.pyplot as gplt
-from glplot.utils.preview import DEFAULT_SCATTER_SIZE_PT2
+from glplot.utils.preview import DEFAULT_SCATTER_SIZE_PT2, _point_diameter_px_to_area_pt2
 
 #: A colour nothing else in these figures uses, so the marker is unambiguous to find.
 MARKER_RGB = (255, 0, 0)
@@ -113,6 +113,34 @@ class TestExportedMarkerSize:
         """Every gallery figure that tuned ``s=`` must keep exporting identically."""
         seen = self._exported_scatter_kwargs(monkeypatch, s=110.0)
         assert seen["s"] == 110.0
+
+
+class TestExported3DMarkerSize:
+    """The GL pixel diameter must become matplotlib's point-squared area."""
+
+    def test_scalar_size_conversion(self):
+        assert _point_diameter_px_to_area_pt2(10.0) == pytest.approx((10.0 * 72.0 / 100.0) ** 2)
+
+    def test_per_point_size_conversion(self):
+        converted = _point_diameter_px_to_area_pt2(np.array([5.0, 10.0]))
+        assert converted == pytest.approx([(5.0 * 72.0 / 100.0) ** 2, (10.0 * 72.0 / 100.0) ** 2])
+
+    def test_preview_hands_axes3d_the_converted_area(self, monkeypatch, tmp_path):
+        seen = []
+        from mpl_toolkits.mplot3d.axes3d import Axes3D
+
+        real_scatter = Axes3D.scatter
+
+        def spy(self, *args, **kwargs):  # noqa: ANN001 - matplotlib Axes3D.scatter
+            seen.append(kwargs.get("s"))
+            return real_scatter(self, *args, **kwargs)
+
+        monkeypatch.setattr(Axes3D, "scatter", spy)
+        gplt.figure(figsize=(4, 4), projection="3d")
+        gplt.scatter3d([0.0], [0.0], [0.0], color="red", s=10.0)
+        gplt.savefig(str(tmp_path / "scatter3d.png"))
+
+        assert any(value == pytest.approx((10.0 * 72.0 / 100.0) ** 2) for value in seen)
 
 
 class TestRenderedAgainstMatplotlib:

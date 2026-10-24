@@ -29,6 +29,20 @@ pip install -e .
 Requires Python 3.11+. Core dependencies: numpy, scipy, matplotlib, glfw, PyOpenGL,
 `imgui-bundle` (for the on-screen control panel).
 
+GLPlot pins `matplotlib>=3.6,<3.10`. It mirrors Matplotlib's API (signatures of `pyplot`
+functions, `Animation`, `voxels`, ...) and uses its Agg renderer for saved figures, and those
+signatures changed between 3.9, 3.10 and 3.11. Without an upper bound, pip resolved different
+Matplotlib majors on different Python versions, so there was no single API to match. If another
+package in your environment needs Matplotlib 3.10 or newer, install GLPlot in its own virtual
+environment.
+
+To let an LLM drive GLPlot through [MCP](https://modelcontextprotocol.io) (see
+[below](#use-glplot-from-an-llm-mcp)), add the optional extra:
+
+```bash
+pip install "glplot[mcp]"
+```
+
 ## 30-second example
 
 ```python
@@ -442,7 +456,7 @@ plt.show()
 ```
 </details>
 
-**All of the above render at 60+ FPS** with interactive panning, zooming, and rotation, regardless of point count. Discover more in the [example gallery](examples/gallery/README.md) (28 static scripts) and the [animated gallery](examples/gallery/animations/README.md) (15 animated scripts).
+**All of the above render at 60+ FPS** with interactive panning, zooming, and rotation, regardless of point count. Discover more in the [example gallery](examples/gallery/README.md) (28 static scripts) and the [animated gallery](examples/gallery/animations/README.md) (16 animated scripts).
 
 ## Features
 
@@ -456,8 +470,48 @@ plt.show()
 - **Animation** — `glplot.animation.FuncAnimation`/`ArtistAnimation`, exportable to GIF/video
 - **A live control panel** — `python -m glplot` opens a workstation for editing a scene,
   its layers, and its styling interactively, with undo history
+- **Native interactive controls** — `gplt.slider`, `button`, `checkbox`, `dropdown`,
+  `range_slider`, `textbox`, `color_picker` and `@gplt.interact` put widgets in a Controls
+  panel beside the plot; callbacks run once per frame with the latest values, errors are
+  shown in place, values can be saved as presets. `glplot.widgets` runs matplotlib
+  `Slider`/`Button`/`CheckButtons`/`RadioButtons`/`TextBox` scripts unchanged
+- **A gallery you can point at your data** — the Gallery panel turns the examples into 22 recipes:
+  pick a card (each is a real render), map your columns, and the plot is drawn in the look it was
+  designed in -- 2-D and 3-D, one undoable step, with a live preview of *your* data first
+- **25 looks, each with its own colormap** — from journal and colour-blind-safe to aurora,
+  synthwave and vintage print; the Style panel shows every preset rendered on a line plot, a
+  scatter, bars, a heat map or a 3-D surface of your choice
+- **Native MCP server** — `python -m glplot.mcp` lets Claude or any MCP client build figures,
+  datasets and plots and *look at the result* (every render returns an image), with no
+  arbitrary code execution and file access confined to directories you choose
 - **Numerically stable at extreme zoom** — double-precision, viewport-relative coordinate
   transforms avoid the jitter that single-precision GPU pipelines show at large offsets
+
+## Use GLPlot from an LLM (MCP)
+
+GLPlot is an [MCP](https://modelcontextprotocol.io) server: a model creates a figure, builds or
+loads data, draws, restyles, and gets every render back as an image plus a summary of the axes,
+so it can check and fix its own plot. No window is opened.
+
+```bash
+pip install "glplot[mcp]"
+claude mcp add glplot -- python -m glplot.mcp --root ~/data      # Claude Code
+```
+
+For Claude Desktop, add to `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "glplot": { "command": "python", "args": ["-m", "glplot.mcp", "--root", "/Users/me/data"] } } }
+```
+
+`--root` is the only directory the model may read data from or save images into (repeatable);
+without it, file access is off. Formulas run through the same restricted expression evaluator as
+the workstation, with size-capped array constructors, so the model can generate data
+(`"sin(2*pi*t) * exp(-t)"`) instead of typing it, and there is no tool that runs arbitrary code.
+Tools: `create_figure`, `create_dataset`, `load_dataset`, `add_plot` (14 kinds), `add_function`,
+`add_field` (image/contour/surface...), `add_recipe` (the gallery's 22 recipes: a plot kind in the
+look it was designed in, from your data or its own sample), `add_annotation`, `set_axes`,
+`set_style`, `render_figure`, `save_figure`, and a few more. Full guide: [docs/source/guide/mcp-server.rst](docs/source/guide/mcp-server.rst).
 
 ## Quick Reference Recipes
 
@@ -479,6 +533,39 @@ plt.figure("Density")
 plt.plot_lines(a, b, x_range=(-2, 2))
 plt.show(density=True)
 ```
+
+**Sliders and buttons that drive your analysis (`interact`)**
+
+Each keyword becomes a control in the Controls panel; the function re-runs whenever one
+moves. Return `(x, y)` and GLPlot draws the curve and keeps it updated; return a `dict`
+and it appears as a table of results:
+
+```python
+import numpy as np
+import glplot.pyplot as plt
+
+x = np.linspace(0, 10, 5000)
+
+@plt.interact(amp=(0, 5), freq=(0.1, 10), wave=["sin", "cos"])
+def signal(amp=1.0, freq=1.0, wave="sin"):
+    return x, amp * getattr(np, wave)(freq * x)
+
+@plt.interact
+def stats(amp, freq):                      # reuses the controls above by name
+    return {"Peak": amp, "Period": 2 * np.pi / freq}
+
+@plt.button("Double amplitude", shortcut="Mod+Alt+D")
+def double():
+    plt.controls()["amp"].value *= 2
+
+plt.show()
+```
+
+Controls can also be used on their own (`amp = plt.slider("Amplitude", 0, 5)`,
+`amp.on_change(fn)`, `amp.value`), grouped with `with plt.control_group("Filter"):`, and
+saved or restored with `plt.controls().save_preset(...)` / `.save(path)`. See
+[`examples/ex_interactive_controls.py`](examples/ex_interactive_controls.py) for a complete
+signal-analysis bench.
 
 ## How it compares
 

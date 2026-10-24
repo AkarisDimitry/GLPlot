@@ -167,16 +167,29 @@ class RendererManager:
         # Separate system overlay layers so they render in the correct order:
         #   1. floor3d  — behind all data (semi-transparent floor plane)
         #   2. data     — user geometry
-        #   3. axis3d   — bounding-box wireframe always on top
+        #   3. overlays — 3D layers with style.depth_test=False, drawn without depth
+        #                 testing, so they must come after everything they sit on top of
+        #   4. axis3d   — bounding-box wireframe always on top
+        from ..core.layers import Layer3D
+
+        def _is_user_overlay(layer: BaseLayer) -> bool:
+            return isinstance(layer, Layer3D) and not layer.style.depth_test
+
         floor_layers = [
             layer for layer in sorted_layers if layer.metadata.get("artist") == "floor3d"
         ]
         axis_layers = [layer for layer in sorted_layers if layer.metadata.get("artist") == "axis3d"]
+        overlay_layers = [
+            layer
+            for layer in sorted_layers
+            if _is_user_overlay(layer) and layer.metadata.get("artist") not in ("floor3d", "axis3d")
+        ]
         data_layers = self._order_by_opacity(
             [
                 layer
                 for layer in sorted_layers
                 if layer.metadata.get("artist") not in ("floor3d", "axis3d")
+                and not _is_user_overlay(layer)
             ]
         )
 
@@ -196,6 +209,7 @@ class RendererManager:
 
         _draw_batch(floor_layers)
         _draw_batch(data_layers)
+        _draw_batch(overlay_layers)
         _draw_batch(axis_layers)
 
     @staticmethod
@@ -269,13 +283,23 @@ class RendererManager:
                 if not all(np.isfinite(b)):
                     continue
                 tx, ty = layer.translation
-                xmin = min(xmin, b[0] + tx)
-                xmax = max(xmax, b[1] + tx)
-                ymin = min(ymin, b[2] + ty)
-                ymax = max(ymax, b[3] + ty)
+                # A layer on a twin axis is in the *other* axis' scale: a ``twinx`` layer
+                # shares x but its y must not stretch the host's y range (and vice versa).
+                twin = layer.metadata.get("twin_axis")
+                if twin != "x":
+                    xmin = min(xmin, b[0] + tx)
+                    xmax = max(xmax, b[1] + tx)
+                if twin != "y":
+                    ymin = min(ymin, b[2] + ty)
+                    ymax = max(ymax, b[3] + ty)
                 found = True
 
-        if not found or xmin == float("inf"):
+        if not found:
             return None
+        # A panel whose only data is on a twin has nothing of its own on the other axis.
+        if xmin == float("inf"):
+            xmin, xmax = 0.0, 1.0
+        if ymin == float("inf"):
+            ymin, ymax = 0.0, 1.0
 
         return (xmin, xmax, ymin, ymax)

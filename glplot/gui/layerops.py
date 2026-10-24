@@ -1605,11 +1605,13 @@ def _tag_colormapped(layer: Any, values: np.ndarray, cmap: str) -> None:
     (``pyplot.py:1267-1271`` says the same, and :func:`layer_colormap_kind` keys the whole
     ``values2d`` path on this being present).
 
-    ``marker="s"`` matches what ``pyplot.hist2d`` writes and **is inert today**: nothing
-    reads ``metadata["marker"]`` -- not a renderer, not a shader. ``pyplot`` writes it in
-    four places and every scatter still draws as a round point, so a heat map's cells are
-    dots with gaps rather than tiles. Written anyway so both heat-map paths already agree
-    on the day the scatter renderer learns marker shapes, not because it does anything.
+    No ``marker`` is written. This used to write ``marker="s"`` "to agree with what
+    ``pyplot.hist2d`` writes", with a comment that it was inert because nothing read
+    ``metadata["marker"]``. The scatter renderer reads it now (``marker_shape_index``), so
+    every colour-by-column scatter built here -- the Data panel's "Color by", a gallery
+    recipe -- was silently drawn with *square* markers while ``pyplot.scatter(c=...)`` drew
+    circles. ``hist2d`` is a filled mesh these days and has no markers at all, so the
+    agreement it was kept for is gone; a colormapped scatter is a round-point scatter.
     """
     # `pyplot`'s own retainer, not a copy of it: the size cap it enforces is already
     # coupled to this module by design ("past it ... layerops.layer_colormap_kind reports
@@ -1619,7 +1621,6 @@ def _tag_colormapped(layer: Any, values: np.ndarray, cmap: str) -> None:
 
     layer.metadata.update(
         {
-            "marker": "s",
             "cmap": cmap,
             "vmin": None,
             "vmax": None,
@@ -1965,6 +1966,7 @@ _KIND_CHANGE_STYLE_FIELDS = (
     # not silently drop the ADDITIVE the user set on it.
     "blend_mode",
     "depth_write",
+    "depth_test",
     "auto_alpha",
 )
 

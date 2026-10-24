@@ -65,9 +65,10 @@ import numpy as np
 from ...core import layout as _layout
 from ...options import DEFAULT_AXIS_MARGINS, STOCK_WINDOW_TITLES, BlendMode
 from ...utils.shaders import DENSITY_SCHEMES, eval_colormap
-from .. import layerops, layerops3d, styles, widgets
+from .. import gallery_assets, layerops, layerops3d, styles, widgets
 from ..history import Command
 from .base import Panel
+from .thumbs import Thumbnails
 
 try:
     from imgui_bundle import imgui
@@ -111,6 +112,10 @@ OUTLINE_DEAD_TYPES = frozenset({"text"})
 
 #: Text layers have no alpha uniform — ``text.py`` packs ``style.color`` and nothing else.
 ALPHA_DEAD_TYPES = frozenset({"text"})
+
+#: The layer selector's "every data layer" group. Any other group key is a layer_type
+#: ("scatter", "mesh3d", ...), which is why this one is a string no layer type can be.
+GROUP_ALL = "__all__"
 
 
 #: Paired with ``renderers/axis.py``'s ``AUTO_GRID_COLOR``. While ``axis_grid_color``
@@ -224,11 +229,20 @@ TONEMAP_NAMES = ("Off", "Reinhard", "ACES")
 #: level, so importing it here would break headless import (CONTRACT §5.1).
 DEFAULT_GLOW_KNEE = 0.5
 
-#: Geometry of one preset card in the Styles tab.
+#: Geometry of one preset card in the Styles tab. CARD_HEIGHT is the minimum: a card
+#: grows when its description wraps onto more lines than fit.
 CARD_HEIGHT = 52.0
+#: The name label drawn in the preset's own colours: inner padding, and the height of the
+#: palette stripe along its bottom edge.
+NAME_CHIP_PAD_X = 6.0
+NAME_CHIP_PAD_Y = 2.0
+NAME_CHIP_STRIPE = 3.0
 THUMB_WIDTH = 132.0
 THUMB_HEIGHT = 44.0
 PAD = 4.0
+#: The image-card grid: a card never gets narrower than this before a column is dropped.
+GRID_MIN_WIDTH = 168.0
+GRID_GAP = 8.0
 
 #: Sample count for a thumbnail curve. Enough for a smooth sine at 132px, few enough that
 #: the hand-drawn jitter of all three curves stays a sub-millisecond one-off.
@@ -457,6 +471,13 @@ class StylePanel(Panel):
         self._style_key: Optional[str] = None
         #: Whether applying a preset also recolours existing layers, or only the page.
         self._style_layers: bool = True
+        #: Whether applying a preset also re-maps value-coloured layers (an image, a
+        #: colour-by-column scatter, a surface) through the preset's own colormap.
+        self._style_colormaps: bool = True
+        #: Real renders of every preset (``gallery_assets``), and which sample scene the
+        #: cards show: the same look reads very differently on a line, a heat map and a surface.
+        self._thumbs = Thumbnails(lambda: getattr(self.plot, "window", None))
+        self._preview_scene: str = gallery_assets.STYLE_SCENES[0]
         #: Live overrides for the hand-drawn transform, seeded from the preset.
         self._hand_amplitude: float = styles.get_style("hand").hand_amplitude
         self._hand_wavelength: float = styles.get_style("hand").hand_wavelength
@@ -480,8 +501,31 @@ class StylePanel(Panel):
         #: no frame left to report into, and swallowing it silently is how a picker comes
         #: to look broken. Panel state, not scene state, so a queued closure may write it.
         self._layer_error: str = ""
+        #: Multi-layer editing: None edits the selected layer; GROUP_ALL or a layer_type
+        #: makes every Layer-tab edit apply to that whole group. Panel-local, like
+        #: ``_layer_id`` -- the scene's selection stays a single layer.
+        self._layer_group: Optional[str] = None
+        #: The scene selection at the moment the group was picked. When the selection
+        #: moves elsewhere (a click in the plot, the Scene panel) the user has moved on
+        #: to one layer, so the group is dropped rather than silently kept.
+        self._group_anchor: Optional[int] = None
+        #: Ids the current group resolved to on this frame's draw; the setters below fan
+        #: an edit out to them. Empty outside group mode.
+        self._group_ids: Tuple[Any, ...] = ()
 
     # -- deferred writes -------------------------------------------------------
+
+    def _target_ids(self, layer: Any) -> List[Any]:
+        """The layer ids an edit made through ``layer``'s controls should reach.
+
+        In group mode the controls are drawn for the group's first layer, so an edit
+        arriving through that layer fans out to every member; anything else stays a
+        single-layer edit.
+        """
+        layer_id = getattr(layer, "layer_id", None)
+        if self._group_ids and layer_id in self._group_ids:
+            return list(self._group_ids)
+        return [layer_id]
 
     def _set(self, target: Any, name: str, value: Any) -> None:
         """Queue ``target.name = value`` (CONTRACT §1.1 — never write from ``draw``)."""
@@ -499,12 +543,13 @@ class StylePanel(Panel):
         the object and restyling a detached layer.
         """
         plot = self.plot
-        layer_id = getattr(layer, "layer_id", None)
+        layer_ids = self._target_ids(layer)
 
         def apply() -> None:
-            live = layerops.find_layer(plot, layer_id)
-            if live is not None:
-                layerops.set_layer_style(plot, live, **fields)
+            for layer_id in layer_ids:
+                live = layerops.find_layer(plot, layer_id)
+                if live is not None:
+                    layerops.set_layer_style(plot, live, **fields)
 
         self.submit(apply)
 
@@ -652,19 +697,132 @@ class StylePanel(Panel):
             "Layers whose colours carry data (a colormapped scatter, a per-index gradient) "
             "are never repainted either way."
         )
+        changed, value = imgui.checkbox("Use the style's colormap", self._style_colormaps)
+        if changed:
+            self._style_colormaps = value
+        imgui.same_line()
+        widgets.help_marker(
+            "On: layers coloured by value -- an image, a colour-by-column scatter, a surface -- "
+            "are re-mapped through the style's own colormap. Their data is untouched; only the "
+            "ramp changes, exactly like the colormap picker in the Layer tab.\n\n"
+            "Anything you draw next with no colormap named takes it too."
+        )
         imgui.separator()
 
-        for style in styles.STYLES:
-            if self._style_card(style):
-                self._apply_style(style)
+        self._thumbs.begin_frame()
+        if self._thumbs.available:
+            self._draw_scene_picker()
+            self._draw_style_grid()
+        else:
+            for style in styles.STYLES:
+                if self._style_card(style):
+                    self._apply_style(style)
 
         imgui.separator()
         self._draw_hand_drawn_controls()
 
+    def _draw_scene_picker(self) -> None:
+        """Choose which sample plot every card shows (lines, scatter, bars, heat map, surface)."""
+        imgui.text_disabled("Preview on")
+        spacing = float(imgui.get_style().item_spacing[0])
+        pad = 2.0 * float(imgui.get_style().frame_padding[0])
+        right_edge = imgui.get_cursor_screen_pos()[0] + float(imgui.get_content_region_avail()[0])
+        for scene in gallery_assets.STYLE_SCENES:
+            label = gallery_assets.SCENE_LABELS[scene]
+            chip_w = float(imgui.calc_text_size(label)[0]) + pad
+            # Same line only while the chip still fits; a chip past the panel's edge cannot be
+            # clicked, and the 3D surface one is the last, so it is the one that went missing.
+            if imgui.get_item_rect_max()[0] + spacing + chip_w <= right_edge:
+                imgui.same_line()
+            active = scene == self._preview_scene
+            if active:
+                imgui.push_style_color(
+                    imgui.Col_.button, imgui.get_style_color_vec4(imgui.Col_.button_active)
+                )
+            if imgui.small_button(f"{label}##scene_{scene}"):
+                self._preview_scene = scene
+            if active:
+                imgui.pop_style_color(1)
+        imgui.spacing()
+
+    def _style_texture(self, style: Any) -> Any:
+        """The stored render of ``style`` on the chosen scene, or ``None`` while it loads."""
+        scene = self._preview_scene
+        return self._thumbs.get(
+            ("style", style.key, scene),
+            lambda: gallery_assets.load_rgba(gallery_assets.style_asset(style.key, scene)),
+        )
+
+    def _draw_style_grid(self) -> None:
+        avail = float(imgui.get_content_region_avail()[0])
+        columns = max(1, int((avail + GRID_GAP) // (GRID_MIN_WIDTH + GRID_GAP)))
+        card_w = (avail - GRID_GAP * (columns - 1)) / columns
+        for position, style in enumerate(styles.STYLES):
+            if position % columns:
+                imgui.same_line(0.0, GRID_GAP)
+            if self._style_image_card(style, card_w):
+                self._apply_style(style)
+
+    def _style_image_card(self, style: Any, width: float) -> bool:
+        """One preset as a render of itself, with its name set in its own colours below."""
+        line_h = float(imgui.get_text_line_height())
+        image_h = (width - 2 * PAD) / gallery_assets.THUMB_SIZE[0] * gallery_assets.THUMB_SIZE[1]
+        # The pitch wraps to the card, and the card grows to hold it (as the list card does),
+        # so no line of it is clipped however narrow the panel is.
+        desc_h = float(imgui.calc_text_size(style.description, wrap_width=width - 2 * PAD)[1])
+        chip_h = line_h + 2.0 * NAME_CHIP_PAD_Y
+        height = PAD + image_h + 4.0 + chip_h + 4.0 + desc_h + PAD
+        selected = style.key == self._style_key
+
+        draw_list = imgui.get_window_draw_list()
+        ox, oy = imgui.get_cursor_screen_pos()
+        imgui.push_id(f"style_{style.key}")
+        clicked = imgui.invisible_button("##card", (width, height))
+        hovered = imgui.is_item_hovered()
+        imgui.pop_id()
+
+        texture = self._style_texture(style)
+        Thumbnails.draw(
+            draw_list,
+            texture,
+            (ox + PAD, oy + PAD, ox + width - PAD, oy + PAD + image_h),
+            fit=False,
+            busy=texture is None,
+        )
+        chip_y = oy + PAD + image_h + 4.0
+        self._draw_style_name_chip(
+            draw_list, style, ox + PAD, chip_y, ox + width - PAD, line_h + 2.0 * NAME_CHIP_PAD_Y
+        )
+        draw_list.push_clip_rect((ox, oy), (ox + width, oy + height), True)
+        draw_list.add_text(
+            imgui.get_font(),
+            imgui.get_font_size(),
+            (ox + PAD, chip_y + line_h + 2.0 * NAME_CHIP_PAD_Y + 4.0),
+            imgui.get_color_u32(imgui.Col_.text_disabled),
+            style.description,
+            wrap_width=width - 2 * PAD,
+        )
+        draw_list.pop_clip_rect()
+
+        if selected:
+            border, thickness = imgui.get_color_u32(imgui.Col_.slider_grab), 2.0
+        elif hovered:
+            border, thickness = imgui.get_color_u32(imgui.Col_.text, 0.45), 1.0
+        else:
+            border, thickness = imgui.get_color_u32(imgui.Col_.border), 1.0
+        draw_list.add_rect(
+            (ox, oy), (ox + width, oy + height), border, rounding=5.0, thickness=thickness
+        )
+        return bool(clicked)
+
     def _apply_style(self, style: Any) -> None:
         """Queue an undoable apply of ``style`` (CONTRACT §1.1 — never from ``draw``)."""
         self._style_key = style.key
-        self.push_command(styles.style_command(self.plot, style, layers=self._style_layers))
+        self.push_command(
+            styles.style_command(
+                self.plot, style, layers=self._style_layers, colormaps=self._style_colormaps
+            )
+        )
 
     def _style_card(self, style: Any) -> bool:
         """One preset: a live thumbnail of the look, its name and a one-line pitch.
@@ -675,41 +833,109 @@ class StylePanel(Panel):
         look like".
         """
         selected = style.key == self._style_key
-        width = max(180.0, min(float(imgui.get_content_region_avail()[0]), 420.0))
+        width = max(180.0, float(imgui.get_content_region_avail()[0]))
+
+        # The text column: right of the thumbnail, inside the card's own border. The
+        # description wraps to it and the card grows to fit, so no text can run past the
+        # frame however narrow the panel is.
+        text_left = PAD + THUMB_WIDTH + 10.0
+        text_width = max(width - text_left - 2.0 * PAD, 40.0)
+        line_h = float(imgui.get_text_line_height())
+        chip_h = line_h + 2.0 * NAME_CHIP_PAD_Y + NAME_CHIP_STRIPE
+        desc_h = float(imgui.calc_text_size(style.description, wrap_width=text_width).y)
+        height = max(CARD_HEIGHT, 2.0 * PAD + chip_h + 4.0 + desc_h)
 
         draw_list = imgui.get_window_draw_list()
         # CONTRACT §3: read the cursor BEFORE the item — afterwards it has already advanced.
         ox, oy = imgui.get_cursor_screen_pos()
-        clicked = imgui.invisible_button(f"##style_{style.key}", (width, CARD_HEIGHT))
+        clicked = imgui.invisible_button(f"##style_{style.key}", (width, height))
         hovered = imgui.is_item_hovered()
 
         self._draw_style_thumbnail(draw_list, style, ox + PAD, oy + PAD)
 
-        text_x = ox + PAD + THUMB_WIDTH + 10.0
+        text_x = ox + text_left
+        text_right = text_x + text_width
+        self._draw_style_name_chip(draw_list, style, text_x, oy + PAD, text_right, chip_h)
+
+        # The description is GUI chrome, so it takes the GUI theme's muted text colour
+        # (a literal white here once made the names vanish on the light theme).
+        draw_list.push_clip_rect((ox, oy), (ox + width, oy + height), True)
         draw_list.add_text(
-            (text_x, oy + PAD + 2.0),
-            imgui.get_color_u32((1.0, 1.0, 1.0, 1.0 if selected or hovered else 0.85)),
-            style.name,
-        )
-        draw_list.add_text(
-            (text_x, oy + PAD + 20.0),
-            imgui.get_color_u32((0.65, 0.66, 0.70, 1.0)),
+            imgui.get_font(),
+            imgui.get_font_size(),
+            (text_x, oy + PAD + chip_h + 4.0),
+            imgui.get_color_u32(imgui.Col_.text_disabled),
             style.description,
+            wrap_width=text_width,
         )
+        draw_list.pop_clip_rect()
 
         if selected:
-            border = imgui.get_color_u32((0.55, 0.78, 1.0, 1.0))
+            # The theme's accent (slider grab, nav cursor, ...), as the old light blue was
+            # on the dark theme.
+            border = imgui.get_color_u32(imgui.Col_.slider_grab)
             thickness = 2.0
         elif hovered:
-            border = imgui.get_color_u32((1.0, 1.0, 1.0, 0.45))
+            border = imgui.get_color_u32(imgui.Col_.text, 0.45)
             thickness = 1.0
         else:
-            border = imgui.get_color_u32((1.0, 1.0, 1.0, 0.12))
+            border = imgui.get_color_u32(imgui.Col_.border)
             thickness = 1.0
         draw_list.add_rect(
-            (ox, oy), (ox + width, oy + CARD_HEIGHT), border, rounding=4.0, thickness=thickness
+            (ox, oy), (ox + width, oy + height), border, rounding=4.0, thickness=thickness
         )
         return clicked
+
+    def _draw_style_name_chip(
+        self, draw_list: Any, style: Any, x: float, y: float, right: float, height: float
+    ) -> None:
+        """The preset's name, typeset in the preset itself.
+
+        A label on the preset's own page (its background, or its gradient), in its own
+        ink colour, over a stripe of its first palette colours: "Blueprint" reads white on
+        cyanotype blue and "High density" light on black, before the thumbnail is even
+        looked at. The presets keep ink/background at WCAG contrast (see styles.py), so the
+        name is readable on every one of them regardless of the GUI theme around it.
+        """
+        name_w = float(imgui.calc_text_size(style.name).x)
+        x1 = min(x + name_w + 2.0 * NAME_CHIP_PAD_X, right)
+        y1 = y + height
+
+        if style.gradient is None:
+            bg = style.background
+            draw_list.add_rect_filled(
+                (x, y), (x1, y1), imgui.get_color_u32((bg[0], bg[1], bg[2], 1.0)), rounding=3.0
+            )
+        else:
+            top, bottom = style.gradient
+            top_u32 = imgui.get_color_u32((top[0], top[1], top[2], 1.0))
+            bottom_u32 = imgui.get_color_u32((bottom[0], bottom[1], bottom[2], 1.0))
+            draw_list.add_rect_filled_multi_color(
+                (x, y), (x1, y1), top_u32, top_u32, bottom_u32, bottom_u32
+            )
+
+        # The palette stripe along the bottom edge, one segment per colour (up to four).
+        colors = list(style.palette[:4]) or [style.ink]
+        seg = (x1 - x) / len(colors)
+        for i, color in enumerate(colors):
+            draw_list.add_rect_filled(
+                (x + i * seg, y1 - NAME_CHIP_STRIPE),
+                (x + (i + 1) * seg, y1),
+                imgui.get_color_u32((color[0], color[1], color[2], 1.0)),
+            )
+
+        # A hairline in the GUI's border colour, so a white page still reads as a label
+        # on a white panel.
+        draw_list.add_rect((x, y), (x1, y1), imgui.get_color_u32(imgui.Col_.border), rounding=3.0)
+
+        ink = style.ink
+        draw_list.push_clip_rect((x, y), (x1, y1), True)
+        draw_list.add_text(
+            (x + NAME_CHIP_PAD_X, y + NAME_CHIP_PAD_Y),
+            imgui.get_color_u32((ink[0], ink[1], ink[2], 1.0)),
+            style.name,
+        )
+        draw_list.pop_clip_rect()
 
     def _draw_style_thumbnail(self, draw_list: Any, style: Any, x: float, y: float) -> None:
         """The preset's own look, at 132x44."""
@@ -1090,7 +1316,11 @@ class StylePanel(Panel):
             imgui.text_disabled("Plot a function or paste some data to get started.")
             return
 
-        layer = self._current_layer()
+        members = self._resolve_group(layers)
+        self._group_ids = tuple(getattr(m, "layer_id", None) for m in members)
+        # In group mode the controls show (and are gated by) the group's first layer, and
+        # every edit made through them fans out to all members (see _target_ids).
+        layer = members[0] if members else self._current_layer()
         if layer is None:
             imgui.text_disabled("No layer selected.")
             return
@@ -1099,16 +1329,25 @@ class StylePanel(Panel):
         imgui.separator()
 
         layer_type = str(getattr(layer, "layer_type", ""))
-        imgui.text_disabled(f"Type: {layer_type}   ID: {getattr(layer, 'layer_id', '?')}")
+        if members:
+            imgui.text_wrapped(f"Editing {len(members)} layers at once.")
+            label = str(getattr(layer, "label", "")) or "(unnamed)"
+            imgui.push_text_wrap_pos(0.0)
+            imgui.text_disabled(f"Values shown are from the first one: {label} [{layer_type}]")
+            imgui.text_disabled("Label and plot type are per layer: pick one to edit them.")
+            imgui.pop_text_wrap_pos()
+        else:
+            imgui.text_disabled(f"Type: {layer_type}   ID: {getattr(layer, 'layer_id', '?')}")
 
-        changed, label = imgui.input_text("Label", getattr(layer, "label", ""))
-        if changed:
-            self._set_style(layer, label=label)
+            changed, label = imgui.input_text("Label", getattr(layer, "label", ""))
+            if changed:
+                self._set_style(layer, label=label)
 
         if self._layer_error:
             widgets.error_box(self._layer_error)
 
-        self._draw_layer_kind(layer)
+        if not members:
+            self._draw_layer_kind(layer)
 
         style = layer.style
 
@@ -1146,7 +1385,11 @@ class StylePanel(Panel):
 
         # translation is applied by the 2D renderers' u_offset uniform and by
         # renderer_manager.py:199-203 for bounds; geometry3d has no offset uniform, so a
-        # 3D layer gets its per-layer camera instead (metadata["camera"]).
+        # 3D layer gets its per-layer camera instead (metadata["camera"]). Neither is
+        # offered for a group: moving every layer by one offset, or giving each its own
+        # copy of one camera, is not what "style them all" means.
+        if members:
+            return
         if _is_3d(layer):
             self._draw_layer_camera(layer)
         else:
@@ -1530,24 +1773,98 @@ class StylePanel(Panel):
             )
         )
 
+    @staticmethod
+    def _groupable_layers(layers: Sequence[Any]) -> List[Any]:
+        """The layers a group edit may touch: the user's data, not the 3D box/grid/ticks.
+
+        Restyling "all layers" must not repaint the axis decoration, which the engine
+        rebuilds from its own options anyway.
+        """
+        from ...core.camera3d import SYSTEM_3D_ARTISTS
+
+        return [
+            layer
+            for layer in layers
+            if getattr(layer, "metadata", {}).get("artist") not in SYSTEM_3D_ARTISTS
+        ]
+
+    def _layer_groups(self, layers: Sequence[Any]) -> List[Tuple[str, str, List[Any]]]:
+        """``(key, combo label, members)`` for each group worth offering.
+
+        "All layers" once there are two data layers, and one "All <type> layers" entry per
+        layer type that has at least two -- a group of one is just that layer. Types are
+        listed in order of first appearance, which is the scene's draw order.
+
+        A type group is offered even when it holds every layer (a scene of only
+        scatters): hiding it would make a picked "All scatter layers" vanish the moment
+        the last non-scatter layer is deleted.
+        """
+        data = self._groupable_layers(layers)
+        if len(data) < 2:
+            return []
+        groups: List[Tuple[str, str, List[Any]]] = [(GROUP_ALL, f"All layers ({len(data)})", data)]
+        by_type: Dict[str, List[Any]] = {}
+        for layer in data:
+            by_type.setdefault(str(getattr(layer, "layer_type", "?")), []).append(layer)
+        for layer_type, members in by_type.items():
+            if len(members) >= 2:
+                groups.append((layer_type, f"All {layer_type} layers ({len(members)})", members))
+        return groups
+
+    def _resolve_group(self, layers: Sequence[Any]) -> List[Any]:
+        """The active group's members, or [] when editing a single layer.
+
+        Drops the group when the scene's selection has moved since it was picked, or when
+        the group no longer exists (its layers were deleted or converted away).
+        """
+        if self._layer_group is None:
+            return []
+        if self._selected_layer_id() != self._group_anchor:
+            self._layer_group = None
+            return []
+        for key, _label, members in self._layer_groups(layers):
+            if key == self._layer_group:
+                return members
+        self._layer_group = None
+        return []
+
     def _draw_layer_selector(self, layers: Sequence[Any], current: Any) -> None:
-        """A combo over every layer in the scene, synced with the shared selection."""
-        names: List[str] = []
+        """A combo over every layer in the scene, synced with the shared selection.
+
+        Group entries ("All layers", "All scatter layers", ...) come first. Picking one
+        is panel-local: the scene's selection is left alone, and the Layer tab switches to
+        editing every member at once.
+        """
+        groups = self._layer_groups(layers)
+        names: List[str] = [label for _key, label, _members in groups]
         for i, layer in enumerate(layers):
             label = str(getattr(layer, "label", "")) or "(unnamed)"
             names.append(f"{i}: {label} [{getattr(layer, 'layer_type', '?')}]")
 
-        index = 0
-        for i, layer in enumerate(layers):
-            if layer is current:
-                index = i
-                break
+        index = len(groups)
+        if self._layer_group is not None:
+            index = next(
+                (i for i, (key, _l, _m) in enumerate(groups) if key == self._layer_group), index
+            )
+        else:
+            for i, layer in enumerate(layers):
+                if layer is current:
+                    index = len(groups) + i
+                    break
 
         imgui.push_item_width(-1)
         changed, new_index = imgui.combo("##layer_select", index, names)
         imgui.pop_item_width()
-        if changed and 0 <= new_index < len(layers):
-            self._select_layer(getattr(layers[new_index], "layer_id", None))
+        if not changed:
+            return
+        if 0 <= new_index < len(groups):
+            self._layer_group = groups[new_index][0]
+            self._group_anchor = self._selected_layer_id()
+            return
+        layer_index = new_index - len(groups)
+        if 0 <= layer_index < len(layers):
+            self._layer_group = None
+            self._select_layer(getattr(layers[layer_index], "layer_id", None))
 
     def _draw_layer_colors(self, layer: Any, layer_type: str, style: Any) -> None:
         """Colour widgets, shown only where the renderer reads the field."""
@@ -1795,37 +2112,36 @@ class StylePanel(Panel):
         replaced between this frame and the drain (a re-plot from the Data panel), and the
         replacement need not have one.
         """
-        plot = self.plot
-        layer_id = getattr(layer, "layer_id", None)
-
-        def apply() -> None:
-            live = layerops.find_layer(plot, layer_id)
-            if live is None:
-                return
-            try:
-                layerops.set_layer_colormap(plot, live, **fields)
-            except ValueError as exc:
-                self._layer_error = str(exc)
-                return
-            self._layer_error = ""
-
-        self.submit(apply)
+        self._submit_colormap_edit(layerops.set_layer_colormap, layer, fields)
 
     def _set_layer_gl_colormap(self, layer: Any, **fields: Any) -> None:
         """Queue a shader-colormap override, re-resolving the layer at drain time."""
+        self._submit_colormap_edit(layerops.set_layer_gl_colormap, layer, fields)
+
+    def _submit_colormap_edit(self, setter: Any, layer: Any, fields: Dict[str, Any]) -> None:
+        """Queue ``setter(plot, layer, **fields)`` for every target of ``layer``.
+
+        In a group some members may have no colormap to edit; they are skipped, and the
+        refusal is only shown when *no* member could take the change -- one scatter
+        without ``c=`` must not make a group edit look failed when it reached the rest.
+        """
         plot = self.plot
-        layer_id = getattr(layer, "layer_id", None)
+        layer_ids = self._target_ids(layer)
 
         def apply() -> None:
-            live = layerops.find_layer(plot, layer_id)
-            if live is None:
-                return
-            try:
-                layerops.set_layer_gl_colormap(plot, live, **fields)
-            except ValueError as exc:
-                self._layer_error = str(exc)
-                return
-            self._layer_error = ""
+            errors: List[str] = []
+            applied = 0
+            for layer_id in layer_ids:
+                live = layerops.find_layer(plot, layer_id)
+                if live is None:
+                    continue
+                try:
+                    setter(plot, live, **fields)
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    continue
+                applied += 1
+            self._layer_error = errors[0] if errors and not applied else ""
 
         self.submit(apply)
 

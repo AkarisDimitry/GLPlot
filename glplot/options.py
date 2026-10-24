@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Iterator, Optional, Tuple, Union
+from typing import Any, Iterator, Optional, Tuple, Union
 
 #: The stock content inset ``(left, right, bottom, top)`` in pixels, reserved inside the
 #: viewport for the axis gutters. These are the values the engine has always used and are
@@ -234,6 +234,20 @@ class EngineOptions:
     # `axis_xlabel_fontsize` -- see `AxisRenderer._font_scale`.
     axis_tick_fontsize: Optional[float] = None
     axis_tick_color: Optional[ColorOption] = None
+    # Tick-label rotation in degrees, per axis (`plt.xticks(rotation=45)`). Honoured by the
+    # headless export, where matplotlib draws rotated labels natively; the live window draws
+    # tick labels horizontally and the setter says so.
+    axis_tick_rotation_x: float = 0.0
+    axis_tick_rotation_y: float = 0.0
+    # A matplotlib ``Formatter`` / ``Locator`` object per axis, from
+    # ``ax.xaxis.set_major_formatter(...)`` / ``set_major_locator(...)``. The headless export
+    # hands them to matplotlib as-is. Live, the formatter is *called* on each tick
+    # (``formatter(value, position)``) and the locator is mapped onto the count/step/values
+    # options above where it is one GLPlot understands.
+    axis_tick_formatter_x: Optional[Any] = None
+    axis_tick_formatter_y: Optional[Any] = None
+    axis_tick_locator_x: Optional[Any] = None
+    axis_tick_locator_y: Optional[Any] = None
 
     # Axis scale mode, from `gplt.xscale()`/`yscale()`. "linear", "log", "symlog", and
     # "asinh" are real -- see `glplot.utils.scale`. Every layer's GPU buffer is built from

@@ -99,6 +99,13 @@ class LayerStyle:
     #: enough to read as a solid body that should hide what is behind it.
     depth_write: Optional[bool] = None
 
+    #: Whether this 3D layer is depth-tested at all. ``False`` makes it an overlay: drawn
+    #: after every other data layer with the depth test off, so nothing in the scene can
+    #: hide it -- the treatment the ``axis3d`` box already gets. Meant for annotations that
+    #: must stay readable over a surface, such as a level-set line lying on that surface,
+    #: which a grazing camera would otherwise bury behind the nearer ridges.
+    depth_test: bool = True
+
     #: Target opacity for automatic alpha, or ``None`` for the alpha the caller set.
     #:
     #: A fixed alpha is wrong at every zoom but one: markers keep their pixel size, so the
@@ -151,6 +158,230 @@ class BaseLayer:
     def get_intrinsic_bounds(self) -> Optional[Tuple[float, float, float, float]]:
         return None
 
+    # -- matplotlib ``Artist`` style accessors ---------------------------------------------
+    #
+    # ``line.set_color("r")``, ``line.set_linewidth(3)``, ``line.set_alpha(.5)`` are what an
+    # update callback does to the handle ``plot()`` returned. They write the same
+    # ``LayerStyle`` fields the Style panel does, then raise the flags the renderers key on.
+
+    def _restyled(self) -> None:
+        self.dirty.style_dirty = True
+        self.dirty.gpu_dirty = True
+
+    def get_color(self) -> Tuple[float, float, float, float]:
+        return tuple(self.style.color or (0.0, 0.0, 0.0, 1.0))  # type: ignore[return-value]
+
+    def set_color(self, color: Any) -> None:
+        """Recolour the layer. Per-point colours (``colors``) are replaced by the one colour."""
+        from matplotlib.colors import to_rgba
+
+        rgba = tuple(float(v) for v in to_rgba(color))
+        self.style.color = rgba  # type: ignore[assignment]
+        if self.layer_type == "polyline":
+            self.colors = None  # type: ignore[attr-defined]
+        elif getattr(self, "colors", None) is not None:
+            self.colors = np.tile(np.asarray(rgba, dtype=np.float32), (len(self.colors), 1))  # type: ignore[attr-defined]  # noqa: E501
+        self._restyled()
+
+    def get_alpha(self) -> float:
+        return float(self.style.alpha)
+
+    def set_alpha(self, alpha: Optional[float]) -> None:
+        self.style.alpha = 1.0 if alpha is None else float(alpha)
+        self._restyled()
+
+    def get_linewidth(self) -> float:
+        return float(self.style.line_width)
+
+    def set_linewidth(self, width: float) -> None:
+        self.style.line_width = float(width)
+        self._restyled()
+
+    get_lw = get_linewidth
+    set_lw = set_linewidth
+
+    def get_label(self) -> str:
+        return str(self.label or "")
+
+    def set_label(self, label: Any) -> None:
+        self.label = str(label)
+        # A label the caller chose is no longer the engine's bookkeeping name.
+        self.metadata.pop("auto_label", None)
+
+    def get_visible(self) -> bool:
+        return bool(self.style.visible)
+
+    def set_visible(self, visible: bool) -> None:
+        self.style.visible = bool(visible)
+        self._restyled()
+
+    def get_zorder(self) -> float:
+        return float(self.style.zorder)
+
+    def set_zorder(self, zorder: float) -> None:
+        self.style.zorder = int(zorder)
+        self._restyled()
+
+
+# ----------------------------------------------------------------------------------------
+# Data setters shared by PolylineLayer and ScatterLayer (the matplotlib artist idiom).
+# ----------------------------------------------------------------------------------------
+
+#: ``metadata["artist"]`` values whose ``pts`` *are* the plotted x/y. Anything else --
+#: a step's staircase, a bar outline, an ECDF -- is geometry derived from the data, and
+#: writing raw x/y over it would draw a different chart while the layer still claimed to
+#: be the old one.
+#: ``axvline``/``axhline`` qualify: their other coordinate is an axes fraction, so
+#: ``set_xdata([x])`` moving the line is exactly matplotlib's idiom for a draggable cursor.
+_RAW_XY_ARTISTS = frozenset(
+    {None, "line", "marker", "scatter", "hline", "vline", "axhline", "axvline"}
+)
+
+
+def _as_xy_points(x: Any, y: Any = None, *, who: str) -> np.ndarray:
+    """``(x, y)``, an ``(N, 2)`` array or a ``(2, N)`` array -> contiguous float32 (N, 2)."""
+    if y is None:
+        arr = np.asarray(x, dtype=np.float64)
+        if arr.ndim == 2 and arr.shape[1] == 2:
+            pts = arr
+        elif arr.ndim == 2 and arr.shape[0] == 2:
+            pts = arr.T
+        else:
+            raise ValueError(f"{who}: expected (x, y) or an (N, 2) array, got shape {arr.shape}")
+    else:
+        xs = np.asarray(x, dtype=np.float64).ravel()
+        ys = np.asarray(y, dtype=np.float64).ravel()
+        if xs.shape != ys.shape:
+            raise ValueError(f"{who}: x and y must have the same length ({len(xs)} != {len(ys)})")
+        pts = np.column_stack([xs, ys])
+    return np.ascontiguousarray(pts, dtype=np.float32)
+
+
+def _check_raw_xy(layer: "BaseLayer", who: str) -> None:
+    metadata = layer.metadata
+    artist = metadata.get("artist")
+    if metadata.get("gui_source_xy") is not None or artist not in _RAW_XY_ARTISTS:
+        kind = metadata.get("gui_kind") or artist
+        raise ValueError(
+            f"{who}: this layer is a {kind!r} whose geometry is derived from its data, so "
+            "raw x/y cannot be written over it. Remove it and plot the new data instead."
+        )
+
+
+def _fit_rows(arr: Optional[np.ndarray], n: int) -> Optional[np.ndarray]:
+    """Resize a per-point array (colours, sizes) to ``n`` rows, nearest-neighbour.
+
+    A per-point buffer that no longer matches the point count uploads short and the draw
+    fetches past its end, so a length change must always carry it along. A one-element
+    NaN colour array is ``add_scatter``'s "no per-point colours" sentinel and is kept.
+    """
+    if arr is None or n <= 0:
+        return arr
+    arr = np.asarray(arr)
+    if arr.ndim == 0 or len(arr) == n:
+        return arr
+    if arr.ndim == 1 and arr.dtype.kind == "f" and arr.size == 1 and not np.isfinite(arr).any():
+        return arr
+    if len(arr) == 0:
+        return None
+    idx = np.minimum((np.arange(n) * len(arr)) // n, len(arr) - 1)
+    return np.ascontiguousarray(arr[idx])
+
+
+def _replace_points(layer: Any, pts: np.ndarray) -> None:
+    """Swap ``layer.pts`` for ``pts`` and raise every flag the renderers key on.
+
+    Always a new array, never an in-place write: ``pts`` may be shared with a dataset or
+    a kind's retained source columns, and writing through it would corrupt those. The
+    first array replaced is remembered so :func:`glplot.controls.repoint_legacy_mirrors`
+    can re-point the engine's legacy mirror, which shares it by identity.
+    """
+    old = layer.pts
+    if old is not None and getattr(layer, "_superseded_pts", None) is None:
+        layer._superseded_pts = old
+    layer.pts = pts
+    n = len(pts)
+    if old is None or len(old) != n:
+        layer.colors = _fit_rows(layer.colors, n)
+        if getattr(layer, "sizes", None) is not None:
+            layer.sizes = _fit_rows(layer.sizes, n)
+        cvalues = layer.metadata.get("cvalues")
+        if cvalues is not None and np.ndim(cvalues) == 1 and len(cvalues) != n:
+            layer.metadata["cvalues"] = _fit_rows(np.asarray(cvalues), n)
+    layer.dirty.data_dirty = True
+    layer.dirty.gpu_dirty = True
+    layer.dirty.bounds_dirty = True
+
+
+class _XYDataMixin:
+    """``get_data``/``set_data`` and friends for layers whose ``pts`` are plain (x, y).
+
+    Mirrors matplotlib's ``Line2D`` so an interactive callback reads the same in both
+    libraries: ``line.set_ydata(a * np.sin(x))``. The setters mark the layer dirty; the
+    frame redraws on its own when they run inside a control callback, a frame callback or
+    an animation update.
+    """
+
+    def get_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        """``(x, y)`` as float64 copies."""
+        # A layer on a twin axis stores a *mapped* copy in ``pts``; what the user plotted --
+        # and what they expect back from ``get_ydata()`` -- is the original.
+        twin_raw = self.metadata.get("twin_raw")  # type: ignore[attr-defined]
+        pts = twin_raw if twin_raw is not None else self.pts  # type: ignore[attr-defined]
+        if pts is None or len(pts) == 0:
+            empty = np.empty(0, dtype=np.float64)
+            return empty, empty.copy()
+        arr = np.asarray(pts, dtype=np.float64)
+        return arr[:, 0].copy(), arr[:, 1].copy()
+
+    def get_xdata(self) -> np.ndarray:
+        return self.get_data()[0]
+
+    def get_ydata(self) -> np.ndarray:
+        return self.get_data()[1]
+
+    def set_data(self, x: Any, y: Any = None) -> None:
+        """Replace the points: ``set_data(x, y)`` or ``set_data(xy)`` with ``xy`` (N, 2)."""
+        _check_raw_xy(self, "set_data")  # type: ignore[arg-type]
+        pts = _as_xy_points(x, y, who="set_data")
+        rebake = self.metadata.get("twin_rebake")  # type: ignore[attr-defined]
+        if rebake is not None:
+            # On a twin axis the new values are the true ones; the panel maps them to the
+            # host's coordinates (which is what ``pts`` has to hold).
+            self.metadata["twin_raw"] = np.asarray(pts, dtype=np.float64)  # type: ignore[attr-defined]  # noqa: E501
+            _replace_points(self, pts)
+            rebake(self)
+        else:
+            _replace_points(self, pts)
+
+    def set_xdata(self, x: Any) -> None:
+        """Replace x, keeping y. The length must match; use :meth:`set_data` to resize."""
+        _check_raw_xy(self, "set_xdata")  # type: ignore[arg-type]
+        _, ys = self.get_data()
+        xs = np.asarray(x, dtype=np.float64).ravel()
+        if xs.shape == (1,) and len(ys) > 1:  # matplotlib's axvline idiom: set_xdata([x])
+            xs = np.full(len(ys), xs[0])
+        if len(xs) != len(ys):
+            raise ValueError(
+                f"set_xdata: got {len(xs)} values for {len(ys)} points; use set_data(x, y) "
+                "to change the number of points"
+            )
+        self.set_data(xs, ys)
+
+    def set_ydata(self, y: Any) -> None:
+        """Replace y, keeping x. The length must match; use :meth:`set_data` to resize."""
+        _check_raw_xy(self, "set_ydata")  # type: ignore[arg-type]
+        xs, _ = self.get_data()
+        ys = np.asarray(y, dtype=np.float64).ravel()
+        if ys.shape == (1,) and len(xs) > 1:  # matplotlib's axhline idiom: set_ydata([y])
+            ys = np.full(len(xs), ys[0])
+        if len(ys) != len(xs):
+            raise ValueError(
+                f"set_ydata: got {len(ys)} values for {len(xs)} points; use set_data(x, y) "
+                "to change the number of points"
+            )
+        self.set_data(xs, ys)
+
 
 #: Every concrete layer is ``@dataclass(eq=False)``, never a plain ``@dataclass``.
 #:
@@ -200,7 +431,7 @@ class LineFamilyLayer(BaseLayer):
 
 
 @dataclass(eq=False)
-class ScatterLayer(BaseLayer):
+class ScatterLayer(_XYDataMixin, BaseLayer):
     """Layer for point clouds."""
 
     pts: Optional[np.ndarray] = None
@@ -234,9 +465,34 @@ class ScatterLayer(BaseLayer):
             float(np.max(self.pts[:, 1])),
         )
 
+    # matplotlib ``PathCollection`` spellings, for ``sc.set_offsets(xy)`` in callbacks.
+
+    def get_offsets(self) -> np.ndarray:
+        """The points as an ``(N, 2)`` float64 array."""
+        x, y = self.get_data()
+        return np.column_stack([x, y])
+
+    def set_offsets(self, offsets: Any) -> None:
+        """Replace the points with an ``(N, 2)`` array."""
+        self.set_data(offsets)
+
+    def set_sizes(self, sizes: Any) -> None:
+        """Per-point marker sizes (pixels): a scalar for all points, or one per point."""
+        arr = np.asarray(sizes, dtype=np.float32).ravel()
+        n = 0 if self.pts is None else len(self.pts)
+        if arr.size == 1:
+            self.sizes = None
+            self.style.point_size = float(arr[0])
+            self.dirty.style_dirty = True
+        elif arr.size == n:
+            self.sizes = np.ascontiguousarray(arr)
+        else:
+            raise ValueError(f"set_sizes: got {arr.size} sizes for {n} points")
+        self.dirty.gpu_dirty = True
+
 
 @dataclass(eq=False)
-class PolylineLayer(BaseLayer):
+class PolylineLayer(_XYDataMixin, BaseLayer):
     """Layer for connected line segments (Polyline)."""
 
     pts: Optional[np.ndarray] = None
@@ -391,6 +647,22 @@ class FunctionLayer(PolylineLayer):
         self.sampled_window: Optional[Tuple[float, float]] = None
         #: The sample count last used, so a window resize also triggers a resample.
         self.sampled_count: int = 0
+
+    def invalidate(self) -> None:
+        """Force a re-evaluation on the next frame even though the view has not moved.
+
+        What makes ``gplt.function(lambda x: amp.value * np.sin(x))`` follow a slider:
+        the control pipeline invalidates every function layer when a value changes.
+        """
+        self.sampled_window = None
+        self.sampled_count = 0
+        self.dirty.data_dirty = True
+
+    def set_data(self, x: Any, y: Any = None) -> None:
+        raise ValueError(
+            "set_data: a function layer samples its own points from .func; change the "
+            "function (or the controls it reads) instead"
+        )
 
     def sample_count(self, width_px: int) -> int:
         """How many samples this viewport width deserves, clamped to the layer's bounds."""

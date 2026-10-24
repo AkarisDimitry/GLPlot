@@ -50,6 +50,25 @@ class ExportManager:
         """
         Renders the current scene to an offscreen buffer at high resolution.
         """
+        image = self.render_rgb(scale=scale, mode=mode, exact_budget=exact_budget)
+
+        import matplotlib.pyplot as plt
+
+        plt.imsave(filename, image)
+        print(f"Exported high-res image to {filename} ({image.shape[1]}x{image.shape[0]})")
+
+    def render_rgb(
+        self,
+        scale: float = 1.0,
+        mode: Optional[RenderMode] = None,
+        exact_budget: Optional[int] = None,
+    ) -> np.ndarray:
+        """Render the current scene with OpenGL and return top-down RGB pixels.
+
+        This is the in-memory counterpart of :meth:`savefig`. Animation export uses it so
+        each frame goes directly from the OpenGL framebuffer to the movie writer instead
+        of being encoded to a temporary PNG and immediately decoded again.
+        """
         # 1. Prepare target resolution
         width = int(self.engine.fb_width * scale)
         height = int(self.engine.fb_height * scale)
@@ -79,17 +98,18 @@ class ExportManager:
         # 3. Save engine state and configure for export
         old_viewport = glGetIntegerv(GL_VIEWPORT)
         glViewport(0, 0, width, height)
-        glClearColor(1.0, 1.0, 1.0, 1.0)
+        background = self.engine.options.visual.background_color
+        glClearColor(background[0], background[1], background[2], 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         # 4. Render
         # Auto-fit the view if no explicit limits have been set yet (mirrors the
         # behaviour of matplotlib's savefig, which always renders the autoscaled bounds).
-        if (
-            getattr(self.engine, "_needs_initial_autoscale", False)
-            and not self.engine._is_pure_3d_scene()
-        ):
-            self.engine._autoscale_all_panels()
+        # Per panel (see ``GPULinePlot.run``): the figure-wide flag cannot say which panels
+        # still owe a fit once one of them has had its limits set.
+        fit_all = getattr(self.engine, "_autoscale_all_panels", None)
+        if callable(fit_all) and not self.engine._is_pure_3d_scene():
+            fit_all()
 
         # Screen-sampled layers (``FunctionLayer``) take the view as an input, and the view
         # here may be one the main loop never saw -- a script that sets limits and saves
@@ -198,11 +218,7 @@ class ExportManager:
         glFinish()
         pixels = glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE)
         image = np.frombuffer(pixels, dtype=np.uint8).reshape((height, width, 3))
-        image = np.flipud(image)
-
-        import matplotlib.pyplot as plt
-
-        plt.imsave(filename, image)
+        image = np.ascontiguousarray(np.flipud(image))
 
         # 6. Cleanup
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -210,5 +226,4 @@ class ExportManager:
         glDeleteFramebuffers(1, [fbo])
         glDeleteTextures(1, [tex])
         glDeleteRenderbuffers(1, [rbo])
-
-        print(f"Exported high-res image to {filename} ({width}x{height})")
+        return image

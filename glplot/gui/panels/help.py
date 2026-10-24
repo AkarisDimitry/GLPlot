@@ -437,6 +437,34 @@ _PANEL_SECTIONS: Tuple[Section, ...] = (
         ),
     ),
     Section(
+        title="Controls — your script's sliders and buttons",
+        intro=(
+            "Sliders, checkboxes, menus, text fields, colour pickers and buttons defined "
+            "from Python (gplt.slider, gplt.button, gplt.interact ...) are drawn here. A "
+            "change runs its callbacks once per frame with the latest values; a failing "
+            "callback shows its error at the top of the panel and the last good picture "
+            "stays on screen.\n\n"
+            "A value that differs from its default is highlighted — double-click the label, "
+            "or right-click the control, to reset it. The toolbar resets everything, saves "
+            "named presets and copies the values as a Python dict. Every button is also a "
+            "command in the palette, under Controls."
+        ),
+    ),
+    Section(
+        title="Gallery — the examples, on your data",
+        intro=(
+            "Every card is a recipe distilled from the example gallery: a kind of plot, the "
+            "columns it reads, and the look it was designed in, shown by a real render. Pick "
+            "one, say which column goes where, and it is drawn on the scene as one undoable "
+            "step. 'Try with sample data' adds the recipe's own example table first, so you "
+            "can see what it does before using yours.\n\n"
+            "The big picture is a preview of *your* columns, drawn in the background; Apply "
+            "draws the real thing. 'Look' chooses the page and colours: the recipe's own, "
+            "your current style, or any preset. Recipes draw a copy of the data -- edit the "
+            "table and apply again to update."
+        ),
+    ),
+    Section(
         title="Scene — the layer list",
         intro=(
             "Select, rename, hide, solo, duplicate, delete and reorder layers. Dragging a "
@@ -450,7 +478,11 @@ _PANEL_SECTIONS: Tuple[Section, ...] = (
             "Color, line width, point size, alpha, draw order, plus the view-wide settings: "
             "grid, labels, frame, density, glow, background. Fields that do nothing for the "
             "selected layer type are hidden rather than shown dead — a scatter has no line "
-            "width, and a 3D layer ignores the 2D multipliers."
+            "width, and a 3D layer ignores the 2D multipliers.\n\n"
+            "The Styles tab shows every preset as a real render of itself; 'Preview on' picks "
+            "which sample plot (lines, scatter, bars, heat map, 3D surface) the cards draw. "
+            "Each preset also carries a colormap: with 'Use the style's colormap' on, layers "
+            "coloured by value are re-mapped through it (their data is untouched)."
         ),
     ),
 )
@@ -480,6 +512,18 @@ _TIPS: Tuple[Section, ...] = (
             "In Functions, a * sin(b * x) gives you an a slider and a b slider without "
             "declaring anything. It is the fastest way to explore a family of curves: drag "
             "instead of retyping. Ranges are editable if the defaults are too tight."
+        ),
+    ),
+    Section(
+        title="One decorator, a live analysis",
+        intro=(
+            "Give gplt.interact a function and the ranges of its parameters:\n\n"
+            "    @gplt.interact(amp=(0, 5), freq=(0.1, 10))\n"
+            "    def wave(amp=1.0, freq=1.0):\n"
+            "        return x, amp * np.sin(freq * x)\n\n"
+            "Each parameter becomes a slider; the returned (x, y) is drawn and redrawn as "
+            "you drag. Return a dict instead and it appears as a table of results in the "
+            "Controls panel."
         ),
     ),
     Section(

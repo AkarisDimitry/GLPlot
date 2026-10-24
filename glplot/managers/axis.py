@@ -75,6 +75,11 @@ def _auto_format(major: np.ndarray, step: float) -> List[str]:
     if step <= 0 or not np.isfinite(step):
         return [str(v) for v in major]
 
+    # A tick that is zero up to float noise -- `np.arange` accumulates `-2.2e-16` where it
+    # means 0 -- must print as "0": `"{:.0f}".format(-2.2e-16)` is "-0", which matplotlib
+    # never shows and which reads as a different tick from the "0" next to it.
+    major = np.where(np.abs(major) < step * 1e-9, 0.0, major)
+
     finite = major[np.isfinite(major)]
     magnitude = float(np.max(np.abs(finite))) if finite.size else 0.0
     scale = max(magnitude, step)
@@ -130,6 +135,13 @@ class AxisManager:
         self.options = plot.options
         self.ticks_x = AxisTicks()
         self.ticks_y = AxisTicks()
+        #: Ticks of the active panel's twin axes (``twinx``/``twiny``), by axis letter, with
+        #: ``major`` already converted to the *host's* coordinates so the renderer can place
+        #: them like any other tick. Empty for a panel without twins.
+        self.twin_ticks: dict = {}
+        #: ``(SecondaryAxis, AxisTicks)`` for each secondary axis of the active panel, with
+        #: ``major`` in host coordinates. Empty without any.
+        self.secondary_ticks: list = []
 
     def update(self, ctx: RenderContext) -> None:
         """Recalculate ticks for the current view."""
@@ -148,6 +160,135 @@ class AxisManager:
         win = ctx.window_world
         self.ticks_x = self._resolve_ticks("x", win[0], win[1], target_x, step_x)
         self.ticks_y = self._resolve_ticks("y", win[2], win[3], target_y, step_y)
+        self._apply_formatter("x", self.ticks_x)
+        self._apply_formatter("y", self.ticks_y)
+        self._update_twin_ticks(ctx, target_x, target_y)
+        self._update_secondary_ticks(ctx, target_x, target_y)
+
+    def _update_secondary_ticks(self, ctx: RenderContext, target_x: int, target_y: int) -> None:
+        """Ticks for each ``secondary_*axis``: round numbers in the converted units.
+
+        The host window is converted to the secondary's units by ``functions[0]``, ticks are
+        generated over *that* range, and each is placed where ``functions[1]`` (the inverse)
+        says it falls. A function that raises, or answers with something that is not a number,
+        skips that axis rather than taking the frame down -- they are the caller's code.
+        """
+        self.secondary_ticks = []
+        panel = getattr(self.plot, "active_panel", None)
+        secondaries = getattr(panel, "secondaries", None)
+        if not secondaries:
+            return
+        win = ctx.window_world
+        for sec in secondaries:
+            letter = sec.axis
+            mode = getattr(self.options, f"axis_scale_{letter}", "linear")
+            params = getattr(self.options, f"axis_scale_params_{letter}", None)
+            lo, hi = (win[0], win[1]) if letter == "x" else (win[2], win[3])
+            forward, inverse = sec.functions
+            try:
+                raw_window = np.asarray(_scale_inverse(np.array([lo, hi]), mode, params), float)
+                converted = np.asarray(forward(raw_window), dtype=float).ravel()
+                if converted.shape != (2,) or not np.isfinite(converted).all():
+                    continue
+                lo2, hi2 = sorted(float(v) for v in converted)
+                if sec.ticks is not None:
+                    values = np.asarray(sec.ticks, dtype=float)
+                    keep = np.nonzero((values >= lo2) & (values <= hi2))[0]
+                    values = values[keep]
+                    if sec.tick_labels is not None:
+                        labels = [sec.tick_labels[i] for i in keep if i < len(sec.tick_labels)]
+                    else:
+                        step = float(np.min(np.diff(np.sort(values)))) if len(values) > 1 else 1.0
+                        labels = _auto_format(values, step if step > 0 else 1.0)
+                else:
+                    generated = self._generate_ticks(
+                        lo2, hi2, target_x if letter == "x" else target_y
+                    )
+                    values, labels = np.asarray(generated.major, dtype=float), list(
+                        generated.labels
+                    )
+                host = np.asarray(inverse(values), dtype=float).ravel()
+                position = np.asarray(_scale_forward(host, mode, params), dtype=float)
+            except Exception:
+                continue
+            ok = np.isfinite(position)
+            if len(position) == len(labels):
+                labels = [label for label, good in zip(labels, ok) if good]
+            self.secondary_ticks.append((sec, AxisTicks(major=position[ok], labels=labels)))
+
+    def _update_twin_ticks(self, ctx: RenderContext, target_x: int, target_y: int) -> None:
+        """Ticks for each twin axis of the active panel, in its own units and scale.
+
+        The twin's range is read back from the host window through the affine relation
+        (:mod:`glplot.core.twin`), ticks are generated over *that*, and their positions are
+        mapped forward again into host coordinates -- so zooming the host re-ticks the twin.
+        """
+        self.twin_ticks = {}
+        panel = getattr(self.plot, "active_panel", None)
+        twins = getattr(panel, "twins", None)
+        if not twins:
+            return
+        from ..core import twin as _twin
+
+        win = ctx.window_world
+        for letter, tw in twins.items():
+            if tw.affine is None:
+                continue
+            rng = _twin.derived_range(tw, (win[0], win[1]) if letter == "x" else (win[2], win[3]))
+            if rng is None:
+                continue
+            a, b = tw.affine
+            if tw.ticks is not None:
+                raw = np.asarray(tw.ticks, dtype=float)
+                scaled = _scale_forward(raw, tw.scale, tw.scale_params)
+                keep = np.nonzero(np.isfinite(scaled) & (scaled >= rng[0]) & (scaled <= rng[1]))[0]
+                major, raw = scaled[keep], raw[keep]
+                if tw.tick_labels is not None:
+                    labels = [tw.tick_labels[i] for i in keep if i < len(tw.tick_labels)]
+                else:
+                    step = float(np.min(np.diff(np.sort(raw)))) if len(raw) > 1 else 1.0
+                    labels = _auto_format(raw, step if step > 0 else 1.0)
+            else:
+                generated = self._generate_ticks(
+                    rng[0],
+                    rng[1],
+                    target_x if letter == "x" else target_y,
+                    0.0,
+                    tw.scale,
+                    tw.scale_params,
+                )
+                major, labels = generated.major, list(generated.labels)
+                raw = np.asarray(_scale_inverse(major, tw.scale, tw.scale_params), dtype=float)
+            if tw.formatter is not None and len(raw):
+                try:
+                    custom = [str(tw.formatter(float(v), i)) for i, v in enumerate(raw)]
+                except Exception:
+                    custom = []
+                if any(custom):
+                    labels = custom
+            self.twin_ticks[letter] = AxisTicks(major=a * np.asarray(major) + b, labels=labels)
+
+    def _apply_formatter(self, axis: str, ticks: AxisTicks) -> None:
+        """Label ``ticks`` with the matplotlib formatter ``set_major_formatter`` installed.
+
+        Called as ``formatter(value, position)``, which every ``matplotlib.ticker.Formatter``
+        accepts. A formatter that needs a live matplotlib axis (``ScalarFormatter``, a
+        ``PercentFormatter`` with automatic decimals) cannot run here and answers with an
+        error or empty strings; the automatic labels are kept then, rather than blanking the
+        axis. Linear axes only: on a log/symlog axis ``major`` is in transformed space and
+        would be formatted as if it were data.
+        """
+        formatter = getattr(self.options, f"axis_tick_formatter_{axis}", None)
+        if formatter is None or not len(ticks.major):
+            return
+        if getattr(self.options, f"axis_scale_{axis}", "linear") != "linear":
+            return
+        try:
+            labels = [str(formatter(float(v), i)) for i, v in enumerate(ticks.major)]
+        except Exception:
+            return
+        if any(labels):
+            ticks.labels = labels
 
     def _resolve_ticks(
         self, axis: str, vmin: float, vmax: float, target_count: int, forced_step: float

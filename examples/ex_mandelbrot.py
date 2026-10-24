@@ -131,7 +131,8 @@ def animate_zoom() -> None:
         plt.title(f"zoom {1.4 / span:,.0f}x   ({max_iter} iterations)")
         return []
 
-    ani = animation.FuncAnimation(fig, update, frames=frames, interval=40)
+    # `ani` is never read, but the animation must stay referenced until show() returns.
+    ani = animation.FuncAnimation(fig, update, frames=frames, interval=40)  # noqa: F841
     # ani.save("mandelbrot_zoom.mp4", fps=25)   # needs imageio-ffmpeg or ffmpeg on PATH
     plt.show()
 

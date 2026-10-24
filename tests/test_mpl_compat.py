@@ -1451,24 +1451,30 @@ class TestPieWedgeShape:
 class TestSingleViewportStubs:
     """Compat names that still map onto the single viewport GLPlot draws each panel into.
 
-    ``twinx``/``twiny`` (two scales in one viewport) and ``tight_layout`` have no real
-    backing yet: they return the current axes and *say so* rather than pretending to have
-    worked. ``subplot`` and ``subplot_mosaic``, by contrast, are now real -- see
-    :class:`TestRealSubplots`. ``colorbar`` is real too -- see :class:`TestColorbar`.
+    ``tight_layout`` has no real backing: it returns and *says so* rather than pretending to
+    have worked. (``twinx``/``twiny`` used to be here too; they are real now.) ``subplot``
+    and ``subplot_mosaic``, by contrast, are now real -- see :class:`TestRealSubplots`.
+    ``colorbar`` is real too -- see :class:`TestColorbar`.
     """
 
     @pytest.mark.parametrize("func", ["twinx", "twiny"])
-    def test_twin_axes_warn_that_they_are_not_twinned(self, plot, func):
-        """Returning the same axes silently would draw series 2 on axis 1 unannounced.
+    def test_twin_axes_are_real_and_do_not_warn(self, plot, func):
+        """``twinx``/``twiny`` used to return the same axes and warn "not a twinned one"; they
+        now return a distinct axes with its own scale (see ``tests/test_twin_axes.py``).
 
-        The return value is an AxesProxy (not the bare figure) bound to the same
-        panel/figure -- so the standard ``ax2 = ax1.twinx(); ax2.plot(...)`` idiom has a
-        real ``.plot()`` to call, rather than raising AttributeError on the next line.
+        The return value is still an AxesProxy bound to the same panel/figure, so the
+        standard ``ax2 = ax1.twinx(); ax2.plot(...)`` idiom has a real ``.plot()`` to call.
         """
-        with pytest.warns(gplt.MatplotlibCompatWarning, match="not a twinned one"):
+        import warnings
+
+        gplt.plot([0.0, 1.0], [0.0, 1.0])
+        host = gplt.gca()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", gplt.MatplotlibCompatWarning)
             twin = getattr(gplt, func)()
         assert isinstance(twin, gplt.AxesProxy)
         assert twin.figure is gplt.gcf()
+        assert twin != host and twin.panel is host.panel
 
     def test_tight_layout_warns_and_points_at_the_margins(self, plot):
         with pytest.warns(gplt.MatplotlibCompatWarning, match="axis_margin"):

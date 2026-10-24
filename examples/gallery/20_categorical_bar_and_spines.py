@@ -1,5 +1,4 @@
 import numpy as np
-from matplotlib import colormaps
 
 import glplot.pyplot as plt
 

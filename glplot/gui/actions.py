@@ -143,6 +143,19 @@ class ActionRegistry:
         )
         return self.register(action)
 
+    def unregister(self, id: str) -> bool:  # noqa: A002 - matches the Action field name
+        """Remove the action with this id. Returns False if there was none.
+
+        For actions whose lifetime is not the workspace's -- the Controls panel's buttons
+        come and go with the user's script -- so the table can follow them instead of
+        accumulating dead entries that the palette would still list.
+        """
+        action = self._by_id.pop(id, None)
+        if action is None:
+            return False
+        self._actions = [a for a in self._actions if a is not action]
+        return True
+
     # -- lookup ------------------------------------------------------------------------
 
     def get(self, id: str) -> Optional[Action]:  # noqa: A002 - matches the Action field

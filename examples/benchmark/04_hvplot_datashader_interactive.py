@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import hvplot.pandas  # Registers the .hvplot accessor
+import hvplot.pandas  # noqa: F401  (registers the .hvplot accessor)
 import numpy as np
 import pandas as pd
 import panel as pn

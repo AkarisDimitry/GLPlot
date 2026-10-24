@@ -1,5 +1,4 @@
 import math
-import time
 
 import numpy as np
 
@@ -8,7 +7,6 @@ import glplot.pyplot as gplt
 
 def generate_flow_field(n=200_000):
     """Generate a vector field of lines."""
-    ab = np.zeros((n, 2), dtype=np.float32)
     # y = ax + b
     a = np.random.uniform(-0.1, 0.1, n).astype(np.float32)
     b = np.random.normal(0, 1.5, n).astype(np.float32)

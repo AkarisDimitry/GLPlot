@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import os
 import sys
+import types
 
 import pytest
 
+import glplot.engine as engine_module
 import glplot.pyplot as gplt
-from glplot.engine import GPULinePlot
+from glplot.engine import GPULinePlot, glfw
 from glplot.gui.workspace import Workspace
 
 try:
@@ -99,6 +101,37 @@ class TestMouseInputPipeline:
         assert ("window", 5.0, 6.0) in calls
 
 
+class TestHiddenHudAnimationTransport:
+    """Space must remain a transport key when no workspace frame is being drawn."""
+
+    def test_space_toggles_the_timeline_without_opening_f3_menus(self):
+        plot = GPULinePlot()
+        plot.options.enable_hud = False
+        timeline = plot.active_panel.timeline
+        timeline.pause()
+
+        # A stale ImGui capture flag must not swallow a shortcut while ImGui is hidden.
+        plot.hud.on_key = lambda *args: None
+        plot.hud.wants_keyboard = lambda: True
+        plot._on_key(None, glfw.KEY_SPACE, 0, glfw.PRESS, 0)
+
+        assert timeline.playing is True
+        assert plot.frame.dirty_scene is True
+
+    def test_key_repeat_and_release_do_not_toggle_twice(self):
+        plot = GPULinePlot()
+        plot.options.enable_hud = False
+        timeline = plot.active_panel.timeline
+        plot.hud.on_key = lambda *args: None
+        plot.hud.wants_keyboard = lambda: False
+
+        plot._on_key(None, glfw.KEY_SPACE, 0, glfw.PRESS, 0)
+        plot._on_key(None, glfw.KEY_SPACE, 0, glfw.REPEAT, 0)
+        plot._on_key(None, glfw.KEY_SPACE, 0, glfw.RELEASE, 0)
+
+        assert timeline.playing is True
+
+
 class TestWorkspaceFocusSafety:
     """imgui.set_window_focus(name) segfaults in imgui-bundle when `name` is not the
     window currently being drawn this frame -- reproduced standalone, not a Python
@@ -163,6 +196,61 @@ class TestImguiBundleImportOrder:
                 "PYGLFW_LIBRARY does not point at imgui_bundle's own copy -- glfw likely "
                 "loaded its own libglfw before imgui_bundle could redirect it"
             )
+
+
+class TestInteractiveWindowPresentation:
+    """The visible window must be presented after an earlier invisible GL export."""
+
+    def test_run_unhides_and_focuses_the_macos_application_before_the_loop(self, monkeypatch):
+        figure = GPULinePlot()
+        figure.window = object()
+        figure._needs_initial_autoscale = False
+        calls = []
+
+        monkeypatch.setattr(figure, "_init_window", lambda: calls.append("init-window"))
+        monkeypatch.setattr(figure, "_init_gl", lambda: calls.append("init-gl"))
+        monkeypatch.setattr(figure, "_init_modules", lambda: calls.append("init-modules"))
+        monkeypatch.setattr(figure, "_main_loop", lambda: calls.append("main-loop"))
+        monkeypatch.setattr(glfw, "show_window", lambda window: calls.append("show"))
+        monkeypatch.setattr(glfw, "poll_events", lambda: calls.append("poll"))
+        monkeypatch.setattr(glfw, "focus_window", lambda window: calls.append("focus"))
+        monkeypatch.setattr(engine_module.sys, "platform", "darwin")
+
+        class FakeApplication:
+            def setActivationPolicy_(self, policy):
+                calls.append(("policy", policy))
+
+            def unhide_(self, sender):
+                calls.append(("unhide", sender))
+
+            def activateIgnoringOtherApps_(self, enabled):
+                calls.append(("activate", enabled))
+
+        application = FakeApplication()
+        appkit = types.ModuleType("AppKit")
+        appkit.NSApplicationActivationPolicyRegular = 0
+        appkit.NSApplication = type(
+            "FakeNSApplication",
+            (),
+            {"sharedApplication": staticmethod(lambda: application)},
+        )
+        monkeypatch.setitem(sys.modules, "AppKit", appkit)
+
+        figure.run()
+
+        assert calls == [
+            "init-window",
+            "init-gl",
+            "init-modules",
+            "show",
+            "poll",
+            ("policy", 0),
+            ("unhide", None),
+            ("activate", True),
+            "focus",
+            "poll",
+            "main-loop",
+        ]
 
 
 @pytest.mark.skipif(

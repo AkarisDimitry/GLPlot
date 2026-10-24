@@ -108,10 +108,14 @@ class TestStyleRegistry:
         with pytest.raises(KeyError):
             styles.get_style("chartreuse")
 
-    def test_only_neon_glows(self):
-        """The whole point of the round: glow is opt-in, not the house style."""
+    def test_only_the_luminous_looks_glow(self):
+        """The whole point of the round: glow is opt-in, not the house style.
+
+        It belongs to the looks that are about light (see ``test_gui_styles_extra``'s
+        ``LUMINOUS`` family); a paper, presentation or workstation look never has it.
+        """
         glowing = [s.key for s in styles.STYLES if s.glow.enabled]
-        assert glowing == ["neon"]
+        assert glowing == ["neon", "aurora", "synthwave"]
 
 
 class TestApplyStyle:
@@ -177,7 +181,7 @@ class TestApplyStyle:
         styles.apply_style(plot, styles.get_style("neon"))
         assert plot.options.visual.tonemap_index == styles.TONEMAP_ACES
         assert plot.options.visual.glow.enabled is True
-        assert plot.options.visual.glow.knee == pytest.approx(0.5)
+        assert plot.options.visual.glow.knee == pytest.approx(styles.get_style("neon").glow.knee)
         assert plot.options.blend_mode is BlendMode.ADDITIVE
 
     def test_gradient_is_off_unless_the_preset_asks(self):
@@ -554,9 +558,9 @@ class TestChalkGrain:
 
     def test_only_the_surface_looks_ship_grain(self):
         """Grain is paper tooth, not a default: it belongs to the looks that imitate a real
-        drawing surface (slate, dry-erase board, waxed manila) and nothing else."""
+        surface (slate, dry-erase board, waxed manila, aged print) and nothing else."""
         grainy = [s.key for s in styles.STYLES if s.grain > 0.0]
-        assert grainy == ["chalk", "marker", "kids"]
+        assert grainy == ["chalk", "marker", "kids", "vintage"]
 
 
 class TestBackgroundModeLatch:

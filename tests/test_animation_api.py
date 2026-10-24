@@ -21,6 +21,7 @@ real GL context are skipped, not faked.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import os
 
@@ -395,6 +396,42 @@ class TestHeadlessRendering:
         frame = animation.figure_to_rgb(figure)
         assert frame.ndim == 3 and frame.shape[2] == 3
 
+    def test_opengl_frame_uses_in_memory_export(self, sine_figure, monkeypatch):
+        figure, _ = sine_figure
+        expected = np.full((9, 13, 3), 37, dtype=np.uint8)
+        calls = []
+        monkeypatch.setattr(figure, "window", object())
+        monkeypatch.setattr(figure, "_animation_renderer_override", "opengl", raising=False)
+        monkeypatch.setattr(
+            figure.export,
+            "render_rgb",
+            lambda *, scale: calls.append(scale) or expected,
+        )
+
+        frame = animation.figure_to_rgb(figure, dpi=200)
+
+        assert calls == [2.0]
+        assert np.array_equal(frame, expected)
+
+    def test_matplotlib_can_be_forced_even_with_a_window(self, sine_figure, monkeypatch):
+        figure, _ = sine_figure
+        expected = np.full((7, 11, 3), 91, dtype=np.uint8)
+        monkeypatch.setattr(figure, "window", object())
+        monkeypatch.setattr(figure, "_animation_renderer_override", "matplotlib", raising=False)
+        monkeypatch.setattr(
+            "glplot.utils.preview.render_preview_array",
+            lambda fig, scale: expected,
+        )
+        monkeypatch.setattr(
+            figure.export,
+            "render_rgb",
+            lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("forced matplotlib rendering must not use OpenGL")
+            ),
+        )
+
+        assert np.array_equal(animation.figure_to_rgb(figure), expected)
+
 
 class TestSave:
     """End-to-end saving, headless, with the output reopened and counted."""
@@ -500,6 +537,94 @@ class TestSave:
             tmp_path / "bb.png", fps=5, savefig_kwargs={"bbox_inches": "tight"}
         )
         assert os.path.exists(tmp_path / "bb_0000.png")
+
+    def test_opengl_renderer_reuses_one_context_for_every_frame(
+        self, sine_figure, tmp_path, monkeypatch
+    ):
+        figure, x = sine_figure
+        entered = []
+        selected = []
+
+        @contextlib.contextmanager
+        def fake_context():
+            entered.append("enter")
+            figure.window = object()
+            try:
+                yield
+            finally:
+                figure.window = None
+                entered.append("exit")
+
+        monkeypatch.setattr(figure, "_offscreen_export_context", fake_context)
+
+        def fake_frame(fig, dpi=None):
+            selected.append(fig._animation_renderer_override)
+            return np.zeros((12, 16, 3), dtype=np.uint8)
+
+        monkeypatch.setattr(animation, "figure_to_rgb", fake_frame)
+        self._animation(figure, x, frames=3).save(
+            tmp_path / "gpu.png",
+            fps=5,
+            savefig_kwargs={"renderer": "opengl"},
+        )
+
+        assert entered == ["enter", "exit"]
+        assert selected == ["opengl"] * 3
+        assert not hasattr(figure, "_animation_renderer_override")
+
+    def test_matplotlib_renderer_never_creates_a_context(self, sine_figure, tmp_path, monkeypatch):
+        figure, x = sine_figure
+        selected = []
+
+        def forbidden_context():
+            raise AssertionError("matplotlib renderer must not initialize OpenGL")
+
+        monkeypatch.setattr(figure, "_offscreen_export_context", forbidden_context)
+
+        def fake_frame(fig, dpi=None):
+            selected.append(fig._animation_renderer_override)
+            return np.zeros((12, 16, 3), dtype=np.uint8)
+
+        monkeypatch.setattr(animation, "figure_to_rgb", fake_frame)
+        self._animation(figure, x, frames=2).save(
+            tmp_path / "mpl.png",
+            fps=5,
+            savefig_kwargs={"renderer": "matplotlib"},
+        )
+        assert selected == ["matplotlib"] * 2
+
+    def test_auto_renderer_warns_and_falls_back(self, sine_figure, tmp_path, monkeypatch):
+        figure, x = sine_figure
+        selected = []
+
+        @contextlib.contextmanager
+        def unavailable_context():
+            raise RuntimeError("no display")
+            yield  # pragma: no cover - makes this a context manager
+
+        monkeypatch.setattr(figure, "_offscreen_export_context", unavailable_context)
+
+        def fake_frame(fig, dpi=None):
+            selected.append(fig._animation_renderer_override)
+            return np.zeros((12, 16, 3), dtype=np.uint8)
+
+        monkeypatch.setattr(animation, "figure_to_rgb", fake_frame)
+        with pytest.warns(RuntimeWarning, match="falling back to the matplotlib renderer"):
+            self._animation(figure, x, frames=2).save(
+                tmp_path / "auto.png",
+                fps=5,
+                savefig_kwargs={"renderer": "auto"},
+            )
+        assert selected == ["matplotlib"] * 2
+
+    def test_invalid_renderer_is_rejected(self, sine_figure, tmp_path):
+        figure, x = sine_figure
+        with pytest.raises(ValueError, match="animation renderer"):
+            self._animation(figure, x, frames=2).save(
+                tmp_path / "bad-renderer.png",
+                fps=5,
+                savefig_kwargs={"renderer": "vulkan"},
+            )
 
     def test_unavailable_writer_degrades_with_a_warning(self, sine_figure, tmp_path, monkeypatch):
         """Never silent. A save that produces a different format must say so."""
@@ -711,11 +836,15 @@ class TestWriterMechanics:
 
 
 class TestNullCanvasAdaptation:
-    """A GPULinePlot has no canvas; nothing may raise AttributeError because of it."""
+    """A GPULinePlot has no matplotlib canvas; nothing may raise AttributeError because of it.
+
+    It does have a minimal ``fig.canvas`` (``draw_idle`` for widget callbacks), which must
+    not be mistaken for an event-bus canvas: no ``mpl_connect``.
+    """
 
     def test_animation_constructs_without_a_canvas(self, sine_figure):
         figure, _ = sine_figure
-        assert not hasattr(figure, "canvas")
+        assert not hasattr(getattr(figure, "canvas", None), "mpl_connect")
         animation.FuncAnimation(figure, lambda i: None, frames=3)
 
     def test_null_canvas_reports_no_blit_support(self, sine_figure):
@@ -805,6 +934,27 @@ class TestLiveGlContext:
         )
         ani.save(tmp_path / "gl.png", fps=5)
         assert os.path.getsize(tmp_path / "gl_0000.png") > 0
+
+    def test_opengl_save_creates_and_releases_an_invisible_context(self, tmp_path):
+        figure = gplt.figure(width=320, height=240)
+        x = np.linspace(0.0, 6.0, 40)
+        layer = gplt.plot(x, np.sin(x))[0]
+        assert figure.window is None
+
+        ani = animation.FuncAnimation(
+            figure,
+            lambda i: layer.pts.__setitem__((slice(None), 1), np.sin(x + i).astype(np.float32)),
+            frames=2,
+            interval=50,
+        )
+        ani.save(
+            tmp_path / "hidden-gl.png",
+            fps=5,
+            savefig_kwargs={"renderer": "opengl"},
+        )
+
+        assert figure.window is None
+        assert os.path.getsize(tmp_path / "hidden-gl_0000.png") > 0
 
 
 class TestDeleteWithoutRenderingWarning:

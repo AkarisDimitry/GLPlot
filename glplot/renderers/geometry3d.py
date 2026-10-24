@@ -594,9 +594,11 @@ class Geometry3DRenderer:
         mode = mode_map.get(layer.primitive, GL_POINTS)
 
         # axis3d wireframe is drawn last and must always be visible regardless of
-        # what volumetric data lies in front of it — skip depth testing for it.
-        is_axis_overlay = layer.metadata.get("artist") == "axis3d"
-        if not is_axis_overlay:
+        # what volumetric data lies in front of it — skip depth testing for it. A layer
+        # with style.depth_test=False asked for the same treatment (RendererManager draws
+        # it after the data layers, so draw order alone puts it on top).
+        is_overlay = layer.metadata.get("artist") == "axis3d" or not layer.style.depth_test
+        if not is_overlay:
             glEnable(GL_DEPTH_TEST)
         glEnable(GL_PROGRAM_POINT_SIZE)
         glUseProgram(self.prog)
@@ -699,9 +701,9 @@ class Geometry3DRenderer:
         # policy: a caller who wants to see through their own surface, or wants a dense cloud
         # to occlude, knows something about their data that no rule here can.
         depth_masked = (
-            not is_axis_overlay and not outlined and mode != GL_TRIANGLES and is_translucent(layer)
+            not is_overlay and not outlined and mode != GL_TRIANGLES and is_translucent(layer)
         )
-        if layer.style.depth_write is not None and not is_axis_overlay:
+        if layer.style.depth_write is not None and not is_overlay:
             depth_masked = not layer.style.depth_write
         if depth_masked:
             glDepthMask(GL_FALSE)
@@ -725,7 +727,7 @@ class Geometry3DRenderer:
         if depth_masked and mode == GL_POINTS and not is_order_independent(layer_blend):
             sorted_count = self._upload_depth_order(layer, mvp, mode=ctx.mode)
 
-        if outlined and is_axis_overlay:
+        if outlined and is_overlay:
             self._draw_outline_pass(layer, mode, outline_width, solid=(mode == GL_TRIANGLES))
             self._issue_draw(layer, mode, sorted_count=sorted_count)
         else:

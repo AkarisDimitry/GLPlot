@@ -32,8 +32,10 @@ def test_plot_accepts_y_only_and_returns_artists():
 def test_plot_accepts_repeated_matplotlib_groups():
     x = np.arange(3)
     artists = gplt.plot(x, x, "r-", x, x**2, "bo")
-    assert len(artists) == 3
-    assert layer_types() == ["polyline", "polyline", "scatter"]
+    # "bo" is markers only, as in matplotlib: one line for the first group, one scatter for
+    # the second, and no connecting line behind the circles.
+    assert len(artists) == 2
+    assert layer_types() == ["polyline", "scatter"]
 
 
 def test_plot_sequence_mismatch():

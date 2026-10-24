@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import glplot.animation as animation
 from glplot.core.timeline import EASING_LABELS, Keyframe, Track
 from glplot.engine import GPULinePlot
 from glplot.gui.commands import CommandQueue
@@ -1737,3 +1738,22 @@ class TestWorkspaceIntegration:
         workspace.queue.drain(workspace.plot)
         assert workspace.open["timeline"] is True
         assert workspace.plot.active_panel.timeline.playing is True
+
+    def test_play_action_keeps_targeting_live_animation_after_camera_focus_change(self, workspace):
+        from glplot.core import layout
+
+        plot = workspace.plot
+        plot.set_panels(layout.grid(1, 2))
+        plot.active_panel_index = 1
+        ani = animation.FuncAnimation(plot, lambda i: None, frames=20, interval=20)
+        bound = plot.panels[1].timeline
+        bound.pause()
+
+        # Camera interaction activates the subplot under the cursor.
+        plot.active_panel_index = 0
+        workspace.registry.get("anim.play_pause").run()
+        workspace.queue.drain(plot)
+
+        assert bound.playing is True
+        assert plot.panels[0].timeline.playing is False
+        ani._draw_was_started = True

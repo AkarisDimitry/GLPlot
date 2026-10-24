@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import glfw
 import numpy as np
@@ -70,6 +72,55 @@ from .utils.shaders import DENSITY_SCHEMES
 _VIEW_SAMPLE_PAD = 1.15
 
 
+class _FigureCanvas:
+    """``fig.canvas`` -- just enough for matplotlib's callback idioms.
+
+    Widget and animation callbacks end with ``fig.canvas.draw_idle()``; this makes that
+    line mean "redraw on the next frame". Deliberately *not* a matplotlib canvas: it has no
+    ``mpl_connect`` and no ``get_renderer``, so ``animation._canvas_for`` and the preview's
+    renderer probe still recognise the figure as GLPlot's own and take their GLPlot paths.
+    """
+
+    supports_blit = False
+
+    def __init__(self, figure: "GPULinePlot") -> None:
+        self.figure = figure
+
+    def draw_idle(self, *args: Any, **kwargs: Any) -> None:
+        fig = self.figure
+        fig.frame.dirty_scene = True
+        fig.frame.dirty_ui = True
+        fig.cache.capture_window = None
+        fig.cache.refresh_requested = True
+        _post_empty_event()
+
+    def draw(self, *args: Any, **kwargs: Any) -> None:
+        self.draw_idle()
+
+    def flush_events(self) -> None:
+        """No-op: GLPlot's window pumps its own events."""
+
+    def get_width_height(self, *, physical: bool = False) -> Tuple[int, int]:
+        """``(width, height)`` in pixels, matplotlib's ``FigureCanvasBase.get_width_height``."""
+        return int(self.figure.width), int(self.figure.height)
+
+
+def _post_empty_event() -> None:
+    """Wake a reactive main loop sleeping in ``wait_events_timeout`` (thread-safe).
+
+    Without an initialised GLFW (a script before ``show()``) glfw reports that as a
+    *warning*, not an exception -- suppressed too, as in ``CommandQueue._wake``.
+    """
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            glfw.post_empty_event()
+    except Exception:  # pragma: no cover - no GLFW context
+        pass
+
+
 def _finite_log_bounds(vmin: float, vmax: float) -> Tuple[float, float]:
     """A ``(vmin, vmax)`` pair already in log10 space, with NaN edges patched.
 
@@ -88,6 +139,45 @@ def _finite_log_bounds(vmin: float, vmax: float) -> Tuple[float, float]:
     if math.isnan(vmax):
         return vmin, vmin + 1.0
     return vmin, vmax
+
+
+#: Settings that describe one *axes* but live on the figure's shared ``options`` (or, for the
+#: legend, directly on the figure). In matplotlib each axes has its own; here ``options`` has
+#: one set, so ``axs[0].set_xticks(...)`` or ``axs[1].set_yscale("log")`` used to change every
+#: panel of the figure. ``GPULinePlot.active_panel_index`` swaps these in and out per panel,
+#: which makes every existing reader and writer of them -- the renderers, the GUI, ``xticks()``
+#: -- per-panel without touching any of them.
+_PER_AXES_OPTIONS = (
+    "axis_scale_x",
+    "axis_scale_y",
+    "axis_scale_params_x",
+    "axis_scale_params_y",
+    "axis_tick_values_x",
+    "axis_tick_values_y",
+    "axis_tick_labels_x",
+    "axis_tick_labels_y",
+    "axis_tick_formatter_x",
+    "axis_tick_formatter_y",
+    "axis_tick_locator_x",
+    "axis_tick_locator_y",
+    "axis_tick_rotation_x",
+    "axis_tick_rotation_y",
+    "axis_tick_count_x",
+    "axis_tick_count_y",
+    "axis_tick_step_x",
+    "axis_tick_step_y",
+    "legend_show",
+    "legend_max_items",
+)
+#: The legend state ``gplt.legend()`` sets directly on the figure. Absent until it is called.
+_PER_AXES_ATTRS = ("legend_show", "legend_labels", "legend_max_items")
+_UNSET: Any = object()
+
+
+def _default_axes_options() -> dict:
+    """The value every :data:`_PER_AXES_OPTIONS` entry has on a fresh ``EngineOptions``."""
+    fresh = EngineOptions()
+    return {name: getattr(fresh, name) for name in _PER_AXES_OPTIONS}
 
 
 class GPULinePlot:
@@ -110,7 +200,12 @@ class GPULinePlot:
         # are properties (below) delegating to ``self.panels[self.active_panel_index]``, so
         # every pre-panel code path keeps operating on "the current axes" unchanged.
         self.panels: List[Panel] = [Panel(self.options, rect_frac=(0.0, 0.0, 1.0, 1.0))]
-        self.active_panel_index: int = 0
+        #: The panel whose per-axes settings are currently *in* ``options`` (see
+        #: ``_PER_AXES_OPTIONS``). Tracked by identity, not index, so replacing the panel list
+        #: (``set_panels``, ``split_view``, ``merge_view``) needs no bookkeeping: a panel that
+        #: survives keeps its settings, a new one starts from the defaults.
+        self._axes_state_owner: Optional[Panel] = None
+        self.active_panel_index = 0
         #: Window-pixel offset of the panel currently being drawn, for imgui overlays (tick
         #: labels, legend). Set by ``_draw_panels`` per panel; (0, 0) for a full-window panel.
         self._panel_offset_px: Tuple[float, float] = (0.0, 0.0)
@@ -160,6 +255,18 @@ class GPULinePlot:
         #: Per-frame callbacks, run at the top of the main loop. See
         #: :meth:`add_frame_callback` — the hook that makes live animation possible.
         self._frame_callbacks: List[Callable[[float], None]] = []
+        #: Interactive controls (sliders, buttons...) -- built on first use of
+        #: :attr:`controls`, so a figure that never asks for one pays nothing.
+        self._controls: Optional[Any] = None
+        self._loop_running = False
+        #: Set by :meth:`run` when it mounted the workstation only to show the controls;
+        #: the workspace then opens with just the Controls panel.
+        self._controls_focus_mode = False
+        #: Timelines currently driving live ``FuncAnimation`` objects. A camera click may
+        #: activate a different subplot, but transport controls must keep addressing the
+        #: animation they were created for instead of toggling the newly active panel's
+        #: unrelated timeline.
+        self._live_animation_timelines: List[Any] = []
         self._axes3d_labels: List[axes3d.LabelAnchor] = []
         #: The padded box those anchors were computed against, so the HUD projects them
         #: with exactly the matrix the geometry was drawn with.
@@ -191,6 +298,74 @@ class GPULinePlot:
     # historically read straight off the engine. These properties forward to it so a single
     # full-window panel is indistinguishable from the pre-panel engine, and switching the
     # active panel re-points "the current axes" at another region.
+
+    @property
+    def active_panel_index(self) -> int:
+        return self._active_panel_index
+
+    @active_panel_index.setter
+    def active_panel_index(self, value: int) -> None:
+        self._active_panel_index = value
+        panels = self.__dict__.get("panels")
+        if not panels or not (0 <= value < len(panels)):
+            return
+        target = panels[value]
+        owner = self.__dict__.get("_axes_state_owner")
+        if owner is target:
+            return
+        if owner is None:  # the first panel adopts whatever the options already hold
+            self._axes_state_owner = target
+            return
+        owner.axes_state = self._read_axes_state()
+        self._write_axes_state(target.axes_state)
+        target.axes_state = None
+        self._axes_state_owner = target
+
+    def _read_axes_state(self) -> dict:
+        return {
+            "options": {name: getattr(self.options, name) for name in _PER_AXES_OPTIONS},
+            "attrs": {name: self.__dict__.get(name, _UNSET) for name in _PER_AXES_ATTRS},
+        }
+
+    def _write_axes_state(self, state: Optional[dict]) -> None:
+        """Make ``state`` (``None`` = a panel that never had any: the defaults) current."""
+        options = state["options"] if state else _default_axes_options()
+        for name, value in options.items():
+            setattr(self.options, name, value)
+        attrs = state["attrs"] if state else {}
+        for name in _PER_AXES_ATTRS:
+            value = attrs.get(name, _UNSET)
+            if value is _UNSET:
+                self.__dict__.pop(name, None)
+            else:
+                self.__dict__[name] = value
+
+    def axes_option(self, panel: Panel, name: str) -> Any:
+        """``panel``'s value of the per-axes option ``name``, whether or not it is active."""
+        if panel is self._axes_state_owner:
+            return getattr(self.options, name)
+        state = panel.axes_state
+        return state["options"][name] if state else _default_axes_options()[name]
+
+    def set_axes_option(self, panel: Panel, name: str, value: Any) -> None:
+        """Set ``panel``'s per-axes option ``name`` *without* making that panel active."""
+        if panel is self._axes_state_owner:
+            setattr(self.options, name, value)
+            return
+        if panel.axes_state is None:
+            panel.axes_state = {
+                "options": _default_axes_options(),
+                "attrs": {n: _UNSET for n in _PER_AXES_ATTRS},
+            }
+        panel.axes_state["options"][name] = value
+
+    def axes_attr(self, panel: Panel, name: str, default: Any = None) -> Any:
+        """``panel``'s value of the per-axes figure attribute ``name`` (the legend's state)."""
+        if panel is self._axes_state_owner:
+            return self.__dict__.get(name, default)
+        state = panel.axes_state
+        value = state["attrs"].get(name, _UNSET) if state else _UNSET
+        return default if value is _UNSET else value
 
     @property
     def active_panel(self) -> Panel:
@@ -773,6 +948,40 @@ class GPULinePlot:
                 panel.cache.refresh_requested = True
                 self.frame.dirty_scene = True
 
+    @property
+    def canvas(self) -> _FigureCanvas:
+        """A minimal canvas so ``fig.canvas.draw_idle()`` in callbacks requests a redraw."""
+        canvas = self.__dict__.get("_canvas")
+        if canvas is None:
+            canvas = self._canvas = _FigureCanvas(self)
+        return canvas
+
+    @property
+    def controls(self) -> Any:
+        """This figure's :class:`~glplot.controls.ControlSet`: its sliders, buttons, toggles.
+
+        Created on first access. The workstation's Controls panel draws it, and the main
+        loop runs its callbacks at the top of each frame (see :meth:`_flush_controls`).
+        """
+        if self._controls is None:
+            from .controls import ControlSet
+
+            self._controls = ControlSet(self)
+            if self._loop_running:  # created by a callback while the window is up
+                self._controls._set_live(True, waker=_post_empty_event)
+        return self._controls
+
+    def _flush_controls(self) -> None:
+        """Run the callbacks owed to control changes made since the last frame.
+
+        Same slot as the GUI command queue and for the same reason: callbacks mutate the
+        scene, so they must run on the GL thread at the top of the frame, before the
+        ``need_render`` gate reads the dirty flags they raise.
+        """
+        controls = self._controls
+        if controls is not None and controls.pending:
+            controls.flush()
+
     def add_frame_callback(self, fn: Callable[[float], None]) -> Callable[[float], None]:
         """Register ``fn(t)`` to run once per frame inside the main loop. Returns ``fn``.
 
@@ -793,6 +1002,33 @@ class GPULinePlot:
         """
         self._frame_callbacks.append(fn)
         return fn
+
+    def register_live_animation_timeline(self, timeline: Any) -> Any:
+        """Remember a timeline controlled by a live animation and return it.
+
+        The list is identity-deduplicated because several animations may deliberately
+        share one panel timeline. Keeping this on the figure lets keyboard and GUI
+        transports survive active-panel changes caused by camera interaction.
+        """
+        if not any(existing is timeline for existing in self._live_animation_timelines):
+            self._live_animation_timelines.append(timeline)
+        return timeline
+
+    def transport_timeline(self) -> Any:
+        """Return the timeline global playback controls should operate on.
+
+        Prefer the active panel when it owns a live animation. If exactly one live
+        animation exists elsewhere, keep controlling that one after the user clicks or
+        orbits another subplot. Figures without a live animation retain the historical
+        per-active-panel behaviour.
+        """
+        active = self.active_panel.timeline
+        live = self._live_animation_timelines
+        if any(candidate is active for candidate in live):
+            return active
+        if len(live) == 1:
+            return live[0]
+        return active
 
     def remove_frame_callback(self, fn: Callable[[float], None]) -> bool:
         """Unregister a callback added by :meth:`add_frame_callback`."""
@@ -1372,20 +1608,37 @@ class GPULinePlot:
         self.frame.dirty_scene = True
 
     def set_view(
-        self, xlim: Optional[Tuple[float, float]] = None, ylim: Optional[Tuple[float, float]] = None
+        self,
+        xlim: Optional[Tuple[float, float]] = None,
+        ylim: Optional[Tuple[float, float]] = None,
+        *,
+        twin_follow: bool = False,
     ) -> None:
         """
         Sets the world-space view limits, mimicking Matplotlib's xlim/ylim.
         Allows independent scaling of X and Y axes (unforcing 1:1 data aspect).
+
+        A panel's twin axes (``twinx``/``twiny``) keep the range they were showing, as
+        ``ax1.set_ylim(...)`` leaves ``ax2`` alone in matplotlib. ``twin_follow=True`` is for a
+        *navigation* gesture (a zoom rectangle): the twins then move with the host instead.
         """
         if xlim is None and ylim is None:
             return
 
         tx = xlim if xlim is not None else self.get_xlim()
         ty = ylim if ylim is not None else self.get_ylim()
+        keep = None if twin_follow else self._twin_ranges()
 
+        # As in matplotlib, ``(hi, lo)`` *is* the inversion: the order of a pair names the
+        # direction of the axis, and an axis not mentioned keeps the one it has (get_xlim
+        # above already reports it reversed).
+        self.camera.flip_x = bool(tx[0] > tx[1])
+        self.camera.flip_y = bool(ty[0] > ty[1])
         self.camera_controller.fit_bounds(tx[0], tx[1], ty[0], ty[1], self.width, self.height)
+        if not twin_follow:
+            self._refit_twins(keep)
 
+        self.active_panel.view_pinned = True
         self._needs_initial_autoscale = False
         # Flush interaction cache on manual view changes
         self.cache.active = False
@@ -1481,6 +1734,7 @@ class GPULinePlot:
         """
         if padding is None:
             padding = float(getattr(self.options, "autoscale_margin", 0.05))
+        keep = self._twin_ranges()
         layers = self._get_all_layers()
         bounds = self.renderer_manager.get_bounds(layers)
 
@@ -1524,7 +1778,9 @@ class GPULinePlot:
         self.camera_controller.fit_bounds(
             xmin - dx, xmax + dx, ymin - dy, ymax + dy, self.width, self.height, axes=axes
         )
+        self._refit_twins(keep)
 
+        self.active_panel.view_pinned = True
         self._needs_initial_autoscale = False
         self.cache.active = False
         self.frame.dirty_scene = True
@@ -1643,6 +1899,7 @@ class GPULinePlot:
                 if p is not src:
                     p.camera.cx = src.camera.cx
                     p.camera.zoom_x = src.camera.zoom_x
+                    p.camera.flip_x = src.camera.flip_x
                     p.cache.active = False
                     p.cache.refresh_requested = True
         if src.sharey_group:
@@ -1650,6 +1907,7 @@ class GPULinePlot:
                 if p is not src:
                     p.camera.cy = src.camera.cy
                     p.camera.zoom_y = src.camera.zoom_y
+                    p.camera.flip_y = src.camera.flip_y
                     p.cache.active = False
                     p.cache.refresh_requested = True
 
@@ -1791,9 +2049,15 @@ class GPULinePlot:
             for i in range(len(self.panels)):
                 self.active_panel_index = i
                 panel = self.panels[i]
-                if panel.needs_initial_autoscale and not self._is_pure_3d_scene():
+                if (
+                    panel.needs_initial_autoscale
+                    and not panel.view_pinned
+                    and not self._is_pure_3d_scene()
+                ):
                     self.autoscale()
                     panel.needs_initial_autoscale = False
+                    # The first fit is not a deliberate pin (``autoscale`` marks one).
+                    panel.view_pinned = False
         finally:
             self.active_panel_index = saved
 
@@ -1808,6 +2072,8 @@ class GPULinePlot:
         # by any script that calls cla()/clf() then plot_lines() again, e.g. a
         # FuncAnimation whose update() does exactly that every frame.
         self._primary_line_layer = None
+        self.active_panel.twins = {}  # their layers went with the scene
+        self.active_panel.secondaries = []
         self.frame.dirty_scene = True
 
     def close(self) -> None:
@@ -1818,7 +2084,11 @@ class GPULinePlot:
         self._init_window()
         self._init_gl()
         self._init_modules()
-        if self._needs_initial_autoscale and not self._is_pure_3d_scene():
+        # Per panel, not per figure: ``_needs_initial_autoscale`` is one flag for the whole
+        # figure, and any ``set_xlim``/``set_yscale`` on *one* panel turned it off -- so every
+        # other panel opened at its (-1, 1) default, empty. ``_autoscale_all_panels`` skips
+        # the panels whose view somebody set, and fits the rest.
+        if not self._is_pure_3d_scene():
             self._autoscale_all_panels()
         if self._is_test_mode:
             self._update_runtime_policy()
@@ -1835,7 +2105,47 @@ class GPULinePlot:
             glfw.swap_buffers(self.window)
             return
 
-        self._main_loop()
+        # On macOS, especially after an earlier invisible export context, Cocoa may not
+        # finish registering the new native window until its first event-pump pass. Focus
+        # requested directly after ``create_window`` is then ignored. Present it only once
+        # all GUI modules are ready, drain those creation events, and request focus after.
+        glfw.show_window(self.window)
+        glfw.poll_events()
+        if sys.platform == "darwin":
+            try:
+                # A process whose first Cocoa window was the invisible export context is
+                # treated as a background application. GLFW can mark the later window
+                # visible, but ``focus_window`` alone cannot activate the application, so
+                # the GUI remains behind every normal app. PyObjC is optional: when it is
+                # present, ask Cocoa to activate this process before requesting GLFW focus.
+                from AppKit import NSApplication, NSApplicationActivationPolicyRegular
+
+                application = NSApplication.sharedApplication()
+                application.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+                application.unhide_(None)
+                application.activateIgnoringOtherApps_(True)
+            except Exception:  # pragma: no cover - optional platform bridge
+                pass
+        glfw.focus_window(self.window)
+        glfw.poll_events()
+        # A figure with interactive controls needs somewhere to draw them. With the HUD
+        # off (the script default) mount the workstation in its focused mode -- only the
+        # Controls panel open, beside a clean plot -- rather than defining sliders that
+        # nobody can see. An explicitly enabled HUD keeps its usual layout.
+        if self._controls is not None and len(self._controls) and not self.options.enable_hud:
+            self.options.enable_hud = True
+            self._controls_focus_mode = True
+        # While the loop runs, control changes are deferred to the frame top instead of
+        # running their callbacks inline (which, from the GUI, would be a draw callback).
+        self._loop_running = True
+        if self._controls is not None:
+            self._controls._set_live(True, waker=_post_empty_event)
+        try:
+            self._main_loop()
+        finally:
+            self._loop_running = False
+            if self._controls is not None:
+                self._controls._set_live(False)
 
     def save_current_view(self, filename: Optional[str] = None, scale: float = 2.0) -> None:
         # Legacy shim
@@ -1855,7 +2165,7 @@ class GPULinePlot:
     # Init
     # --------------------------------------------------------
 
-    def _init_window(self) -> None:
+    def _init_window(self, *, visible: Optional[bool] = None) -> None:
         if not glfw.init():
             raise RuntimeError("Failed to initialize GLFW")
 
@@ -1876,8 +2186,12 @@ class GPULinePlot:
         if self.options.enable_multisample:
             glfw.window_hint(glfw.SAMPLES, 4)
 
-        if self._is_test_mode:
-            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
+        # GLFW hints persist until they are changed or reset. Set visibility on every
+        # creation so a temporary invisible animation-export window cannot accidentally
+        # make the next interactive ``show()`` window invisible as well.
+        if visible is None:
+            visible = not self._is_test_mode
+        glfw.window_hint(glfw.VISIBLE, glfw.TRUE if visible else glfw.FALSE)
 
         self.window = glfw.create_window(self.width, self.height, self.options.title, None, None)
         if not self.window:
@@ -1933,6 +2247,80 @@ class GPULinePlot:
 
         if self.scene.lines.count > 0:
             self.exact_renderer.upload(self.scene.lines)
+
+    def _reset_layer_gl_state(self) -> None:
+        """Forget context-owned layer handles and request a fresh GPU upload.
+
+        A layer may belong to any panel, not only the currently active one. Temporary
+        animation contexts are destroyed after saving, so every VAO/VBO allocated in that
+        context becomes invalid and must not survive into a later interactive ``show()``.
+        """
+        for panel in self.panels:
+            for layer in panel.scene.layers:
+                if hasattr(layer, "_gl"):
+                    layer._gl = None
+                layer.dirty.gpu_dirty = True
+
+    def _init_export_modules(self) -> None:
+        """Initialize only the OpenGL modules needed by offscreen figure export.
+
+        The export pass draws through ``RendererManager`` (and optionally the density
+        renderer). It does not need picking, the interaction cache, post-processing, or an
+        ImGui context. Keeping those out is both faster and avoids constructing GUI state
+        for a window which is deliberately never shown.
+        """
+        self._reset_layer_gl_state()
+        self.density_renderer.initialize(self.fb_width, self.fb_height)
+        self.renderer_manager.initialize()
+
+    @contextmanager
+    def _offscreen_export_context(self):
+        """Provide a current GL context, creating one invisible window when necessary.
+
+        A newly created context lives for the whole ``with`` block so an animation can
+        render hundreds of frames without rebuilding shaders for every frame. Existing
+        interactive contexts are borrowed, never destroyed. Temporary-context resources
+        are discarded with the GLFW window and Python-side handles are reset before a
+        later ``show()`` can reuse the figure.
+        """
+        # ``glfw.get_current_context()`` itself emits GLFW_NOT_INITIALIZED when this is
+        # the first GL operation in a headless script, so initialize before asking which
+        # context (if any) needs to be restored afterwards.
+        if not glfw.init():
+            raise RuntimeError("Failed to initialize GLFW")
+        previous_context = glfw.get_current_context()
+
+        if self.window is not None:
+            glfw.make_context_current(self.window)
+            try:
+                yield
+            finally:
+                if previous_context != self.window:
+                    glfw.make_context_current(previous_context)
+            return
+
+        temporary_window = None
+        try:
+            self._init_window(visible=False)
+            temporary_window = self.window
+            self._init_gl()
+            self._init_export_modules()
+            yield
+        finally:
+            if temporary_window is not None:
+                # Destroying a context releases all of its GL objects. Replace managers
+                # that still contain numeric names from that context, otherwise a later
+                # interactive initialization could mistake stale IDs for live resources.
+                glfw.make_context_current(temporary_window)
+                glfw.destroy_window(temporary_window)
+                if self.window == temporary_window:
+                    self.window = None
+                self.renderer_manager = RendererManager(self)
+                self.density_renderer = DensityRenderer(self)
+                self._reset_layer_gl_state()
+
+            if previous_context != temporary_window:
+                glfw.make_context_current(previous_context)
 
     # --------------------------------------------------------
     # Frame policies
@@ -2172,6 +2560,8 @@ class GPULinePlot:
         try:
             with margins_ctx:
                 for i, panel in enumerate(self.panels):
+                    if not panel.visible:
+                        continue
                     self.active_panel_index = i
                     vx, vy, vw, vh = panel.pixel_rect(saved_fw, saved_fh)
                     self.width, self.height = panel.pixel_size(saved_w, saved_h)
@@ -2409,6 +2799,9 @@ class GPULinePlot:
             gui_queue = getattr(getattr(self.hud, "workspace", None), "queue", None)
             if gui_queue is not None:
                 gui_queue.drain(self)
+            # 0b. Interactive-control callbacks (slider moved, button clicked), coalesced
+            # to one run per frame with the latest values.
+            self._flush_controls()
 
             # 1. Update Input and State
             self.hud.process_inputs()
@@ -2670,6 +3063,8 @@ class GPULinePlot:
         if not draw_list:
             return
         for i, panel in enumerate(self.panels):
+            if not panel.visible:
+                continue
             x0f, y0f, wf, hf = panel.rect_frac
             left = x0f * self.width
             right = (x0f + wf) * self.width
@@ -2920,9 +3315,14 @@ class GPULinePlot:
                     if abs(mx - px) > 5 and abs(my - py) > 5:
                         w0, h0 = self._panel_screen_to_world(px, py)
                         w1, h1 = self._panel_screen_to_world(mx, my)
-                        self.set_view(
-                            xlim=(min(w0, w1), max(w0, w1)), ylim=(min(h0, h1), max(h0, h1))
-                        )
+                        # Handed over in the axes' own direction, so zooming into an
+                        # inverted axis leaves it inverted.
+                        xs, ys = sorted((w0, w1)), sorted((h0, h1))
+                        if self.camera.flip_x:
+                            xs.reverse()
+                        if self.camera.flip_y:
+                            ys.reverse()
+                        self.set_view(xlim=tuple(xs), ylim=tuple(ys), twin_follow=True)
                         self._sync_shared_axes()
                 self.interaction.right_drag_active = False
                 self.frame.dirty_scene = True
@@ -3150,13 +3550,141 @@ class GPULinePlot:
                 # An explicit Shift+Click on empty space deselects.
                 self.interaction.selection.clear()
 
+    # -- twin axes ---------------------------------------------------------------------
+
+    def _twin_ranges(self) -> Optional[dict]:
+        """Each twin's scaled range as currently shown, to preserve across a host re-fit."""
+        panel = self.active_panel
+        if not panel.twins or self.__dict__.get("_twin_frozen"):
+            return None
+        from .core import twin as _twin
+
+        l, r, b, t = self.camera_controller.world_window(self.width, self.height)
+        ranges = {}
+        for axis, tw in panel.twins.items():
+            rng = _twin.derived_range(tw, (l, r) if axis == "x" else (b, t))
+            if rng is not None:
+                ranges[axis] = rng
+        return ranges or None
+
+    def _refit_twins(self, keep: Optional[dict] = None) -> None:
+        """Recompute the active panel's twin affines against its host window and re-bake.
+
+        A no-op without twins, and while :meth:`autoscale_preview` is only *reading* what the
+        fit will be: baking then would leave the twin layers mapped to a view the camera was
+        about to be restored away from.
+        """
+        panel = self.active_panel
+        if not panel.twins or self.__dict__.get("_twin_frozen"):
+            return
+        from .controls import repoint_legacy_mirrors
+        from .core import twin as _twin
+
+        window = self.camera_controller.world_window(self.width, self.height)
+        opts = self.options
+        scales = {
+            "x": (opts.axis_scale_x, opts.axis_scale_params_x),
+            "y": (opts.axis_scale_y, opts.axis_scale_params_y),
+        }
+        flips = {"x": self.camera.flip_x, "y": self.camera.flip_y}
+        _twin.fit(
+            panel, window, scales, float(getattr(opts, "autoscale_margin", 0.05)), keep, flips
+        )
+        repoint_legacy_mirrors(self)
+        self.frame.dirty_scene = True
+        self.cache.active = False
+
+    def refit_twins(self, panel: Panel, reset: Iterable[str] = ()) -> None:
+        """Re-fit ``panel``'s twins now, if its host view is known yet.
+
+        Twins keep the range they show, except those named in ``reset`` (a twin whose own
+        limits, scale or direction just changed), which are fitted from scratch. Before the
+        host has been fitted there is nothing to fit *against*; the initial fit will do it.
+        """
+        if panel.needs_initial_autoscale and not panel.view_pinned:
+            return
+        saved = self.active_panel_index
+        self.active_panel_index = self.panels.index(panel)
+        try:
+            keep = dict(self._twin_ranges() or {})
+            for axis in reset:
+                keep.pop(axis, None)
+            self._refit_twins(keep or None)
+        finally:
+            self.active_panel_index = saved
+
+    def rebake_twin_layer(self, panel: Panel, layer: Any) -> None:
+        """Re-map one twin layer whose true coordinates were just replaced (``set_data``)."""
+        axis = layer.metadata.get("twin_axis")
+        twin_axis = panel.twins.get(axis)
+        if twin_axis is None or twin_axis.affine is None:
+            return
+        from .controls import repoint_legacy_mirrors
+        from .core import twin as _twin
+
+        _twin.bake(
+            layer,
+            axis,
+            twin_axis,
+            self.axes_option(panel, f"axis_scale_{axis}"),
+            self.axes_option(panel, f"axis_scale_params_{axis}"),
+        )
+        repoint_legacy_mirrors(self)
+
+    @contextmanager
+    def autoscale_preview(self):
+        """While active, the active panel's camera shows the fit-to-data that is still owed.
+
+        The initial fit is deferred until the window opens (or the headless export runs), so
+        until then the camera holds its ``(-1, 1)`` default. matplotlib autoscales as
+        artists are added, which means ``ax.get_xlim()`` straight after ``ax.plot(...)``
+        returns the data range there -- and returning the default here made
+        ``ax.set_xlim(0, 3)`` freeze y at ``(-1, 1)``, because ``set_view`` fills the axis it
+        was not given from the current view. Anything that *reads* the view (limits, ticks)
+        runs inside this block so it reports what the fit will produce.
+
+        The camera and the "fit still owed" flag are restored on the way out: reading a
+        limit must not decide the view, or ``plot(a); get_xlim(); plot(b)`` would stop
+        fitting ``b``. A no-op when no fit is owed, the panel is empty, or the scene is 3D.
+        """
+        panel = self.active_panel
+        # This panel's own fit, not the figure-wide flag: another panel's ``set_xlim`` turns
+        # that off, and this panel is still going to be fitted when the window opens.
+        if not (
+            panel.needs_initial_autoscale
+            and not panel.view_pinned
+            and self.scene.layers
+            and not self._is_pure_3d_scene()
+        ):
+            yield
+            return
+        cam = self.camera
+        saved = (cam.cx, cam.cy, cam.zoom_x, cam.zoom_y)
+        saved_flag = self._needs_initial_autoscale
+        self._twin_frozen = True
+        try:
+            self.autoscale()
+            yield
+        finally:
+            self._twin_frozen = False
+            cam.cx, cam.cy, cam.zoom_x, cam.zoom_y = saved
+            panel.view_pinned = False
+            self._needs_initial_autoscale = saved_flag
+
+    def _view_window(self) -> Tuple[float, float, float, float]:
+        """``(left, right, bottom, top)`` of the active panel -- as matplotlib would report it."""
+        with self.autoscale_preview():
+            return self.camera_controller.world_window(self.width, self.height)
+
     def get_xlim(self) -> Tuple[float, float]:
-        l, r, _, _ = self.camera_controller.world_window(self.width, self.height)
-        return l, r
+        """``(left, right)`` as drawn -- ``left > right`` when the axis is inverted."""
+        l, r, _, _ = self._view_window()
+        return (r, l) if self.camera.flip_x else (l, r)
 
     def get_ylim(self) -> Tuple[float, float]:
-        _, _, b, t = self.camera_controller.world_window(self.width, self.height)
-        return b, t
+        """``(bottom, top)`` as drawn -- ``bottom > top`` when the axis is inverted."""
+        _, _, b, t = self._view_window()
+        return (t, b) if self.camera.flip_y else (b, t)
 
     def savefig(self, filename: str, scale: float = 2.0) -> None:
         """
@@ -3393,6 +3921,18 @@ class GPULinePlot:
     def _on_key(self, window: Any, key: int, sc: int, action: int, mods: int) -> None:
         self.frame.dirty_ui = True
         self.hud.on_key(window, key, sc, action, mods)
+
+        # Workspace shortcuts are normally dispatched from ``Workspace.draw``. With the
+        # HUD disabled that method is intentionally never called, so Space used to vanish
+        # until F3 made the GUI visible. Handle the transport key here only in that hidden
+        # state; when the HUD is enabled the regular action registry remains the sole owner
+        # (including its text-input safety), avoiding a double toggle.
+        if not self.options.enable_hud and action == glfw.PRESS and key == glfw.KEY_SPACE:
+            self.transport_timeline().toggle()
+            self.frame.dirty_scene = True
+            self.cache.refresh_requested = True
+            return
+
         if self.hud.wants_keyboard():
             return
 

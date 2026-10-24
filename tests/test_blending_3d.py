@@ -437,3 +437,61 @@ class TestOpacityOrdering:
         flat.style.alpha = 0.3
         cloud = make_layer("points", alpha=0.42)
         assert RendererManager._order_by_opacity([cloud, flat]) == [flat, cloud]
+
+
+# ----------------------------------------------------------------------------------
+# Overlay layers (style.depth_test=False)
+# ----------------------------------------------------------------------------------
+
+
+class TestDepthTestOff:
+    """A level-set line lying on a surface is buried by the nearer ridges at a grazing
+    camera; ``depth_test=False`` draws it as an overlay, like the axis3d box."""
+
+    def test_the_layer_draws_without_the_depth_test(self, recorder):
+        layer = make_layer("lines")
+        layer.style.depth_test = False
+        make_renderer().draw(layer, make_ctx())
+        assert ("enable", int(g3d.GL_DEPTH_TEST)) not in recorder.state
+
+    def test_the_default_still_depth_tests(self, recorder):
+        make_renderer().draw(make_layer("lines"), make_ctx())
+        assert ("enable", int(g3d.GL_DEPTH_TEST)) in recorder.state
+
+    def test_overlays_draw_after_the_data_and_before_the_axis_box(self, monkeypatch):
+        overlay = make_layer("lines")
+        overlay.style.depth_test = False
+        surface = make_layer("triangles", alpha=0.8)  # translucent: normally drawn last
+        opaque = make_layer("points")
+        axis = make_layer("lines")
+        axis.metadata["artist"] = "axis3d"
+
+        manager = RendererManager.__new__(RendererManager)
+        drawn = []
+        monkeypatch.setattr(
+            manager, "_dispatch_draw", lambda layer, ctx, id_norm=0.0: drawn.append(layer)
+        )
+        manager.draw_exact([overlay, axis, surface, opaque], make_ctx())
+        assert drawn == [opaque, surface, overlay, axis]
+
+    def test_the_matplotlib_export_puts_an_overlay_line_on_top(self):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as mpl_plt
+
+        from glplot.utils.preview import _OVERLAY_ZORDER, _draw_layers
+
+        vertices = np.array([[0, 0, 0], [1, 1, 1], [1, 0, 0], [0, 1, 1]], dtype=np.float32)
+        overlay = Layer3D(vertices=vertices, primitive="lines", layer_type="wireframe3d")
+        overlay.style.depth_test = False
+        plain = Layer3D(vertices=vertices, primitive="lines", layer_type="wireframe3d")
+        fig = mpl_plt.figure()
+        try:
+            ax = fig.add_subplot(111, projection="3d")
+            _draw_layers(ax, [plain], has_3d=True)
+            assert all(line.get_zorder() < _OVERLAY_ZORDER for line in ax.lines)
+            _draw_layers(ax, [overlay], has_3d=True)
+            assert [line.get_zorder() for line in ax.lines[2:]] == [_OVERLAY_ZORDER] * 2
+        finally:
+            mpl_plt.close(fig)

@@ -322,18 +322,36 @@ class TestTheCatalogueIsUseful:
         assert len(light) >= 4
         assert len(dark) >= 4
 
+    #: The looks that are *about* light. Glow is additive and costs legibility, so it is a
+    #: property of a small, named family -- never of a paper, presentation or workstation look.
+    LUMINOUS = ("neon", "aurora", "synthwave")
+
     def test_effects_stay_opt_in(self):
-        """The module's whole thesis: presets are looks, not light. Only Neon glows.
+        """The module's thesis: presets are looks, not light -- glow is the exception.
 
         Grain and the hand-drawn jitter are *surface texture*, not light, so both are shared
-        by the small family of looks that imitate a real drawing surface -- grain is the
-        tooth of slate, dry-erase board and waxed paper; the jitter is the unsteady hand of
-        a sketch and a child's crayon. What stays a strict singleton is glow, which is the
-        one genuinely additive effect and the one the module was written to stop overusing.
+        by the small family of looks that imitate a real surface -- grain is the tooth of
+        slate, dry-erase board, waxed paper and aged print; the jitter is the unsteady hand of
+        a sketch and a child's crayon. Glow is the one genuinely additive effect and the one
+        the module was written to stop overusing, so it is limited to the looks whose whole
+        point is luminance (:attr:`LUMINOUS`); adding a glowing preset means adding it there,
+        on purpose, rather than letting it slide in.
         """
-        assert [s.key for s in _all_styles() if s.glow.enabled] == ["neon"]
-        assert [s.key for s in _all_styles() if s.grain > 0.0] == ["chalk", "marker", "kids"]
+        assert [s.key for s in _all_styles() if s.glow.enabled] == list(self.LUMINOUS)
+        assert [s.key for s in _all_styles() if s.grain > 0.0] == [
+            "chalk",
+            "marker",
+            "kids",
+            "vintage",
+        ]
         assert [s.key for s in _all_styles() if s.hand_drawn] == ["hand", "kids"]
+
+    def test_the_glow_cannot_drown_the_data(self):
+        """Even the luminous looks keep the bloom below the point where it clips the plot."""
+        for key in self.LUMINOUS:
+            glow = styles.get_style(key).glow
+            assert glow.intensity <= 1.3, key
+            assert glow.threshold >= 0.3, key
 
     def test_clean_is_still_first_and_still_the_default(self):
         """The gallery is ordered by medium, and the default has to be the first card."""

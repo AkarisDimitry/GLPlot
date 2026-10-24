@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 
 import glplot.pyplot as gplt

@@ -65,6 +65,13 @@ class CameraController:
         m11 = 2.0 / max(tb, 1e-12)
         m13 = -(t + b) / max(tb, 1e-12)
 
+        # An inverted axis is the same map with its sign flipped: NDC = -(scale * x + offset).
+        # Done before the gutters are applied, which sit in screen space and never mirror.
+        if self.camera.flip_x:
+            m00, m03 = -m00, -m03
+        if self.camera.flip_y:
+            m11, m13 = -m11, -m13
+
         # Apply transformation
         r00 = sx * m00
         r03 = sx * m03 + tx
@@ -105,6 +112,12 @@ class CameraController:
         ndc_x = (ndc_x_inset - trans_x) / max(scale_x, 1e-12)
         ndc_y = (ndc_y_inset - trans_y) / max(scale_y, 1e-12)
 
+        # The exact inverse of the flip in `mvp`.
+        if self.camera.flip_x:
+            ndc_x = -ndc_x
+        if self.camera.flip_y:
+            ndc_y = -ndc_y
+
         # Standard NDC to world
         x = l + (ndc_x + 1.0) * 0.5 * (r - l)
         y = b + (ndc_y + 1.0) * 0.5 * (t - b)
@@ -140,7 +153,14 @@ class CameraController:
         """
         Calculates independent zoom_x and zoom_y to fit the requested bounds.
         Handles zero-span degenerate cases by providing a sane default unit span.
+
+        Bounds are taken as a *range*: a reversed pair is sorted rather than trusted. A
+        negative span used to be clipped to ``zoom_min`` and produced a view of +-1e12;
+        orientation is the caller's to set through ``camera.flip_x`` / ``flip_y`` (see
+        ``GPULinePlot.set_view``), not something encoded in the order of the arguments.
         """
+        xmin, xmax = min(xmin, xmax), max(xmin, xmax)
+        ymin, ymax = min(ymin, ymax), max(ymin, ymax)
         # Handle degenerate spans
         if abs(xmax - xmin) < 1e-9:
             xmin -= 0.5

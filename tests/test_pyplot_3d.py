@@ -306,6 +306,25 @@ class TestLabelsAndDecoration:
         gplt.set_axis3d_on()
         assert fig.axes3d.show_axes is True
 
+    def test_layer_added_with_axes_off_joins_the_shared_box_and_camera(self):
+        """A plot3d() added after set_axis3d_off() -- the per-frame contour an animation
+        rebuilds -- used to keep only elev/azim/fov: no scene box and no box_aspect, so
+        the live renderer framed it against its own tiny extent and blew it up to fill
+        the view. It must be framed exactly like the layers already there."""
+        fig = gplt.figure("p", projection="3d")
+        x, y = np.meshgrid(np.linspace(-3, 3, 12), np.linspace(-3, 3, 12))
+        gplt.plot_surface(x, y, x * x + y * y)
+        gplt.set_box_aspect((1, 1, 0.6))
+        gplt.set_axis3d_off()
+        surface = fig.scene.layers[-1]
+
+        t = np.linspace(0, 2 * np.pi, 20)
+        (loop,) = gplt.plot3d(0.3 * np.cos(t), 0.3 * np.sin(t), np.full_like(t, 2.0))
+
+        assert loop.metadata.get("scene_bounds") is not None
+        assert loop.metadata["scene_bounds"] == surface.metadata["scene_bounds"]
+        assert loop.metadata["camera"] == surface.metadata["camera"]
+
 
 class TestTicksFollowTheCamera:
     """The 3D ticks re-scale with the view, the way the 2D ones re-scale with the zoom."""

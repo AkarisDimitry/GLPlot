@@ -122,8 +122,6 @@ def main():
 
             # CPU evaluation of lines and density calculation
             xs = np.linspace(x_range[0], x_range[1], width, dtype=np.float32)
-            y0 = a * x_range[0] + b
-            y1 = a * x_range[1] + b
 
             ymin_v, ymax_v = -1000.0, 1000.0
             density = np.zeros((height, len(xs)), dtype=np.float32)

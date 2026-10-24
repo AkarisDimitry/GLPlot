@@ -113,7 +113,19 @@ _LAYOUT: Dict[str, Tuple[float, float, float, float]] = {
     # presentation list is a tall left column, because it is read as a running order.
     "timeline": (0.00, 0.60, 1.00, 0.40),
     "presentation": (0.00, 0.02, 0.26, 0.58),
+    # Between the Data and Scene columns, top half: the controls are read together with
+    # the plot they drive, so they sit beside it rather than over the bottom panels.
+    "controls": (0.53, 0.00, 0.20, 0.55),
+    # Closed on first run, and a tall column of cards when opened: the left edge, where the
+    # Data panel's recipes are read from, full height so the grid does not need much scrolling.
+    "gallery": (0.00, 0.00, 0.30, 1.00),
 }
+
+#: The Controls panel's geometry in *focused* mode (a script with controls and no HUD,
+#: see ``GPULinePlot.run``): the only window up, so it takes the full height of the right
+#: edge -- a bench of a dozen controls plus a results table should not need scrolling --
+#: and leaves the plot's centre clear.
+_CONTROLS_FOCUS_LAYOUT: Tuple[float, float, float, float] = (0.74, 0.00, 0.26, 1.00)
 
 #: Panel key -> chord spec for the toggle+focus actions, in rail order.
 _PANEL_CHORDS: Dict[str, str] = {
@@ -134,6 +146,8 @@ _PANEL_CHORDS: Dict[str, str] = {
     "timeline": "Mod+Shift+T",  # T for timeline
     # R for "run the presentation": Mod+Shift+P is already the palette's VS Code binding.
     "presentation": "Mod+Shift+R",
+    "controls": "Mod+Shift+C",  # C for controls; checked free against the whole table
+    "gallery": "Mod+Shift+L",  # L for library (G is taken by Objects 3D); checked free too
 }
 
 
@@ -181,6 +195,7 @@ def _panel_classes() -> List[Tuple[str, Any]]:
     specs = (
         ("data", "data_editor", "DataEditorPanel"),
         ("functions", "functions", "FunctionsPanel"),
+        ("controls", "controls", "ControlsPanel"),
         ("dynamics", "dynamics", "DynamicsPanel"),
         ("objects3d", "objects3d", "Objects3DPanel"),
         ("mathlab", "mathlab", "MathLabPanel"),
@@ -190,6 +205,7 @@ def _panel_classes() -> List[Tuple[str, Any]]:
         ("timeline", "timeline", "TimelinePanel"),
         ("presentation", "presentation", "PresentationPanel"),
         ("style", "style", "StylePanel"),
+        ("gallery", "gallery", "GalleryPanel"),
         ("selection", "selection", "SelectionPanel"),
         ("help", "help", "HelpPanel"),
     )
@@ -266,6 +282,20 @@ class Workspace:
         #: called immediately before that window's own `begin()` is the crash-safe idiom.
         self._pending_focus: Optional[str] = None
 
+        #: ``plot.controls.structure_version`` as of the last sync (see `_sync_controls`).
+        self._controls_version = -1
+        #: Whether the Controls panel has been auto-opened for this figure already.
+        self._controls_opened = False
+        #: Action ids registered for the user's buttons, so removed buttons can be dropped.
+        self._control_action_ids: Dict[str, Any] = {}
+        #: Focused mode: mounted only to show the figure's controls (see `_CONTROLS_FOCUS_LAYOUT`).
+        self._controls_focus = bool(getattr(plot, "_controls_focus_mode", False))
+        if self._controls_focus and "controls" in self.panels:
+            for key in self.open:
+                self.open[key] = key == "controls"
+            self._controls_opened = True
+            self._show_hint = False
+
         self._widen_axis_gutter_for_rail()
 
     def _widen_axis_gutter_for_rail(self) -> None:
@@ -332,6 +362,7 @@ class Workspace:
         # Before the panels draw, per ActionRegistry.dispatch's contract: io.want_text_input
         # describes the last completed frame, so asking at the top of this one is the only
         # read that cannot mistake a field the user is typing in for a free keyboard.
+        self._sync_controls()
         self._dispatch_keys()
 
         self.draw_menu()
@@ -354,6 +385,80 @@ class Workspace:
         self._frame += 1
         if self._force_layout > 0:
             self._force_layout -= 1
+
+    def _sync_controls(self) -> None:
+        """Follow the figure's interactive controls: open the panel, publish the buttons.
+
+        Keyed on ``structure_version``, so a frame where nothing was added or removed costs
+        one integer compare. Runs before key dispatch so a button added this frame already
+        answers to its shortcut.
+
+        * The first time the figure has controls, the Controls panel opens -- a script that
+          defines sliders means for them to be seen. Once only: a user who closes it has
+          said so.
+        * Every :class:`~glplot.controls.Button` becomes a palette action under "Controls",
+          with its ``shortcut`` as the chord. A chord already taken by a built-in action
+          is dropped with a warning instead of silently losing to it at dispatch.
+        """
+        cs = getattr(self.plot, "_controls", None)
+        if cs is None or cs.structure_version == self._controls_version:
+            return
+        self._controls_version = cs.structure_version
+        if len(cs) and not self._controls_opened and "controls" in self.panels:
+            self._controls_opened = True
+            self.open["controls"] = True
+
+        from ..controls import Button
+
+        wanted = {f"controls.{c.key}": c for c in cs if isinstance(c, Button)}
+        for action_id, button in list(self._control_action_ids.items()):
+            if wanted.get(action_id) is not button:
+                self.registry.unregister(action_id)
+                del self._control_action_ids[action_id]
+        for action_id, button in wanted.items():
+            if action_id in self._control_action_ids:
+                continue
+            chord = None
+            if button.shortcut:
+                chord = keys.parse(button.shortcut)
+                taken = [a for a in self.registry.all() if a.chord == chord and a.id != action_id]
+                if taken:
+                    message = (
+                        f"Shortcut {_chord_text(button.shortcut)} for {button.label!r} is "
+                        f"already {taken[0].title!r}; the button stays in the palette only."
+                    )
+                    logger.warning(message)
+                    from . import notifications
+
+                    notifications.push(message, kind="error")
+                    chord = None
+            try:
+                self.registry.add(
+                    action_id,
+                    button.label,
+                    "Controls",
+                    lambda b=button: self._click_control_button(b),
+                    chord=chord,
+                    icon=button.icon or "play",
+                    keywords=("control", "button", "run", button.key),
+                    description=button.help or f"Press the {button.label!r} button.",
+                    is_enabled=lambda b=button: bool(b.enabled),
+                )
+            except ValueError:  # pragma: no cover - duplicate id guarded above
+                logger.exception("Could not register the control button %r.", button.label)
+                continue
+            self._control_action_ids[action_id] = button
+
+    def _click_control_button(self, button: Any) -> None:
+        """Palette / shortcut route to a button: through the panel, so ``confirm`` holds."""
+        panel = self.panels.get("controls")
+        if panel is None:
+            button.click()
+            return
+        if getattr(button, "confirm", None):
+            # The confirmation modal is drawn by the panel, so the panel must be up.
+            self.open["controls"] = True
+        panel.request_click(button)
 
     def _sync_selection_highlight(self) -> None:
         """Keep the renderers' highlight buffers in step with the live selection.
@@ -405,7 +510,10 @@ class Workspace:
         """
         self._force_layout = 2
         for key, panel in self.panels.items():
-            self.open[key] = bool(getattr(panel, "default_open", False))
+            if self._controls_focus:
+                self.open[key] = key == "controls"
+            else:
+                self.open[key] = bool(getattr(panel, "default_open", False))
 
     # ======================================================================================
     # THE ACTION TABLE — every user-facing action in the workstation is registered here.
@@ -1662,9 +1770,10 @@ class Workspace:
         return "presentation" in self.panels
 
     def _timeline(self) -> Optional[Any]:
-        """The active panel's :class:`~glplot.core.timeline.Timeline`, or None."""
+        """The timeline addressed by global transport controls, or None."""
         try:
-            return self.plot.active_panel.timeline
+            resolve = getattr(self.plot, "transport_timeline", None)
+            return resolve() if callable(resolve) else self.plot.active_panel.timeline
         except Exception:  # pragma: no cover - defensive: a plot without panels
             return None
 
@@ -2430,6 +2539,8 @@ class Workspace:
     def _place_window(self, key: str) -> None:
         """Apply the first-run (or forced) geometry for panel ``key``."""
         layout = _LAYOUT.get(key)
+        if key == "controls" and self._controls_focus:
+            layout = _CONTROLS_FOCUS_LAYOUT
         if layout is None:
             return
         io = imgui.get_io()

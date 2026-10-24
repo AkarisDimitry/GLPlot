@@ -190,6 +190,25 @@ def draw_text_scaled(
     return True
 
 
+def _screen_edges(
+    mvp: object, win: Tuple[float, float, float, float]
+) -> Tuple[float, float, float, float, bool, bool]:
+    """World coordinates sitting on the screen's left/right/bottom/top edges, and the flips.
+
+    ``win`` is ``(l, r, b, t)`` with ``l < r`` whichever way the axis runs. On an inverted
+    axis (``invert_yaxis()``, ``set_ylim(hi, lo)``) the projection mirrors, so the world
+    value ``b`` lands on the *top* of the screen -- and chrome anchored to it (x tick
+    labels, tick marks, the x label) would jump to the top edge. Reading the direction off
+    the matrix keeps this renderer independent of how each caller built its context.
+    Returns ``(left, right, bottom, top, flip_x, flip_y)``.
+    """
+    flip_x = float(mvp[0][0]) < 0.0
+    flip_y = float(mvp[1][1]) < 0.0
+    left, right = (win[1], win[0]) if flip_x else (win[0], win[1])
+    bottom, top = (win[3], win[2]) if flip_y else (win[2], win[3])
+    return left, right, bottom, top, flip_x, flip_y
+
+
 class AxisRenderer:
     """
     Specialized renderer for the plot framework: grid, spines, and ticks.
@@ -383,7 +402,11 @@ class AxisRenderer:
         # 1b. Tick marks -- short strokes inward from the bottom and left spines. Sized in
         # pixels, so they stay the same length at every zoom.
         if getattr(self.options, "axis_show_ticks", False):
-            self._draw_tick_marks(axis, win, world_per_px_x, world_per_px_y, is_light)
+            self._draw_tick_marks(axis, win, world_per_px_x, world_per_px_y, is_light, ctx.mvp)
+            self._draw_twin_tick_marks(axis, win, world_per_px_x, world_per_px_y, is_light, ctx.mvp)
+            self._draw_secondary_tick_marks(
+                axis, win, world_per_px_x, world_per_px_y, is_light, ctx.mvp
+            )
 
         # 2. Draw Spines (Frame)
         if self.options.axis_show_frame:
@@ -406,6 +429,74 @@ class AxisRenderer:
         glBindVertexArray(0)
         glUseProgram(0)
 
+    def _draw_twin_tick_marks(
+        self,
+        axis: AxisManager,
+        win: Tuple[float, float, float, float],
+        world_per_px_x: float,
+        world_per_px_y: float,
+        is_light: bool,
+        mvp: object,
+    ) -> None:
+        """Marks for a twin axis: inward from the screen's right edge (``twinx``) or top edge
+        (``twiny``), the mirror of the host's bottom/left ones."""
+        twin_ticks = getattr(axis, "twin_ticks", None)
+        length_px = max(float(getattr(self.options, "axis_tick_len_px", 5.0)), 0.0)
+        if not twin_ticks or length_px <= 0.0:
+            return
+        left, right, bottom, top, flip_x, flip_y = _screen_edges(mvp, win)
+        c = (0.15, 0.15, 0.15, 1.0) if is_light else (0.85, 0.85, 0.85, 1.0)
+        glUniform4f(self.u_color, c[0], c[1], c[2], c[3])
+        marks = []
+        if "y" in twin_ticks:
+            # inward from the right edge = towards the left on screen
+            inward = length_px * world_per_px_x * (1.0 if flip_x else -1.0)
+            for y in twin_ticks["y"].major:
+                marks.extend([(right, y), (right + inward, y)])
+        if "x" in twin_ticks:
+            inward = length_px * world_per_px_y * (1.0 if flip_y else -1.0)
+            for x in twin_ticks["x"].major:
+                marks.extend([(x, top), (x, top + inward)])
+        if marks:
+            data = np.array(marks, dtype=np.float32)
+            glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_STREAM_DRAW)
+            glDrawArrays(GL_LINES, 0, len(marks))
+
+    def _draw_secondary_tick_marks(
+        self,
+        axis: AxisManager,
+        win: Tuple[float, float, float, float],
+        world_per_px_x: float,
+        world_per_px_y: float,
+        is_light: bool,
+        mvp: object,
+    ) -> None:
+        """Inward marks for each ``secondary_*axis`` along the edge it was placed on."""
+        secondary = getattr(axis, "secondary_ticks", None)
+        length_px = max(float(getattr(self.options, "axis_tick_len_px", 5.0)), 0.0)
+        if not secondary or length_px <= 0.0:
+            return
+        left, right, bottom, top, flip_x, flip_y = _screen_edges(mvp, win)
+        c = (0.15, 0.15, 0.15, 1.0) if is_light else (0.85, 0.85, 0.85, 1.0)
+        glUniform4f(self.u_color, c[0], c[1], c[2], c[3])
+        marks = []
+        for sec, ticks in secondary:
+            # ``step`` points from the edge towards the middle of the frame, in world units.
+            if sec.axis == "y":
+                edge, step = (right, -1.0) if sec.location == "right" else (left, 1.0)
+                step *= length_px * world_per_px_x * (-1.0 if flip_x else 1.0)
+                for y in ticks.major:
+                    marks.extend([(edge, y), (edge + step, y)])
+            else:
+                edge, step = (top, -1.0) if sec.location == "top" else (bottom, 1.0)
+                step *= length_px * world_per_px_y * (-1.0 if flip_y else 1.0)
+                for x in ticks.major:
+                    marks.extend([(x, edge), (x, edge + step)])
+        if marks:
+            data = np.array(marks, dtype=np.float32)
+            glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_STREAM_DRAW)
+            glDrawArrays(GL_LINES, 0, len(marks))
+
     def _draw_tick_marks(
         self,
         axis: AxisManager,
@@ -413,14 +504,23 @@ class AxisRenderer:
         world_per_px_x: float,
         world_per_px_y: float,
         is_light: bool,
+        mvp: object = None,
     ) -> None:
         """Stroke major and minor tick marks inward from the bottom and left spines.
+
+        "Bottom" and "left" are the *screen's* edges: on an inverted axis they are the
+        window's far world edge, and "inward" runs the other way in world units.
 
         Assumes the caller has the axis program bound and the VAO/VBO active.
         """
         length_px = max(float(getattr(self.options, "axis_tick_len_px", 5.0)), 0.0)
         if length_px <= 0.0:
             return
+        if mvp is None:
+            left, bottom, step_x, step_y = win[0], win[2], 1.0, 1.0
+        else:
+            left, _r, bottom, _t, flip_x, flip_y = _screen_edges(mvp, win)
+            step_x, step_y = (-1.0 if flip_x else 1.0), (-1.0 if flip_y else 1.0)
 
         c = (0.15, 0.15, 0.15, 1.0) if is_light else (0.85, 0.85, 0.85, 1.0)
         glUniform4f(self.u_color, c[0], c[1], c[2], c[3])
@@ -433,9 +533,9 @@ class AxisRenderer:
             len_y = length_px * scale * world_per_px_y
             marks = []
             for x in ticks_x:
-                marks.extend([(x, win[2]), (x, win[2] + len_y)])
+                marks.extend([(x, bottom), (x, bottom + step_y * len_y)])
             for y in ticks_y:
-                marks.extend([(win[0], y), (win[0] + len_x, y)])
+                marks.extend([(left, y), (left + step_x * len_x, y)])
             if marks:
                 data = np.array(marks, dtype=np.float32)
                 glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_STREAM_DRAW)
@@ -548,8 +648,9 @@ class AxisRenderer:
         # "-100000" hung 20px right of it. It is worth fixing now rather than later
         # because `axis_tick_format` can put much wider strings here than the old
         # fixed-point-only formatter ever could -- "5.0e-10" is 49px.
+        edge_left, edge_right, edge_bottom, edge_top, _fx, _fy = _screen_edges(ctx.mvp, win)
         for val, label in zip(axis.ticks_x.major, axis.ticks_x.labels):
-            sx, sy = project(val, win[2])
+            sx, sy = project(val, edge_bottom)
             # Offset labels slightly below the spine
             w = imgui.calc_text_size(label)[0] * tick_scale
             draw_text_scaled(
@@ -566,7 +667,7 @@ class AxisRenderer:
         # clear its own chrome got no benefit. Measuring makes the labels track the gutter.
         widest_tick = 0.0
         for val, label in zip(axis.ticks_y.major, axis.ticks_y.labels):
-            sx, sy = project(win[0], val)
+            sx, sy = project(edge_left, val)
             text_w = imgui.calc_text_size(label)[0] * tick_scale
             widest_tick = max(widest_tick, text_w)
             draw_text_scaled(
@@ -578,7 +679,56 @@ class AxisRenderer:
                 tick_scale,
             )
 
+        # A twin axis' tick labels sit just *inside* the frame, on the right edge (twinx) or the
+        # top edge (twiny). Inside, because the gutters are one figure-wide setting that the
+        # mouse mapping also reads, and a panel with a twin must not need its own.
+        twins = getattr(getattr(axis, "plot", None), "active_panel", None)
+        twins = getattr(twins, "twins", {}) or {}
+        for letter, ticks in (getattr(axis, "twin_ticks", None) or {}).items():
+            ink = self._color_u32(getattr(twins.get(letter), "tick_color", None), tick_color)
+            for pos, label in zip(ticks.major, ticks.labels):
+                w = imgui.calc_text_size(label)[0] * tick_scale
+                if letter == "y":
+                    sx, sy = project(edge_right, pos)
+                    origin = (sx - _TICK_LABEL_GAP - w, sy - 7)
+                else:
+                    sx, sy = project(pos, edge_top)
+                    origin = (sx - w * 0.5, sy + 4)
+                draw_text_scaled(imgui, draw_list, label, ink, origin, tick_scale)
+
+        # ``secondary_*axis`` tick labels, inside the frame along the edge they were put on.
+        for sec, ticks in getattr(axis, "secondary_ticks", None) or []:
+            ink = self._color_u32(sec.tick_color, tick_color)
+            for pos, label in zip(ticks.major, ticks.labels):
+                w = imgui.calc_text_size(label)[0] * tick_scale
+                if sec.axis == "y":
+                    sx, sy = project(edge_right if sec.location == "right" else edge_left, pos)
+                    x = (
+                        sx - _TICK_LABEL_GAP - w
+                        if sec.location == "right"
+                        else sx + _TICK_LABEL_GAP
+                    )
+                    origin = (x, sy - 7)
+                else:
+                    sx, sy = project(pos, edge_top if sec.location == "top" else edge_bottom)
+                    origin = (sx - w * 0.5, sy + 4 if sec.location == "top" else sy - 20)
+                draw_text_scaled(imgui, draw_list, label, ink, origin, tick_scale)
+
         self._draw_annotations(imgui, draw_list, axis, ctx, project, color, widest_tick)
+
+    def _color_u32(self, color: object, fallback: int) -> int:
+        """``color`` (any colour spelling) as an ImGui u32, or ``fallback`` when unset/bad."""
+        if color is None:
+            return fallback
+        try:
+            from imgui_bundle import imgui
+
+            from ..pyplot import _normalize_rgba
+
+            r, g, b, a = _normalize_rgba(color)
+            return imgui.get_color_u32((float(r), float(g), float(b), float(a)))
+        except (ImportError, ValueError, TypeError):
+            return fallback
 
     def _draw_annotations(
         self,
@@ -600,12 +750,22 @@ class AxisRenderer:
         xlabel = self._resolve_annotation(axis, "axis_xlabel", "xlabel")
         ylabel = self._resolve_annotation(axis, "axis_ylabel", "ylabel")
         title = self._resolve_title(axis)
-        if not (xlabel or ylabel or title):
+        panel = getattr(getattr(axis, "plot", None), "active_panel", None)
+        twin_titles = {
+            letter: tw
+            for letter, tw in (getattr(panel, "twins", {}) or {}).items()
+            if getattr(tw, "label", "")
+        }
+        secondary_titles = [
+            sec for sec in (getattr(panel, "secondaries", None) or []) if getattr(sec, "label", "")
+        ]
+        if not (xlabel or ylabel or title or twin_titles or secondary_titles):
             return
 
         win = ctx.window_world
-        left_px, bottom_px = project(win[0], win[2])
-        right_px, top_px = project(win[1], win[3])
+        edge_left, edge_right, edge_bottom, edge_top, _fx, _fy = _screen_edges(ctx.mvp, win)
+        left_px, bottom_px = project(edge_left, edge_bottom)
+        right_px, top_px = project(edge_right, edge_top)
         mid_x = 0.5 * (left_px + right_px)
         mid_y = 0.5 * (top_px + bottom_px)
         # The panel's window-space top and bottom edges. `project` is offset-aware (spine
@@ -671,4 +831,44 @@ class AxisRenderer:
                 anchor,
                 (center_x, mid_y),
                 self._font_scale("axis_ylabel_fontsize", _MPL_DEFAULT_LABEL_PT),
+            )
+
+        # The top row inside the frame is taken by the tick labels of any x axis drawn along
+        # the top (a ``twiny``, a ``secondary_xaxis("top")``): a y axis' title goes below it.
+        top_row_busy = "x" in (getattr(panel, "twins", None) or {}) or any(
+            s.axis == "x" and s.location == "top" for s in getattr(panel, "secondaries", None) or []
+        )
+        y_title_row = top_px + (24.0 if top_row_busy else 4.0)
+
+        # A twin axis' title, inside the frame beside its tick labels: top-right for the
+        # second y axis, top-centre (below the tick row) for the second x axis.
+        for letter, tw in twin_titles.items():
+            try:
+                scale = min(max(float(tw.label_fontsize) / _MPL_DEFAULT_LABEL_PT, 0.5), 4.0)
+            except (TypeError, ValueError):
+                scale = 1.0
+            w, h = imgui.calc_text_size(tw.label)
+            w, h = w * scale, h * scale
+            x = right_px - w - 8.0 if letter == "y" else mid_x - w * 0.5
+            y = y_title_row if letter == "y" else top_px + 22.0
+            _add_scaled_text(
+                imgui, draw_list, x, y, self._color_u32(tw.label_color, color), tw.label, scale
+            )
+
+        # A secondary axis' title: beside its tick labels, inside the frame.
+        for sec in secondary_titles:
+            try:
+                scale = min(max(float(sec.label_fontsize) / _MPL_DEFAULT_LABEL_PT, 0.5), 4.0)
+            except (TypeError, ValueError):
+                scale = 1.0
+            w, h = imgui.calc_text_size(sec.label)
+            w, h = w * scale, h * scale
+            if sec.axis == "y":
+                x = right_px - w - 8.0 if sec.location == "right" else left_px + 8.0
+                y = y_title_row
+            else:
+                x = mid_x - w * 0.5
+                y = top_px + 22.0 if sec.location == "top" else bottom_px - 38.0
+            _add_scaled_text(
+                imgui, draw_list, x, y, self._color_u32(sec.label_color, color), sec.label, scale
             )

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union
+from typing import Callable, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -24,6 +26,23 @@ LEGEND_FONTSIZE = 24
 #: figure. Measured before this existed: 0.32x matplotlib's relative diameter, ~10% of its
 #: area, which is what "the default points are tiny" was.
 DEFAULT_SCATTER_SIZE_PT2 = (2.0 * 6.0) ** 2  # 6.0 == matplotlib's rcParams lines.markersize
+
+
+def _point_diameter_px_to_area_pt2(size_px, engine: object = None):
+    """Convert GLPlot's marker diameter in pixels to matplotlib's marker area in pt^2.
+
+    The live 3D renderer reads ``scatter3d(s=...)`` as a screen-space pixel diameter,
+    whereas matplotlib's ``Axes3D.scatter`` reads the same number as an area in points
+    squared. Passing the number through unchanged therefore makes the two views diverge
+    quadratically: a value such as 72 is a huge 72 px disc live but only an 8.5 pt marker
+    in an exported GIF. Convert the units before squaring so both paths represent the same
+    physical marker diameter at the figure's configured DPI.
+    """
+    figure_dpi = float(getattr(engine, "_figure_dpi", 100.0) or 100.0)
+    diameter_pt = np.maximum(np.asarray(size_px, dtype=float), 0.5) * 72.0 / figure_dpi
+    area_pt2 = diameter_pt * diameter_pt
+    return float(area_pt2) if area_pt2.ndim == 0 else area_pt2
+
 
 #: A colorbar's own chrome. Smaller than the panel-scale sizes above (the bar is a
 #: narrow strip beside a full axis, not an axis itself) but nowhere near matplotlib's
@@ -67,6 +86,23 @@ def _rgba(
     if arr.shape == (3,):
         return tuple(np.r_[arr, 1.0])  # type: ignore
     return default
+
+
+def _collapse_uniform_colors(colors: object) -> object:
+    """One RGBA row when every row of ``colors`` is identical, otherwise ``colors`` untouched.
+
+    A layer stores an ``(N, 4)`` colour array even when every point is the same colour, and
+    handing that to ``ax.scatter(c=...)`` sends Agg down its per-element colour path: at
+    500k points the export took ~1.8 s against ~0.08 s for the same figure with a single
+    colour. The picture is the same either way, so an all-equal array is reduced to its
+    first row, which is exactly the call matplotlib makes for ``scatter(x, y)``.
+    """
+    arr = np.asarray(colors) if colors is not None else None
+    if arr is None or arr.ndim != 2 or len(arr) < 2:
+        return colors
+    if np.array_equal(arr, np.broadcast_to(arr[0], arr.shape)):
+        return arr[:1]
+    return colors
 
 
 def _outline_rgba(style: object) -> Optional[Tuple[float, float, float, float]]:
@@ -172,6 +208,189 @@ def _has_3d_layers(layers) -> bool:
     )
 
 
+#: zorder for 3D overlay lines (``style.depth_test=False``). mplot3d numbers its sorted
+#: collections upward from just above the axis artists, so this only has to beat the
+#: collection count of any plausible figure.
+_OVERLAY_ZORDER = 1_000_000
+
+
+#: Figure fraction a twin axis needs for its tick labels and title: they sit outside the axes
+#: (right for ``twinx``, top for ``twiny``), where matplotlib's default margins leave ~10%.
+_TWIN_ROOM_X = 0.07
+_TWIN_ROOM_Y = 0.06
+
+
+def _reserve_for_twins(panel: object, rect: Tuple[float, float, float, float]):
+    """``rect`` (an axes box in figure fractions) pulled in to leave room for ``panel``'s twins.
+
+    Capped at 30% of the box so a narrow cell of a dense grid keeps most of its width.
+    """
+    right, top = _twin_room(panel)
+    x0, y0, w, h = rect
+    if right:
+        w -= min(_TWIN_ROOM_X, 0.3 * w)
+    if top:
+        h -= min(_TWIN_ROOM_Y, 0.3 * h)
+    return (x0, y0, w, h)
+
+
+def _twin_room(panel: object) -> Tuple[bool, bool]:
+    """``(right, top)``: does ``panel`` have an axis whose labels sit outside on that side?
+
+    A ``twinx`` and a ``secondary_yaxis("right")`` use the right; a ``twiny`` and a
+    ``secondary_xaxis("top")`` the top. (A secondary on the bottom or left overlaps the main
+    axis' own ticks in matplotlib too, so it asks for nothing.)
+    """
+    twins = getattr(panel, "twins", None) or {}
+    secondaries = getattr(panel, "secondaries", None) or []
+    right = "y" in twins or any(s.axis == "y" and s.location == "right" for s in secondaries)
+    top = "x" in twins or any(s.axis == "x" and s.location == "top" for s in secondaries)
+    return right, top
+
+
+def _boundary_segments(vertices: np.ndarray, triangles: np.ndarray) -> np.ndarray:
+    """The outline of a triangulated shape: ``(M, 2, 2)`` segments of its boundary edges.
+
+    An edge shared by two triangles is interior; one that belongs to a single triangle is on
+    the boundary. A fan-triangulated polygon or a ``fill_between`` strip stroked triangle by
+    triangle shows every internal seam, so a shape's *edge* is drawn from these instead.
+    """
+    tri = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
+    pairs = np.concatenate([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]])
+    undirected = np.sort(pairs, axis=1)
+    _, first, counts = np.unique(undirected, axis=0, return_index=True, return_counts=True)
+    boundary = pairs[first[counts == 1]]
+    return np.asarray(vertices, dtype=float)[boundary]
+
+
+def _hatch_style(layer: object, face: tuple, edge: tuple) -> dict:
+    """matplotlib keywords that draw ``layer``'s hatch pattern, or ``{}`` for an unhatched one.
+
+    matplotlib hatches in the patch's *edge* colour. GLPlot patches default to an edge equal to
+    the face, which would hatch in the fill colour and show nothing, so an edge the caller did
+    not choose becomes black -- matplotlib's own hatch colour -- and gets no outline of its own.
+    """
+    hatch = layer.metadata.get("hatch")
+    if not hatch:
+        return {}
+    chosen = tuple(edge) != tuple(face)
+    return {
+        "hatch": hatch,
+        "edgecolor": edge if chosen else (0.0, 0.0, 0.0, 1.0),
+        "linewidth": layer.style.line_width if chosen else 0.0,
+    }
+
+
+def _raw_twin_layer(layer: object) -> object:
+    """A copy of a twin-axis ``layer`` that carries the values the user plotted.
+
+    The layer itself holds a copy mapped into the host viewport (``glplot.core.twin``) so the
+    GL renderers need no idea twins exist. A real matplotlib twin axes has its own scale, so
+    it is drawn from the originals.
+    """
+    import copy
+
+    clone = copy.copy(layer)
+    raw = layer.metadata.get("twin_raw")
+    if raw is None:
+        return clone
+    if layer.layer_type in ("polyline", "scatter"):
+        clone.pts = np.asarray(raw, dtype=np.float32)
+    elif layer.layer_type == "patch":
+        clone.vertices = np.asarray(raw, dtype=np.float32)
+    elif layer.layer_type == "text":
+        clone.x, clone.y = float(raw[0][0]), float(raw[0][1])
+    return clone
+
+
+def _draw_panel_layers(ax: object, panel: object, layers, has_3d: bool, engine: object) -> None:
+    """Draw one panel: its own layers on ``ax``, and each twin's on a real twin axes.
+
+    ``ax.twinx()`` / ``ax.twiny()`` share the other axis with ``ax``, exactly as in the
+    script that built the figure. The twin axes are kept on ``ax._glplot_twins`` for the
+    legend, which spans both.
+    """
+    twins = getattr(panel, "twins", None)
+    secondaries = getattr(panel, "secondaries", None)
+    if has_3d or not (twins or secondaries):
+        _draw_layers(ax, layers, has_3d, engine)
+        return
+    from ..core import twin as _twin
+
+    _draw_layers(ax, _twin.host_layers(layers), has_3d, engine)
+    twin_axes = []
+    for letter, state in twins.items():
+        ax2 = ax.twinx() if letter == "y" else ax.twiny()
+        mine = [_raw_twin_layer(layer) for layer in _twin.layers_of(layers, letter)]
+        _draw_layers(ax2, mine, False, engine)
+        _finish_twin_axes(ax2, letter, state)
+        ax2._glplot_twin_state = state
+        twin_axes.append(ax2)
+    ax._glplot_twins = twin_axes
+    ax._glplot_secondaries = []
+    for state in secondaries or []:
+        make = ax.secondary_xaxis if state.axis == "x" else ax.secondary_yaxis
+        strip = make(state.location, functions=state.functions)
+        _finish_secondary_axis(strip, state)
+        strip._glplot_secondary_state = state
+        ax._glplot_secondaries.append(strip)
+
+
+def _finish_secondary_axis(strip: object, state: object) -> None:
+    """A ``secondary_*axis``' pinned ticks, tick colour and title."""
+    letter = state.axis
+    if state.ticks is not None:
+        (strip.set_xticks if letter == "x" else strip.set_yticks)(list(state.ticks))
+        if state.tick_labels is not None:
+            (strip.set_xticklabels if letter == "x" else strip.set_yticklabels)(
+                list(state.tick_labels)
+            )
+    style = {"axis": letter, "labelsize": TICK_LABEL_FONTSIZE}
+    if state.tick_color is not None:
+        style["colors"] = state.tick_color
+    strip.tick_params(**style)
+    if state.label:
+        label_style = {"fontsize": state.label_fontsize or AXIS_LABEL_FONTSIZE}
+        if state.label_color is not None:
+            label_style["color"] = state.label_color
+        (strip.set_xlabel if letter == "x" else strip.set_ylabel)(state.label, **label_style)
+
+
+def _finish_twin_axes(ax2: object, letter: str, state: object) -> None:
+    """The twin axes' own scale, limits, ticks, tick style and title."""
+    import copy
+
+    set_scale = ax2.set_yscale if letter == "y" else ax2.set_xscale
+    set_lim = ax2.set_ylim if letter == "y" else ax2.set_xlim
+    set_ticks = ax2.set_yticks if letter == "y" else ax2.set_xticks
+    set_ticklabels = ax2.set_yticklabels if letter == "y" else ax2.set_xticklabels
+    axis = ax2.yaxis if letter == "y" else ax2.xaxis
+    if state.scale != "linear":
+        set_scale(state.scale, **(state.scale_params or {}))
+    if state.lim is not None:
+        lo, hi = state.lim
+        set_lim((hi, lo) if state.inverted else (lo, hi))
+    elif state.inverted:
+        (ax2.invert_yaxis if letter == "y" else ax2.invert_xaxis)()
+    if state.ticks is not None:
+        set_ticks(list(state.ticks))
+        if state.tick_labels is not None:
+            set_ticklabels(list(state.tick_labels))
+    if state.locator is not None:
+        axis.set_major_locator(copy.copy(state.locator))
+    if state.formatter is not None:
+        axis.set_major_formatter(copy.copy(state.formatter))
+    tick_style = {"axis": letter, "labelsize": TICK_LABEL_FONTSIZE}
+    if state.tick_color is not None:
+        tick_style["colors"] = state.tick_color
+    ax2.tick_params(**tick_style)
+    if state.label:
+        label_style = {"fontsize": state.label_fontsize or AXIS_LABEL_FONTSIZE}
+        if state.label_color is not None:
+            label_style["color"] = state.label_color
+        (ax2.set_ylabel if letter == "y" else ax2.set_xlabel)(state.label, **label_style)
+
+
 def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> None:
     """Draw one panel's layers into ``ax``.
 
@@ -207,6 +426,11 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             continue
         if layer.layer_type in {"scatter3d", "volume3d"} and layer.vertices is not None:
             verts = layer.vertices
+            size_px = (
+                layer.sizes
+                if layer.sizes is not None and len(layer.sizes) == len(verts)
+                else layer.style.point_size
+            )
             # A marker's outline is its edge, which matplotlib takes as a keyword pair
             # rather than as a path effect. `_outline_edge_kwargs` is empty for a layer with
             # no outline, so the call is character-for-character the historical one.
@@ -214,8 +438,8 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                 verts[:, 0],
                 verts[:, 1],
                 verts[:, 2],
-                c=layer.colors,
-                s=max(layer.style.point_size, 0.5),
+                c=_collapse_uniform_colors(layer.colors),
+                s=_point_diameter_px_to_area_pt2(size_px, engine),
                 depthshade=False,
                 label=_legend_label(layer),
                 **_outline_edge_kwargs(layer.style),
@@ -229,6 +453,11 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                 else layer.style.color
             )
             line_width = max(layer.style.line_width, 0.4)
+            # style.depth_test=False is an overlay in the GL renderer. mplot3d re-numbers
+            # every collection's zorder (surfaces, scatters) above the lines' default, so
+            # a plain Line3D always lands under a surface; a zorder above anything it
+            # assigns is what puts the line on top here too.
+            overlay = not getattr(layer.style, "depth_test", True)
             for idx, seg in enumerate(verts):
                 (line,) = ax.plot(
                     seg[:, 0],
@@ -236,9 +465,11 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                     seg[:, 2],
                     color=color,
                     linewidth=line_width,
-                    label=layer.label if idx == 0 and layer.label else None,
+                    label=_legend_label(layer) if idx == 0 else None,
                 )
                 _apply_outline(line, layer.style, line_width)
+                if overlay:
+                    line.set_zorder(_OVERLAY_ZORDER)
             continue
         if layer.layer_type in {"mesh3d", "bars3d"} and layer.vertices is not None:
             verts = layer.vertices
@@ -278,6 +509,15 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                     alpha=0.92,
                 )
                 if face_color is not None:
+                    # A collection-wide alpha overrides every face's own, which silently
+                    # threw away the caller's transparency: plot_surface(alpha=0.5) bakes
+                    # its alpha into the vertex colours, and the 0.92 above turned it back
+                    # into a near-opaque sheet hiding every point behind it. Keep 0.92 as a
+                    # ceiling so an opaque mesh previews exactly as before, and let anything
+                    # more transparent through, times style.alpha like the GL shader does.
+                    face_color = np.array(face_color, dtype=float, copy=True)
+                    face_color[:, 3] = np.minimum(face_color[:, 3] * float(layer.style.alpha), 0.92)
+                    surf.set_alpha(None)
                     surf.set_facecolors(face_color)
                 if layer.layer_type == "bars3d":
                     surf.set_edgecolor((0.0, 0.0, 0.0, 0.0))
@@ -287,13 +527,18 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                     verts[:, 0],
                     verts[:, 1],
                     verts[:, 2],
-                    c=layer.colors,
+                    c=_collapse_uniform_colors(layer.colors),
                     s=layer.style.point_size,
                     depthshade=False,
                     label=_legend_label(layer),
                 )
             continue
-        if layer.metadata.get("artist") == "pcolormesh":
+        # ``pcolormesh()`` itself now draws a per-vertex-coloured *patch* (``_pcolor_impl``) and
+        # tags it with this same artist name but none of the X/Y/C arrays this branch was
+        # written for, so it died here with ``KeyError: 'X'`` on every ``savefig``. Only a
+        # layer that actually carries the arrays takes this path; the patch falls through to
+        # the generic patch drawing below, which already honours per-vertex colours.
+        if layer.metadata.get("artist") == "pcolormesh" and "X" in layer.metadata:
             ax.pcolormesh(
                 layer.metadata["X"],
                 layer.metadata["Y"],
@@ -426,7 +671,7 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             ax.scatter(
                 pts[:, 0],
                 pts[:, 1],
-                c=layer.colors,
+                c=_collapse_uniform_colors(layer.colors),
                 s=layer.style.point_size if explicit else DEFAULT_SCATTER_SIZE_PT2,
                 # `marker=` was accepted by scatter() and stored on the layer, but never
                 # actually reached this reconstruction -- every point exported as a
@@ -439,7 +684,24 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
         elif layer.layer_type == "patch" and layer.vertices is not None:
             fc = _rgba(layer.style.face_color, (0.2, 0.4, 0.8, 0.35))
             ec = _rgba(layer.style.edge_color, (0.2, 0.4, 0.8, 1.0))
-            if layer.indices is not None and getattr(layer, "mode", "strip") == "triangles":
+            if layer.metadata.get("artist") in ("bar", "barh") and len(layer.vertices) == 4:
+                # A bar is one rectangle the live renderer happens to cut into two
+                # triangles. Exported as those triangles, a bar whose edge differs from its
+                # face shows the seam as a diagonal stroke (and a translucent one shows it
+                # as a darker line), so it goes out as the single polygon it is.
+                polygon_style = dict(edgecolor=ec, linewidth=layer.style.line_width)
+                polygon_style.update(_hatch_style(layer, fc, ec))
+                patch = Polygon(
+                    np.asarray(layer.vertices, dtype=float),
+                    closed=True,
+                    facecolor=fc,
+                    label=_legend_label(layer),
+                    **polygon_style,
+                )
+                if not layer.metadata.get("edge_as_outline"):
+                    _apply_outline(patch, layer.style, layer.style.line_width)
+                ax.add_patch(patch)
+            elif layer.indices is not None and getattr(layer, "mode", "strip") == "triangles":
                 from matplotlib.collections import PolyCollection
 
                 tris = np.asarray(layer.indices, dtype=int).reshape(-1, 3)
@@ -458,26 +720,69 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                 else:
                     face_colors = [fc]
                     edge_colors = [ec]
+                collection_style = dict(edgecolors=edge_colors, linewidths=layer.style.line_width)
+                hatched = _hatch_style(layer, fc, ec)
+                if hatched:
+                    collection_style = dict(
+                        edgecolors=[hatched["edgecolor"]],
+                        linewidths=hatched["linewidth"],
+                        hatch=hatched["hatch"],
+                    )
+                # An edge the caller chose is the outline of the *shape*. Stroked per triangle
+                # it draws every seam of the triangulation; the triangles are left unstroked
+                # and the boundary edges drawn once, below.
+                outline_segments = None
+                # Only for an edge asked for through the API (``edgecolor=``/``linewidth=`` mark
+                # the layer): a bare ``add_patch`` keeps stroking its triangles, as it always did.
+                chosen_edge = (
+                    bool(layer.metadata.get("edge_as_outline"))
+                    and edge_colors[0] is ec
+                    and layer.style.line_width > 0
+                )
+                if chosen_edge:
+                    outline_segments = _boundary_segments(layer.vertices, tris)
+                    collection_style["linewidths"] = 0.0
+                    collection_style.setdefault("edgecolors", [ec])
                 coll = PolyCollection(
                     polys,
                     facecolors=face_colors,
-                    edgecolors=edge_colors,
-                    linewidths=layer.style.line_width,
                     label=_legend_label(layer),
+                    **collection_style,
                 )
+                if outline_segments is not None and len(outline_segments):
+                    from matplotlib.collections import LineCollection
+
+                    ax.add_collection(
+                        LineCollection(
+                            outline_segments,
+                            colors=[ec],
+                            linewidths=layer.style.line_width,
+                            capstyle="round",
+                            joinstyle="round",
+                        )
+                    )
                 # A silhouette around each triangle, which is what the GL dilation gives a
                 # triangle-mode patch too -- the seams between adjacent triangles are the
                 # one place the two disagree, and only when the outline is on.
-                _apply_outline(coll, layer.style, layer.style.line_width)
+                if not layer.metadata.get("edge_as_outline"):
+                    _apply_outline(coll, layer.style, layer.style.line_width)
                 ax.add_collection(coll)
             else:
+                outline = np.asarray(layer.vertices)
+                if layer.indices is None and getattr(layer, "mode", "strip") == "strip":
+                    # A strip stores its two sides interleaved (v0 v1 v2 ...), which the GL
+                    # renderer draws as a ribbon. Handed to Polygon as-is that order is the
+                    # boundary of a zigzag -- a violin came out as a comb. The boundary of
+                    # a strip is one side forward and the other back.
+                    outline = np.concatenate([outline[0::2], outline[1::2][::-1]])
+                polygon_style = dict(edgecolor=ec, linewidth=layer.style.line_width)
+                polygon_style.update(_hatch_style(layer, fc, ec))
                 patch = Polygon(
-                    layer.vertices,
+                    outline,
                     closed=True,
                     facecolor=fc,
-                    edgecolor=ec,
-                    linewidth=layer.style.line_width,
                     label=_legend_label(layer),
+                    **polygon_style,
                 )
                 _apply_outline(patch, layer.style, layer.style.line_width)
                 ax.add_patch(patch)
@@ -518,13 +823,26 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             ax.set_xlim(float(x0), float(x1))
             ax.set_ylim(float(ymin_v), float(ymax_v))
         elif layer.layer_type == "text":
+            meta = layer.metadata
+            # Alignment/rotation are set on the call, not read back from matplotlib's own
+            # defaults: GLPlot's live text is left/baseline-aligned, and a script that said
+            # `ha="center"` is asking for what only this export can draw.
+            extras = {
+                key: meta[name]
+                for key, name in (("ha", "ha"), ("va", "va"), ("rotation", "rotation"))
+                if meta.get(name) is not None
+            }
+            fraction = meta.get("axes_fraction")
+            if fraction is not None:
+                extras["transform"] = ax.transAxes
             text = ax.text(
-                layer.x,
-                layer.y,
+                fraction[0] if fraction is not None else layer.x,
+                fraction[1] if fraction is not None else layer.y,
                 layer.text,
                 fontsize=layer.style.text_size_px,
                 color=_rgba(layer.style.color),
                 bbox=layer.metadata.get("bbox"),
+                **extras,
             )
             # The classic use of withStroke: a halo that keeps a label legible over data.
             # Glyphs have no line width, so the stroke is the outline width alone.
@@ -576,6 +894,145 @@ def _text_style_kwargs(
     if color is not None:
         kwargs["color"] = color
     return kwargs
+
+
+def _view_is_pinned(engine: object, panel: object) -> bool:
+    """Did the caller set ``panel``'s view on purpose (``set_xlim``/``set_ylim``/``autoscale``)?
+
+    A pinned view is *deliberate*: do not re-fit it to whichever data this particular
+    frame happens to hold. ``Panel.view_pinned`` answers per panel. The engine-wide
+    ``_needs_initial_autoscale`` flag is only consulted when there is one panel (or none to
+    ask), because with several it cannot say whose view it was -- trusting it made
+    ``axs[0].set_ylim(...)`` pin whichever panel happened to be active at save time and
+    leave the one that was actually configured to autoscale.
+    """
+    if panel is not None and getattr(panel, "view_pinned", False):
+        return True
+    if panel is not None and len(getattr(engine, "panels", None) or ()) > 1:
+        return False
+    return not getattr(engine, "_needs_initial_autoscale", True)
+
+
+@contextmanager
+def _panel_active(engine: object, panel: object):
+    """Make ``panel`` the engine's active panel for the block, then put the old one back."""
+    panels = getattr(engine, "panels", None)
+    if panel is None or not panels or panel not in panels:
+        yield
+        return
+    previous = engine.active_panel_index
+    engine.active_panel_index = panels.index(panel)
+    try:
+        yield
+    finally:
+        engine.active_panel_index = previous
+
+
+def _apply_view(ax: object, engine: object, panel: object = None) -> bool:
+    """Give ``ax`` the view ``panel`` has: its pinned limits, else matplotlib's autoscale.
+
+    Returns whether the view was pinned. Direction comes along either way: pinned limits
+    arrive as ``(hi, lo)`` when the axis is inverted, which matplotlib reads as an inverted
+    axis by itself; an autoscaled axis is inverted explicitly from the camera's flip flags.
+    """
+    pinned = False
+    if _view_is_pinned(engine, panel):
+        get_xlim = getattr(engine, "get_xlim", None)
+        get_ylim = getattr(engine, "get_ylim", None)
+        if callable(get_xlim) and callable(get_ylim):
+            with _panel_active(engine, panel):
+                xlim, ylim = get_xlim(), get_ylim()
+            ax.set_xlim(*xlim)
+            ax.set_ylim(*ylim)
+            pinned = True
+    if not pinned:
+        ax.autoscale(enable=True)
+        camera = getattr(panel, "camera", None)
+        if getattr(camera, "flip_x", False) and not ax.xaxis_inverted():
+            ax.invert_xaxis()
+        if getattr(camera, "flip_y", False) and not ax.yaxis_inverted():
+            ax.invert_yaxis()
+    if getattr(panel, "aspect_equal", False):
+        # `datalim` widens whichever axis is short -- the same thing GLPlot's own equal
+        # aspect does to the camera -- so nothing the caller had in view is cropped. The
+        # live view equalised for the window's pixel shape; this saved figure has its own.
+        ax.set_aspect("equal", adjustable="datalim")
+    return pinned
+
+
+def _spaced_rect(panel: object, panels: Sequence[object], wspace: float, hspace: float):
+    """``panel.rect_frac`` pulled in along every edge it shares with another grid panel.
+
+    A panel's rect carries its tick labels and title *inside* it, as a gutter (see the
+    note in :func:`_build_preview_figure`), so grid cells can sit flush. A matplotlib Axes
+    draws that chrome *outside* its box, so flush cells left the right panel's tick labels
+    printed over the left panel's. matplotlib's own answer is ``wspace``/``hspace``: a gap
+    of that fraction of the (average) axes size. For a cell of width ``c`` the box is
+    ``c / (1 + wspace)`` wide, so each side that touches a neighbour gives up half the gap,
+    ``c * wspace / (2 * (1 + wspace))``, and the neighbour gives up the other half.
+
+    Only panels cut from a grid take part: an ``inset_axes`` or an ``ax.set_position()``
+    rect (``Panel.explicit_rect``) is exactly where it was asked to be. An edge with no
+    neighbour -- the figure border, or a colorbar strip -- is left alone.
+    """
+    x0, y0, w, h = panel.rect_frac
+    if getattr(panel, "explicit_rect", False):
+        return (x0, y0, w, h)
+    gap_x = 0.5 * wspace / (1.0 + wspace) * w
+    gap_y = 0.5 * hspace / (1.0 + hspace) * h
+    eps = 1e-6
+    left, right, bottom, top = x0, x0 + w, y0, y0 + h
+    for other in panels:
+        if other is panel or getattr(other, "explicit_rect", False):
+            continue
+        ox0, oy0, ow, oh = other.rect_frac
+        overlaps_y = min(top, oy0 + oh) - max(bottom, oy0) > eps
+        overlaps_x = min(right, ox0 + ow) - max(left, ox0) > eps
+        if overlaps_y and abs(ox0 - (x0 + w)) < eps:
+            right -= gap_x
+        if overlaps_y and abs((ox0 + ow) - x0) < eps:
+            left += gap_x
+        if overlaps_x and abs(oy0 - (y0 + h)) < eps:
+            top -= gap_y
+        if overlaps_x and abs((oy0 + oh) - y0) < eps:
+            bottom += gap_y
+    return (left, bottom, right - left, top - bottom)
+
+
+def _apply_axis_ticker(ax: object, opts: object) -> None:
+    """Install the matplotlib ``Locator``/``Formatter`` set through ``ax.xaxis``/``ax.yaxis``.
+
+    Copies, not the objects themselves: matplotlib binds a ticker to the one axis it is
+    given, and one set of options feeds every panel of the export.
+    """
+    import copy
+
+    for axis in ("x", "y"):
+        target = ax.xaxis if axis == "x" else ax.yaxis
+        locator = getattr(opts, f"axis_tick_locator_{axis}", None)
+        formatter = getattr(opts, f"axis_tick_formatter_{axis}", None)
+        if locator is not None:
+            target.set_major_locator(copy.copy(locator))
+        if formatter is not None:
+            target.set_major_formatter(copy.copy(formatter))
+
+
+def _apply_tick_rotation(ax: object, opts: object) -> None:
+    """Rotate ``ax``'s tick labels as ``xticks(rotation=...)`` / ``tick_params`` asked.
+
+    A rotated label is anchored by its *end* in matplotlib's own usage (``ha="right"``);
+    centred, a 45-degree label sits under the wrong tick. Right-aligning matches what
+    nearly every script that rotates ticks then does by hand.
+    """
+    for axis in ("x", "y"):
+        degrees = float(getattr(opts, f"axis_tick_rotation_{axis}", 0.0) or 0.0)
+        if degrees == 0.0:
+            continue
+        ax.tick_params(axis=axis, labelrotation=degrees)
+        if axis == "x" and 0.0 < abs(degrees) < 90.0:
+            for label in ax.get_xticklabels():
+                label.set_horizontalalignment("right" if degrees > 0 else "left")
+                label.set_rotation_mode("anchor")
 
 
 def _apply_panel_labels(ax: object, panel: object, engine: object) -> None:
@@ -650,53 +1107,35 @@ def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None)
         # ones: a 3D scene's labels live on ``axes3d``, and falling straight through to
         # ``engine.zlabel`` used to export a literal "z" over a named axis.
         axes3d_opts = getattr(engine, "axes3d", None)
-        if getattr(axes3d_opts, "xlabel", ""):
-            ax.set_xlabel(axes3d_opts.xlabel, **xlabel_kwargs)
-        if getattr(axes3d_opts, "ylabel", ""):
-            ax.set_ylabel(axes3d_opts.ylabel, **ylabel_kwargs)
-        ax.set_zlabel(
-            getattr(axes3d_opts, "zlabel", "") or getattr(engine, "zlabel", "z") or "z",
-            fontsize=AXIS_LABEL_FONTSIZE,
-        )
+        show_axes3d = getattr(axes3d_opts, "show_axes", True)
+        if show_axes3d:
+            if getattr(axes3d_opts, "xlabel", ""):
+                ax.set_xlabel(axes3d_opts.xlabel, **xlabel_kwargs)
+            if getattr(axes3d_opts, "ylabel", ""):
+                ax.set_ylabel(axes3d_opts.ylabel, **ylabel_kwargs)
+            ax.set_zlabel(
+                getattr(axes3d_opts, "zlabel", "") or getattr(engine, "zlabel", "z") or "z",
+                fontsize=AXIS_LABEL_FONTSIZE,
+            )
         view3d = getattr(engine, "view3d", {})
         ax.view_init(elev=float(view3d.get("elev", 28.0)), azim=float(view3d.get("azim", -45.0)))
         camera = getattr(engine, "camera3d", None)
         if camera is not None and camera.projection == "orthographic":
             ax.set_proj_type("ortho")
-        ax.tick_params(**tick_kwargs)
+        if show_axes3d:
+            ax.tick_params(**tick_kwargs)
+        else:
+            # set_axis3d_off()/axis('off') on a 3D scene: matplotlib's Axes3D.set_axis_off()
+            # drops the box, floor panes, grid and tick labels together -- the GL engine's
+            # own axes3d.show_axes flag was only ever wired into the live renderer, so a
+            # headless savefig() silently ignored it and always drew the full 3D chrome.
+            ax.set_axis_off()
     else:
         ax.tick_params(axis="both", **tick_kwargs)
     resolved_title = _resolve_axes_title(panel, engine)
     if resolved_title:
         ax.set_title(resolved_title, **title_kwargs)
-    handles, labels = ax.get_legend_handles_labels()
-    if labels:
-        unique = []
-        seen = set()
-        for handle, label in zip(handles, labels):
-            if label in seen:
-                continue
-            seen.add(label)
-            unique.append((handle, label))
-        hidden = max(0, len(unique) - MAX_LEGEND_ITEMS)
-        visible = unique[:MAX_LEGEND_ITEMS]
-        legend_handles = [item[0] for item in visible]
-        legend_labels = [item[1] for item in visible]
-        if hidden:
-            from matplotlib.lines import Line2D
-
-            legend_handles.append(Line2D([], [], color="none"))
-            legend_labels.append(f"+{hidden} more layers")
-        ax.legend(
-            legend_handles,
-            legend_labels,
-            loc="upper right",
-            fontsize=LEGEND_FONTSIZE,
-            framealpha=0.78,
-            borderpad=0.4,
-            labelspacing=0.4,
-            handlelength=1.6,
-        )
+    _apply_legend(ax)
     if has_3d:
         ax.autoscale(enable=True)
         # An explicit set_xlim3d()/set_ylim3d()/set_zlim3d() call (stored on
@@ -720,51 +1159,90 @@ def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None)
         if zlim3d is not None:
             ax.set_zlim3d(*zlim3d)
     else:
-        opts = getattr(engine, "options", None)
-        scale_x = getattr(opts, "axis_scale_x", "linear")
-        if scale_x and scale_x != "linear":
-            ax.set_xscale(scale_x, **getattr(opts, "axis_scale_params_x", {}))
-        scale_y = getattr(opts, "axis_scale_y", "linear")
-        if scale_y and scale_y != "linear":
-            ax.set_yscale(scale_y, **getattr(opts, "axis_scale_params_y", {}))
-        # An explicit plt.xlim()/plt.ylim() call used to be silently discarded the same
-        # way: engine._needs_initial_autoscale is False once the caller has set an
-        # explicit view (engine.py's set_view(), which xlim()/ylim() call), meaning "this
-        # view is deliberate, do not re-fit it to whichever data this particular frame
-        # happens to hold." This is the engine-level flag, not Panel.needs_initial_
-        # autoscale (a separate, per-panel flag the live run loop's one-time auto-fit
-        # uses) -- the two are not kept in sync outside that loop, so a headless script
-        # that never calls .run() only ever updates the engine-level one.
-        pinned = False
-        if not getattr(engine, "_needs_initial_autoscale", True):
-            get_xlim = getattr(engine, "get_xlim", None)
-            get_ylim = getattr(engine, "get_ylim", None)
-            if callable(get_xlim) and callable(get_ylim):
-                ax.set_xlim(*get_xlim())
-                ax.set_ylim(*get_ylim())
-                pinned = True
-        if not pinned:
-            ax.autoscale(enable=True)
+        _apply_axis_state(ax, engine, panel)
+
+
+def _apply_legend(ax: object) -> None:
+    """Draw ``ax``'s legend from its labelled artists: deduplicated, capped, top right.
+
+    A panel with twin axes gets one legend over all of them -- the combined-handles legend
+    that matplotlib scripts otherwise build by hand.
+    """
+    handles, labels = ax.get_legend_handles_labels()
+    for twin_ax in getattr(ax, "_glplot_twins", ()):
+        twin_handles, twin_labels = twin_ax.get_legend_handles_labels()
+        handles, labels = handles + twin_handles, labels + twin_labels
+    if not labels:
+        return
+    unique = []
+    seen = set()
+    for handle, label in zip(handles, labels):
+        if label in seen:
+            continue
+        seen.add(label)
+        unique.append((handle, label))
+    hidden = max(0, len(unique) - MAX_LEGEND_ITEMS)
+    visible = unique[:MAX_LEGEND_ITEMS]
+    legend_handles = [item[0] for item in visible]
+    legend_labels = [item[1] for item in visible]
+    if hidden:
+        from matplotlib.lines import Line2D
+
+        legend_handles.append(Line2D([], [], color="none"))
+        legend_labels.append(f"+{hidden} more layers")
+    ax.legend(
+        legend_handles,
+        legend_labels,
+        loc="upper right",
+        fontsize=LEGEND_FONTSIZE,
+        framealpha=0.78,
+        borderpad=0.4,
+        labelspacing=0.4,
+        handlelength=1.6,
+    )
+
+
+def _apply_axis_state(ax: object, engine: object, panel: object = None) -> None:
+    """Give a 2D ``ax`` the scale, view, ticks and tick styling ``panel`` has.
+
+    Everything here is *per axes* in matplotlib, and reads the per-axes settings of whichever
+    panel is active on ``engine`` (see ``GPULinePlot.active_panel_index``), so callers run it
+    under :func:`_panel_active`. It used to be written inline in :func:`_finish_axes`, which
+    only ever ran for the primary panel -- so ``axs[1].set_yscale("log")`` exported as linear.
+    """
+    opts = getattr(engine, "options", None)
+    scale_x = getattr(opts, "axis_scale_x", "linear")
+    if scale_x and scale_x != "linear":
+        ax.set_xscale(scale_x, **(getattr(opts, "axis_scale_params_x", None) or {}))
+    scale_y = getattr(opts, "axis_scale_y", "linear")
+    if scale_y and scale_y != "linear":
+        ax.set_yscale(scale_y, **(getattr(opts, "axis_scale_params_y", None) or {}))
+    _apply_view(ax, engine, panel)
     # A pinned `xticks()`/`yticks()` call (explicit positions, or -- via `_coerce_axis_values`
-    # -- a categorical axis's string labels) is stored on `engine.options`, not on any layer,
-    # so nothing above ever reconstructs it: this export used to always fall back to
-    # matplotlib's own autoscaled tick locator, silently dropping any custom ticks the
-    # script had set. `set_xticks`/`set_yticks` run after `autoscale()` specifically because
+    # -- a categorical axis's string labels) is stored on the options, not on any layer, so
+    # nothing else reconstructs it. `set_xticks`/`set_yticks` run after `autoscale()` because
     # they install a `FixedLocator`, which -- unlike the default locator -- survives it.
-    if not has_3d:
-        opts = getattr(engine, "options", None)
-        x_values = getattr(opts, "axis_tick_values_x", None)
-        if x_values:
-            ax.set_xticks(x_values)
-            x_labels = getattr(opts, "axis_tick_labels_x", None)
-            if x_labels:
-                ax.set_xticklabels(x_labels)
-        y_values = getattr(opts, "axis_tick_values_y", None)
-        if y_values:
-            ax.set_yticks(y_values)
-            y_labels = getattr(opts, "axis_tick_labels_y", None)
-            if y_labels:
-                ax.set_yticklabels(y_labels)
+    x_values = getattr(opts, "axis_tick_values_x", None)
+    if x_values:
+        ax.set_xticks(x_values)
+        x_labels = getattr(opts, "axis_tick_labels_x", None)
+        if x_labels:
+            ax.set_xticklabels(x_labels)
+    y_values = getattr(opts, "axis_tick_values_y", None)
+    if y_values:
+        ax.set_yticks(y_values)
+        y_labels = getattr(opts, "axis_tick_labels_y", None)
+        if y_labels:
+            ax.set_yticklabels(y_labels)
+    # Last, so a formatter/locator the caller installed wins over the pinned ticks above (as
+    # it does in matplotlib, where the last call wins) and the rotation lands on the final
+    # tick labels rather than ones about to be replaced.
+    _apply_axis_ticker(ax, opts)
+    _apply_tick_rotation(ax, opts)
+    # ``axis("off")``: matplotlib hides the frame, ticks, tick labels, grid and axis titles
+    # together; the title and the artists stay. Used to be dropped by every 2D export.
+    if getattr(panel, "axis_off", False):
+        ax.set_axis_off()
 
 
 def _apply_style_chrome(fig: object, ax: object, has_3d: bool, engine: object) -> None:
@@ -805,6 +1283,21 @@ def _apply_style_chrome(fig: object, ax: object, has_3d: bool, engine: object) -
             set_pane_color = getattr(axis3d, "set_pane_color", None)
             if set_pane_color is not None:
                 set_pane_color((*bg, 1.0))
+    for strip in getattr(ax, "_glplot_secondaries", ()):
+        state = getattr(strip, "_glplot_secondary_state", None)
+        if getattr(state, "tick_color", None) is None:
+            strip.tick_params(colors=ink)
+        if getattr(state, "label_color", None) is None:
+            strip.xaxis.label.set_color(ink)
+            strip.yaxis.label.set_color(ink)
+    for twin_ax in getattr(ax, "_glplot_twins", ()):
+        # A colour the caller gave the twin (``tick_params(colors=...)``) stays theirs.
+        state = getattr(twin_ax, "_glplot_twin_state", None)
+        if getattr(state, "tick_color", None) is None:
+            twin_ax.tick_params(colors=ink)
+        if getattr(state, "label_color", None) is None:
+            twin_ax.yaxis.label.set_color(ink)
+            twin_ax.xaxis.label.set_color(ink)
     legend = ax.get_legend()
     if legend is not None:
         frame = legend.get_frame()
@@ -875,7 +1368,7 @@ def _reapply_pinned_limits(ax: object, has_3d: bool, engine: object) -> None:
         zlim3d = getattr(axes3d_opts, "zlim", None)
         if zlim3d is not None:
             ax.set_zlim3d(*zlim3d)
-    elif not getattr(engine, "_needs_initial_autoscale", True):
+    elif _view_is_pinned(engine, getattr(engine, "active_panel", None)):
         get_xlim = getattr(engine, "get_xlim", None)
         get_ylim = getattr(engine, "get_ylim", None)
         if callable(get_xlim) and callable(get_ylim):
@@ -992,25 +1485,46 @@ def _build_preview_figure(engine: object, scale: float = 1.0):
             return (margin_l + x0 * span_x, margin_b + y0 * span_y, w * span_x, h * span_y)
 
         for panel in panels:
+            if not getattr(panel, "visible", True):
+                continue
             panel_3d = panel.is_3d()
-            rect = _margined_rect(tuple(panel.rect_frac))
+            rect = _reserve_for_twins(
+                panel,
+                _margined_rect(
+                    _spaced_rect(
+                        panel, panels, rc["figure.subplot.wspace"], rc["figure.subplot.hspace"]
+                    )
+                ),
+            )
             ax = fig.add_axes(rect, projection="3d") if panel_3d else fig.add_axes(rect)
-            _draw_layers(ax, panel.scene.layers, panel_3d, engine)
-            if panel is primary:
-                _finish_axes(ax, panel_3d, engine, panel=panel)
-                title_ax = ax
-            else:
-                ax.autoscale(enable=True)
-                _apply_panel_labels(ax, panel, engine)
-                # `_finish_axes` (title/xlabel/ylabel/legend) stays primary-only -- those
-                # read one shared value off `engine`, not a per-panel one, and applying
-                # them here would just repeat whichever panel happens to be primary onto
-                # every other panel. Tick label size is different: it is a genuine
-                # per-axes matplotlib property with no such shared-value constraint, so
-                # leaving it off every non-primary panel had no reason behind it and was
-                # just leaving 3 panels of a 4-panel figure at matplotlib's tiny unstyled
-                # default while the 4th got the figure's real (much larger) size.
-                ax.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE)
+            # Under the panel's own settings: scale, ticks and legend are per axes, and the
+            # engine holds one panel's at a time (see `GPULinePlot.active_panel_index`).
+            with _panel_active(engine, panel):
+                _draw_panel_layers(ax, panel, panel.scene.layers, panel_3d, engine)
+                if panel is primary:
+                    _finish_axes(ax, panel_3d, engine, panel=panel)
+                    title_ax = ax
+                else:
+                    if panel_3d:
+                        ax.autoscale(enable=True)
+                    else:
+                        _apply_axis_state(ax, engine, panel)
+                    _apply_panel_labels(ax, panel, engine)
+                    # `_finish_axes` (title/xlabel/ylabel) stays primary-only -- those read
+                    # one shared value off `engine`, not a per-panel one, and applying them
+                    # here would repeat whichever panel happens to be primary onto every
+                    # other panel. Tick label size is different: it is a genuine per-axes
+                    # matplotlib property with no such shared-value constraint, so leaving
+                    # it off every non-primary panel had no reason behind it and was just
+                    # leaving 3 panels of a 4-panel figure at matplotlib's tiny unstyled
+                    # default while the 4th got the figure's real (much larger) size.
+                    ax.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE)
+                    # The primary panel's legend is drawn whenever it has labelled layers
+                    # (its historical behaviour); another panel gets one only if its own
+                    # `legend()` was called, or a figure of unlabelled-by-intent panels
+                    # would sprout legends it never had.
+                    if not panel_3d and getattr(engine, "legend_show", False):
+                        _apply_legend(ax)
             _apply_style_chrome(fig, ax, panel_3d, engine)
             for cb in getattr(panel, "colorbars", None) or []:
                 # `cax=`, not `ax=`: `panel.rect_frac` was already shrunk by `colorbar()`
@@ -1043,7 +1557,7 @@ def _build_preview_figure(engine: object, scale: float = 1.0):
             ax = fig.add_subplot(111, projection="3d")
         else:
             fig, ax = mpl.subplots(figsize=(width * scale, height * scale), dpi=120)
-        _draw_layers(ax, layers, has_3d, engine)
+        _draw_panel_layers(ax, primary, layers, has_3d, engine)
         _finish_axes(ax, has_3d, engine, panel=primary)
         _apply_style_chrome(fig, ax, has_3d, engine)
         title_ax = ax
@@ -1108,7 +1622,23 @@ def _build_preview_figure(engine: object, scale: float = 1.0):
             # rect near the figure edges rather than reusing the 2D margins below.
             fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.93)
         else:
-            fig.subplots_adjust(left=0.15, right=0.96, bottom=0.13, top=0.90)
+            # A twin axis puts tick labels and a title outside the axes, on the right
+            # (twinx) or top (twiny); leave them room.
+            room_right, room_top = _twin_room(primary)
+            fig.subplots_adjust(
+                left=0.15,
+                right=0.96 - (_TWIN_ROOM_X if room_right else 0.0),
+                bottom=0.13,
+                top=0.90 - (_TWIN_ROOM_Y if room_top else 0.0),
+            )
+    suptitle = getattr(engine, "_suptitle", None)
+    if suptitle is not None and len(panels) > 1:
+        text, style = suptitle
+        extras = {k: v for k, v in (style or {}).items() if v is not None}
+        extras.setdefault("fontsize", TITLE_FONTSIZE * 1.1)
+        fig.suptitle(text, **extras)
+    for axis, (text, kwargs) in (getattr(engine, "_suplabels", None) or {}).items():
+        (fig.supxlabel if axis == "x" else fig.supylabel)(text, **kwargs)
     if title_ax is not None:
         # Must run after tight_layout()/subplots_adjust() above, not before: both can
         # shift the axes horizontally (room for y-tick labels, the 3D margin fix), and a
@@ -1140,9 +1670,14 @@ def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_
     import matplotlib.pyplot as mpl
 
     fig = _build_preview_figure(engine, scale)
-    Path(filename).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(filename, **savefig_kwargs)
-    mpl.close(fig)
+    # A file-like target (``io.BytesIO()``, an open file) is a legitimate ``savefig``
+    # destination and has no parent directory to create.
+    if isinstance(filename, (str, os.PathLike)):
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fig.savefig(filename, **savefig_kwargs)
+    finally:
+        mpl.close(fig)
 
 
 def render_preview_array(engine: object, scale: float = 1.0) -> np.ndarray:
@@ -1163,3 +1698,40 @@ def render_preview_array(engine: object, scale: float = 1.0) -> np.ndarray:
     rgb = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
     mpl.close(fig)
     return rgb
+
+
+def render_preview_bytes(
+    engine: object,
+    scale: float = 1.0,
+    *,
+    format: str = "png",
+    inspect: Optional[Callable[[object], Optional[Mapping[str, object]]]] = None,
+    **savefig_kwargs,
+) -> bytes:
+    """Render ``engine``'s figure and return the encoded image, with no file I/O.
+
+    Same figure as :func:`render_preview` (see :func:`_build_preview_figure`), written to
+    memory instead of disk -- what a caller that hands the picture to someone else (the
+    MCP server returning it to a language model) needs, since a temp file would only be
+    read straight back.
+
+    ``inspect`` is called with the finished matplotlib ``Figure`` *before* it is closed, so
+    a caller can read what the picture actually resolved to (axis limits, tick labels,
+    legend entries) from the one render that produced the bytes, rather than building the
+    figure a second time to ask. It may return a mapping of extra ``savefig`` keywords
+    (a ``dpi`` chosen from the figure's size, say), which win over ``savefig_kwargs``; setting
+    ``fig.dpi`` instead has no effect on what ``savefig`` writes. An exception from it
+    propagates and the figure is still closed.
+    """
+    import io
+
+    import matplotlib.pyplot as mpl
+
+    fig = _build_preview_figure(engine, scale)
+    try:
+        overrides = inspect(fig) if inspect is not None else None
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format=format, **{**savefig_kwargs, **(overrides or {})})
+    finally:
+        mpl.close(fig)
+    return buffer.getvalue()

@@ -19,12 +19,13 @@ origin, which is what ``glViewport`` wants).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..controllers import CameraController
 from .camera3d import Axes3DOptions, Camera3D
 from .legacy import CacheState, CameraState, InteractionState, SceneData
 from .timeline import Timeline
+from .twin import SecondaryAxis, TwinAxis
 
 if TYPE_CHECKING:
     from ..options import EngineOptions
@@ -159,6 +160,52 @@ class Panel:
 
         #: Whether this panel still owes an initial autoscale-to-fit.
         self.needs_initial_autoscale: bool = True
+
+        #: True once *this panel's* view was set on purpose (``set_xlim``/``set_ylim``/
+        #: ``autoscale()``). The figure-wide ``GPULinePlot._needs_initial_autoscale`` cannot
+        #: say whose view that was, so a headless export of a ``subplots()`` grid used to
+        #: honour the limits of one panel and silently autoscale the rest.
+        self.view_pinned: bool = False
+
+        #: True once the caller asked for equal x/y units (``set_aspect('equal')``,
+        #: ``axis('equal')``, or any plot that implies it -- ``imshow``, ``hexbin``...). The
+        #: live view bakes that into the camera, but a saved file is laid out by matplotlib
+        #: in a differently shaped box, so the export has to be told to equalise again or it
+        #: comes out stretched. Cleared by ``set_aspect('auto')`` / ``axis('auto')``.
+        self.aspect_equal: bool = False
+
+        #: ``axis("off")`` / ``set_axis_off()``: no frame, ticks, tick labels, grid or axis
+        #: titles for *this* axes (the title stays, as in matplotlib). The live window reads
+        #: the figure-wide ``axis_show_*`` options; a saved figure reads this, per panel.
+        self.axis_off: bool = False
+
+        #: True when ``rect_frac`` was placed by hand (``inset_axes``, ``set_position``)
+        #: rather than cut from a grid. A headless export spaces grid panels apart the way
+        #: matplotlib's ``wspace``/``hspace`` do, and must leave these exactly where asked.
+        self.explicit_rect: bool = False
+
+        #: ``ax.set_visible(False)`` -- how a script hides the spare cells of a grid. A hidden
+        #: panel is neither drawn live nor exported; its scene and camera are kept.
+        self.visible: bool = True
+
+        #: ``fig.delaxes(ax)`` -- gone from ``fig.axes`` and never drawn, but kept in
+        #: ``Figure.panels`` so every other axes keeps its index (an ``AxesProxy`` is an index).
+        self.removed: bool = False
+
+        #: This axes' own copy of the settings that describe *one* axes but live on the
+        #: figure's shared options (scale, tick positions/labels/formatter/locator/rotation,
+        #: legend). ``None`` while the panel is the one whose values are currently in the
+        #: options, or has never had any: ``GPULinePlot`` swaps them in and out as the active
+        #: panel changes. See ``GPULinePlot.active_panel_index``.
+        self.axes_state: Optional[dict] = None
+
+        #: The twin axes of this panel (``twinx()`` -> ``"y"``, ``twiny()`` -> ``"x"``): a
+        #: second scale for the same viewport, kept as an affine relation to the host's.
+        #: See :mod:`glplot.core.twin`. Empty for the overwhelming majority of panels.
+        self.twins: Dict[str, TwinAxis] = {}
+
+        #: ``secondary_xaxis``/``secondary_yaxis`` strips: ticks in converted units, no data.
+        self.secondaries: List[SecondaryAxis] = []
 
     # -- dimensionality ------------------------------------------------
 
