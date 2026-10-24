@@ -960,15 +960,24 @@ class TestLiveGlContext:
 class TestDeleteWithoutRenderingWarning:
     """The classic mistake matplotlib warns about, mirrored here."""
 
-    @pytest.mark.filterwarnings("default")
-    def test_unrendered_animation_warns_on_collection(self, sine_figure):
+    def test_unrendered_animation_warns_on_collection(self):
         """A bare ``FuncAnimation(...)`` that is never bound draws nothing and says nothing
-        without this warning -- the user gets a static plot and no clue why."""
+        without this warning -- the user gets a static plot and no clue why.
+
+        The figure here has no live-playback hooks. On a GLPlot figure the animation
+        registers a per-frame callback with the figure (``_start_live_playback``), which
+        keeps it alive and playing, so it is never collected -- and this test, written
+        against one, only passed when ``gc.collect()`` happened to free an unrendered
+        animation left behind by an earlier test: it failed run alone, and on whichever
+        Python/platform garbage-collected that leftover sooner.
+        """
         import gc
 
-        figure, _ = sine_figure
+        class ForeignFigure:
+            """Nothing GLPlot-specific: no ``add_frame_callback``, no panels, no canvas."""
+
         with pytest.warns(UserWarning, match="deleted without rendering"):
-            animation.FuncAnimation(figure, lambda i: None, frames=3)
+            animation.FuncAnimation(ForeignFigure(), lambda i: None, frames=3)
             gc.collect()
 
     def test_a_rendered_animation_does_not_warn(self, sine_figure, tmp_path):
