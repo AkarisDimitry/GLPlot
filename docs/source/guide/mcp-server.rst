@@ -132,12 +132,12 @@ server is conservative by default:
   AST-validated evaluator as the workstation's expression box: no attribute access, no builtins,
   no imports. Array constructors (``zeros``, ``arange``, ``linspace``, ``noise``...) are
   size-capped, so ``zeros(10**12)`` is refused before it allocates.
-* **File access is confined to a root.** ``--root`` (repeatable) chooses it; without ``--root``
-  the root is the directory the server was started in, so pass ``--root`` explicitly rather than
-  rely on where a client happens to launch it. Paths are resolved (symlinks included) and must stay
-  inside a root; only data and image extensions are accepted; ``save_figure`` only writes images
-  and never overwrites unless asked. A client that launches the server from ``/`` gets *no* root
-  rather than the whole disk.
+* **File access is opt-in and confined to a root.** Without ``--root`` the model cannot read or
+  write any file; it builds data with ``create_dataset`` instead. ``--root`` (repeatable) grants
+  one directory. The directory the server happens to be started in is never used, because a client
+  decides that, not you. Paths are resolved (symlinks included) and must stay inside a root; only
+  data and image extensions are accepted; ``save_figure`` only writes images and never overwrites
+  unless asked. ``/`` is refused as a root.
 * **Bounded.** Inline lists, dataset rows, figure and dataset counts, and image size all have
   limits (see :class:`glplot.mcp.state.Limits`). Errors name the argument and what would have
   been accepted, so the model can correct itself.

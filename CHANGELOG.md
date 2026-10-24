@@ -56,9 +56,9 @@ version whose notes cover everything since 0.1.3 (see "0.1.4 - 0.1.13" below).
   limits, labels and legend text. Runs headless over stdio or streamable HTTP, on `mcp` 1.x
   and 2.x. Optional extra: `pip install "glplot[mcp]"`; importing `glplot` never imports it.
   Safety: no code-execution tool, formulas go through the workstation's AST-validated
-  evaluator with size-capped array constructors, and file access is confined to `--root` (default: the
-  working directory, never `/`), after symlink resolution, extension-limited, and never overwrites
-  unless asked.
+  evaluator with size-capped array constructors, and file access is off unless `--root` is given,
+  then confined to it after symlink resolution, extension-limited, and never overwrites unless
+  asked.
 - `glplot.utils.preview.render_preview_bytes`: the headless export as in-memory bytes, with a
   hook to read the resolved axes from the same render.
 
@@ -213,6 +213,9 @@ version whose notes cover everything since 0.1.3 (see "0.1.4 - 0.1.13" below).
   titles stayed); they are applied per axes, and the title stays, as in matplotlib.
 - An explicit edge on `fill`/`fill_between` stroked every triangle of its triangulation, drawing
   the seams as stripes; it is now the outline of the shape.
+- The documentation could not be built: `docs/requirements.txt` named a package that does not
+  exist on PyPI (`sphinxcontrib-autodoc-pydantic`; it is `autodoc_pydantic`), and an autosummary
+  entry resolved against the wrong module. `sphinx-build -b html docs/source` now succeeds.
 
 ## 0.1.4 - 0.1.13 (2026-07-19 to 2026-09-25)
 

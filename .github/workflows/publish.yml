@@ -1,0 +1,67 @@
+name: Publish to PyPI
+
+# Runs when a GitHub Release is published (see RELEASING.md). It uses PyPI Trusted
+# Publishing, so there is no API token in the repository: PyPI is told, once, to trust this
+# workflow in this repository, and hands it a short-lived credential for each run.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Check the tag matches the package version
+      run: |
+        python - <<'EOF'
+        import os
+        import tomllib
+
+        with open("pyproject.toml", "rb") as handle:
+            version = tomllib.load(handle)["project"]["version"]
+        tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+        if tag != version:
+            raise SystemExit(f"release tag {tag!r} does not match pyproject version {version!r}")
+        print(f"publishing {version}")
+        EOF
+
+    - name: Build distribution
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine
+        python -m build
+        twine check dist/*
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/glplot
+    permissions:
+      id-token: write  # the Trusted Publishing handshake; nothing else is granted
+
+    steps:
+    - name: Download the built distribution
+      uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1

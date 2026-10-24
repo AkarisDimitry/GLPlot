@@ -33,13 +33,13 @@ is built so that it cannot be asked to run arbitrary code or reach arbitrary fil
 - **No code execution.** There is no tool that evaluates Python. Formulas (`add_function`,
   `add_field`, dataset columns) go through the same AST-validated evaluator the GUI uses, which
   allows a fixed set of numeric operations, and the array constructors in it are size-capped.
-- **File access is confined to a root.** Pass `--root DIR` (repeatable) to choose it. Without
-  `--root`, the root is the directory the server was started in, so a client that launches it
-  from a project folder lets the model read data from, and save images into, that folder; it is
-  never the whole disk (started from `/`, there is no root and file tools refuse). Set `--root`
-  explicitly. Paths are confined to a root after symlink resolution, limited to known extensions
-  (data: tables, `.npy`/`.npz`, images; output: `.png`, `.svg`, `.pdf`, `.jpg`), files over
-  256 MB are refused, and an existing file is never overwritten unless the call says so.
+- **File access is off unless you grant a root.** Pass `--root DIR` (repeatable) to let the
+  model read data from, and save images into, that directory. Without `--root` every file tool
+  refuses; the directory the server was started in is never used, since the client chooses it.
+  `/` is refused as a root. Paths are confined to a root after symlink resolution, limited to
+  known extensions (data: tables, `.npy`/`.npz`, images; output: `.png`, `.svg`, `.pdf`,
+  `.jpg`), files over 256 MB are refused, and an existing file is never overwritten unless the
+  call says so.
 - **Local transport by default.** The default transport is stdio. `--transport streamable-http`
   binds to `127.0.0.1:8765`. The HTTP transport has **no authentication**; if you bind it to
   another address (`--host`), anything that can reach the port can draw and, with `--root`,

@@ -505,7 +505,7 @@ For Claude Desktop, add to `claude_desktop_config.json`:
 ```
 
 `--root` sets the directories the model may read data from or save images into (repeatable);
-without it, that is the directory the server was started in (never `/`), so set it explicitly.
+without it the model has no file access at all and builds data with `create_dataset`.
 Formulas run through the same restricted expression evaluator as
 the workstation, with size-capped array constructors, so the model can generate data
 (`"sin(2*pi*t) * exp(-t)"`) instead of typing it, and there is no tool that runs arbitrary code.

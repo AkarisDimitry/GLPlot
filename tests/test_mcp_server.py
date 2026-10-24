@@ -443,17 +443,20 @@ class TestEntryPoints:
         err = capsys.readouterr().err
         assert 'pip install "glplot[mcp]"' in err and "Traceback" not in err
 
-    def test_default_roots(self, monkeypatch, tmp_path):
+    def test_no_root_means_no_file_access_whatever_the_working_directory(
+        self, monkeypatch, tmp_path
+    ):
+        """A client launches the server from wherever it likes; that must never grant files."""
         pytest.importorskip("mcp")
-        from glplot.mcp import server as server_module
+        from glplot.mcp.server import build_parser
+        from glplot.mcp.state import McpError
 
-        assert server_module.default_roots(["/a", "/b"]) == ["/a", "/b"]
+        (tmp_path / "secret.csv").write_text("x,y\n1,2\n")
         monkeypatch.chdir(tmp_path)
-        assert server_module.default_roots([]) == [str(tmp_path.resolve())]
-        monkeypatch.setattr(
-            server_module.Path, "cwd", classmethod(lambda cls: Path(Path(tmp_path).anchor))
-        )
-        assert server_module.default_roots([]) == []  # never the whole disk
+        sandbox = FileSandbox(list(build_parser().parse_args([]).root))
+        assert not sandbox.enabled
+        with pytest.raises(McpError, match="File access is disabled"):
+            sandbox.read_path("secret.csv")
 
     def test_parser_defaults_are_safe(self):
         pytest.importorskip("mcp")

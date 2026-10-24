@@ -1,0 +1,25 @@
+# Keeps the workflow actions and the pinned build/lint tooling current. Runtime dependencies
+# (imgui-bundle, matplotlib, ...) are ranges, not pins, so Dependabot has nothing to bump
+# there; the weekly scheduled run of the Tests workflow is what notices when a new upstream
+# release breaks GLPlot.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    # Only the bounded dev tools and build backend; a lower-bound bump of a runtime
+    # dependency would narrow what users can install, and that is a deliberate choice.
+    allow:
+      - dependency-type: development
+    groups:
+      dev-tools:
+        patterns: ["*"]

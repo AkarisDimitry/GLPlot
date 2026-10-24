@@ -45,10 +45,15 @@ GPU Utilities
 Preview & Rendering
 --------------------
 
+The ``automodule`` above leaves ``glplot.utils.gl_utils`` as the current module, and Sphinx then
+resolves autosummary names relative to it, so this section names its module explicitly.
+
+.. currentmodule:: glplot.utils
+
 .. autosummary::
    :toctree: generated
 
-   glplot.utils.preview.render_preview
+   preview.render_preview
 
 .. autofunction:: glplot.utils.preview.render_preview
 

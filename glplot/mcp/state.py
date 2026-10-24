@@ -118,8 +118,8 @@ class FileSandbox:
     points outside it is refused rather than followed.
 
     With no roots every call raises: file access is opt-in. A server launched by an MCP
-    client inherits whatever working directory the client had -- often ``/`` -- and "the
-    working directory" is not an acceptable default root when it is the whole disk.
+    client inherits whatever working directory the client had, so the working directory is
+    never a default root.
     """
 
     #: What ``load_dataset`` and ``add_field(file=...)`` may open.

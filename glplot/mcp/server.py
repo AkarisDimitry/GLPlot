@@ -13,7 +13,6 @@ import argparse
 import json
 import logging
 import sys
-from pathlib import Path
 from typing import Annotated, Any, Dict, List, Optional, Sequence, Union
 
 from pydantic import Field
@@ -760,19 +759,6 @@ def build_server(
     return server
 
 
-def default_roots(explicit: Sequence[str]) -> List[str]:
-    """``--root`` values, or the working directory unless that is the whole filesystem.
-
-    A client that launches the server without choosing a directory typically leaves it at
-    ``/``; granting that as a root would expose the disk, so no root is granted instead and
-    file tools explain how to enable access.
-    """
-    if explicit:
-        return list(explicit)
-    cwd = Path.cwd().resolve()
-    return [] if cwd == Path(cwd.anchor) else [str(cwd)]
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="glplot-mcp",
@@ -784,7 +770,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="DIR",
         help="Directory the model may read data from and save images into (repeatable). "
-        "Default: the current directory. With none, file access is disabled.",
+        "Default: none, which disables file access.",
     )
     parser.add_argument(
         "--transport",
@@ -850,7 +836,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(_versions(), file=sys.stderr)
         return 0
     try:
-        sandbox = FileSandbox(default_roots(args.root))
+        sandbox = FileSandbox(list(args.root))
     except ValueError as exc:
         print(f"glplot-mcp: {exc}", file=sys.stderr)
         return 2
