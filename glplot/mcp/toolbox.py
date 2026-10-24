@@ -53,9 +53,7 @@ from .state import (
     as_float_array,
     check_name,
     evaluate_expression,
-)
-from .state import guarded_constructors as _constructors
-from .state import (
+    guarded_constructors,
     is_identifier,
     slug,
     suggest,
@@ -720,7 +718,7 @@ class Toolbox:
                     f"resolution must be between 2 and {biggest} (cells per side), got {n}."
                 )
             xs, ys = np.linspace(x0, x1, n), np.linspace(y0, y1, n)
-            variables: Dict[str, Any] = dict(_constructors(self.limits.max_array_elements))
+            variables: Dict[str, Any] = dict(guarded_constructors(self.limits.max_array_elements))
             for key, value in (parameters or {}).items():
                 if not is_identifier(key) or key in ("x", "y"):
                     raise McpError(

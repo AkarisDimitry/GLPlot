@@ -42,10 +42,10 @@ dependencies = [
 dev = [
     "build>=1.0",
     "twine>=4.0",
-    "black>=24.0",
-    "isort>=5.13",
-    "flake8>=7.0",
-    "ruff>=0.5",
+    "black>=26,<27",
+    "isort>=8,<10",
+    "flake8>=7,<8",
+    "ruff>=0.15,<0.18",
     "pre-commit>=3.5",
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -111,10 +111,13 @@ target-version = "py311"
 extend-exclude = ["build", "dist", "docs/_build"]
 
 [tool.ruff.lint]
-# Ruff's default rule set (E4, E7, E9, F), kept in step with .flake8.
+# Named explicitly: ruff's *default* rule set changes between releases (0.17 added hundreds of
+# style rules), and an unpinned CI would start failing on a new version. These are the pycodestyle
+# errors and pyflakes checks that .flake8 also runs.
+select = ["E4", "E7", "E9", "F"]
 # E741 (ambiguous name) is off because `l, r, b, t` for left/right/bottom/top is the
 # convention for view and bounding-box extents all through the engine and renderers.
-extend-ignore = ["E741"]
+ignore = ["E741"]
 
 [tool.ruff.lint.per-file-ignores]
 # The GPU modules bind PyOpenGL through `from OpenGL.GL import *`, the library's documented
