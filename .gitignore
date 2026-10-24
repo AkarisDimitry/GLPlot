@@ -31,6 +31,8 @@ wheels/
 .coverage
 .coverage.*
 htmlcov/
+junit.xml
+coverage.xml
 *.cover
 .hypothesis/
 

@@ -61,7 +61,7 @@ jobs:
       # test's own worst case plus the rest of the suite (~2-3 min uninstrumented).
       timeout-minutes: 15
       run: |
-        xvfb-run -a pytest --cov=glplot --cov-report=term-missing --cov-report=xml
+        xvfb-run -a pytest --cov=glplot --cov-report=term-missing --cov-report=xml --junitxml=junit.xml
 
     - name: Warm the matplotlib font cache (Windows)
       # matplotlib builds its font list lazily on first use, by scanning every font on
@@ -84,7 +84,30 @@ jobs:
       # is what this needs room for.
       timeout-minutes: 15
       run: |
-        pytest --cov=glplot --cov-report=term-missing --cov-report=xml
+        pytest --cov=glplot --cov-report=term-missing --cov-report=xml --junitxml=junit.xml
+
+    - name: Annotate the failed tests
+      # The job log needs a login to read; annotations do not, so a red run says which test
+      # failed (and why, in one line) on the run's summary page and through the checks API.
+      if: failure()
+      shell: python {0}
+      run: |
+        import os
+        import xml.etree.ElementTree as ET
+
+        if not os.path.exists("junit.xml"):
+            print("::error title=pytest::no junit.xml was written (the run died before reporting)")
+        else:
+            for case in ET.parse("junit.xml").getroot().iter("testcase"):
+                bad = case.find("failure")
+                if bad is None:
+                    bad = case.find("error")
+                if bad is None:
+                    continue
+                reason = (bad.get("message") or "").splitlines()[:1]
+                reason = reason[0][:300] if reason else ""
+                name = f"{case.get('classname')}::{case.get('name')}"
+                print(f"::error title=failed test::{name} -- {reason}".replace("%", "%25"))
 
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
