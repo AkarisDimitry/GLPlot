@@ -52,6 +52,11 @@ class Raw:
     code: str
 
 
+def _whole(value: Any, default: int) -> Any:
+    """A whole-number argument: bound code (already an int) is kept, a plain number is made one."""
+    return value if isinstance(value, Raw) else int(value or default)
+
+
 def lit(value: Any) -> str:
     """``value`` as a Python literal (a :class:`Raw` is its code)."""
     if isinstance(value, Raw):
@@ -546,15 +551,20 @@ class _Script:
         reveal, trail = a.get("reveal"), a.get("trail")
         if (reveal is not None or trail is not None) and not single:
             writer.add("_n = len(y_)")
+            # the server shows a 3-D line at least two points (plot3d cannot draw fewer)
+            floor = "min(_n, 2)" if kind == "line" and "z" in values else "1"
             writer.add(
                 "_count = "
                 + (
                     "_n"
                     if reveal is None
-                    else f"max(1, min(_n, int(np.ceil({lit(reveal)} * _n - 1e-9))))"
+                    else f"max({floor}, min(_n, int(np.ceil(({lit(reveal)}) * _n - 1e-9))))"
                 )
             )
-            writer.add("_first = " + ("0" if trail is None else f"max(0, _count - {lit(trail)})"))
+            writer.add(
+                "_first = "
+                + ("0" if trail is None else f"max(0, _count - max({lit(trail)}, {floor}))")
+            )
             for key in values:
                 writer.add(f"{key}_ = {key}_[_first:_count]")
 
@@ -712,7 +722,7 @@ class _Script:
         y0, y1 = a.get("y_range") or (0.0, 1.0)
         surface = kind in ("surface", "wireframe")
         if a.get("expression") is not None:
-            n = int(a.get("resolution") or (80 if surface else 200))
+            n = lit(_whole(a.get("resolution"), 80 if surface else 200))
             writer.add(f"xs = np.linspace({lit(x0)}, {lit(x1)}, {n})")
             writer.add(f"ys = np.linspace({lit(y0)}, {lit(y1)}, {n})")
             writer.add("x, y = np.meshgrid(xs, ys)")
@@ -763,7 +773,7 @@ class _Script:
             writer.call(
                 f"plt.{kind}",
                 [Raw("x"), Raw("y"), Raw("z_")],
-                {"levels": int(a.get("levels") or 10), **kw},
+                {"levels": _whole(a.get("levels"), 10), **kw},
             )
         elif kind == "pcolormesh":
             writer.call("plt.pcolormesh", [Raw("x"), Raw("y"), Raw("z_")], kw)
@@ -869,13 +879,28 @@ class _Script:
 
     # -- dynamic values -----------------------------------------------------------------
 
-    def value_code(self, spec: Any, scalars: Mapping[str, str]) -> Any:
+    def value_code(
+        self, spec: Any, scalars: Mapping[str, str], prop: str = "", text: bool = False
+    ) -> Any:
         """A binding's value as code (a :class:`Raw`) or a literal, in a scope where each
-        timeline variable is a scalar named as in ``scalars``."""
+        timeline variable is a scalar named as in ``scalars``.
+
+        ``prop`` and ``text`` say what the value is for, so the script agrees with the server: a
+        text property (a colour, a title) takes a plain string as it is, and a whole-number or
+        true/false property gets an ``int`` / ``bool`` rather than the float an expression gives.
+        """
         if isinstance(spec, (bool, int, float)):
-            return spec
+            return dynamics.coerce_property(prop, spec)
         if isinstance(spec, str):
-            return Raw(translate(spec, self.helpers, scalars))
+            if text:
+                return spec
+            code = translate(spec, self.helpers, scalars)
+            leaf = prop.rsplit(".", 1)[-1]
+            if leaf in dynamics.INTEGER_PROPERTIES:
+                code = f"int(round({code}))"
+            elif leaf in dynamics.BOOLEAN_PROPERTIES:
+                code = f"bool({code})"
+            return Raw(code)
         if isinstance(spec, (list, tuple)):
             return Raw("[" + ", ".join(lit(self.value_code(item, scalars)) for item in spec) + "]")
         if isinstance(spec, Mapping):
@@ -977,7 +1002,13 @@ def _bindings_by_target(bindings: Sequence[Any], scalars: Mapping[str, str], scr
         if kind == "data":
             data.append((ident, binding))
             continue
-        code = script.value_code(binding.value, scalars)
+        tool = script.box._check_property(script.entry, kind, ident, binding.prop)
+        code = script.value_code(
+            binding.value,
+            scalars,
+            prop=binding.prop,
+            text=binding.prop in script.box._text_arguments(tool),
+        )
         if kind == "artist":
             per_artist.setdefault(ident, {})[binding.prop] = code
         else:

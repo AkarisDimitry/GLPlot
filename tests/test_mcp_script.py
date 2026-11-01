@@ -582,6 +582,115 @@ def test_animation_script_with_a_data_binding_and_helpers(box, monkeypatch):
         gplt.close(namespace["fig"])
 
 
+def test_a_script_agrees_with_the_server_on_integers_and_plain_text(box, monkeypatch):
+    # bins is a whole number and color a plain string: the server turns the float an expression
+    # gives into an int, and takes "red" as the colour. The script has to do both, or numpy
+    # refuses bins=17.3 and Python looks for a variable called red.
+    rng = np.random.default_rng(3)
+    box.create_dataset("g", {"v": [float(v) for v in rng.normal(size=300)]})
+    box.create_figure(width=600, height=360, title="Bins")
+    box.add_plot("fig1", "hist", dataset="g", y="v", bins=5)
+    box.add_annotation("fig1", "text", x=1, y=10, text="here", fontsize=14)
+    box.set_axes("fig1", xlim=[-4, 4], ylim=[0, 120], xlabel="v", ylabel="n")
+    box.add_control("fig1", "b", min=5, max=40, value=5)
+    bindings = [
+        ("a1", "bins", "b"),
+        ("a1", "color", "red"),
+        ("a2", "x", "-4 + b/5"),
+        ("axes", "title", "Fixed"),
+    ]
+    for target, prop, value in bindings:
+        box.bind_property("fig1", target, prop, value)
+    box.animate("fig1", fps=10, stages=[{"name": "fine", "frames": 5, "animate": {"b": [5, 40]}}])
+    text = source(box.export_script("fig1", "animation"))
+    assert "int(round(" in text and "color='red'" in text and "color=red" not in text
+    namespace = run(text, monkeypatch)
+    try:
+        timeline = dynamics.build_timeline(
+            fps=10, controls={"b": 5.0}, stages=[{"frames": 5, "animate": {"b": [5, 40]}}]
+        )
+        for index in (0, 1, 3, 4):
+            activate(namespace)
+            namespace["update"](index)
+            # the server draws the same frame by holding the control at that frame's value
+            shown = box._build_for(
+                box._figures["fig1"], params={"b": float(timeline.variables["b"][index])}
+            )
+            try:
+                assert_same_picture(picture(namespace["fig"]), picture(shown.plot))
+            finally:
+                box._release(shown)
+    finally:
+        gplt.close(namespace["fig"])
+
+
+def frames_match(box, monkeypatch, frames):
+    """Run the animation script; check frame ``i`` against the server holding ``params``."""
+    namespace = run(source(box.export_script("fig1", "animation")), monkeypatch)
+    try:
+        for index, params in frames:
+            activate(namespace)
+            namespace["update"](index)
+            shown = box._build_for(box._figures["fig1"], params=params)
+            try:
+                assert_same_picture(picture(namespace["fig"]), picture(shown.plot))
+            finally:
+                box._release(shown)
+    finally:
+        gplt.close(namespace["fig"])
+
+
+def test_a_3d_curve_that_draws_itself_from_nothing_matches_the_server(box, monkeypatch):
+    # reveal=0 shows one point, and a 3-D line needs two: both sides show the first segment.
+    th = np.linspace(0, 6 * np.pi, 120)
+    box.create_dataset("h", {"x": list(np.cos(th)), "y": list(np.sin(th)), "z": list(th / 10)})
+    box.create_figure(width=500, height=400, projection="3d")
+    box.add_plot("fig1", "line", dataset="h", x="x", y="y", z="z", reveal=0.5, trail=30)
+    box.set_axes("fig1", xlim=[-1.2, 1.2], ylim=[-1.2, 1.2], zlim=[0, 2], xlabel="x", ylabel="y")
+    box.add_control("fig1", "r", min=0, max=1, value=0.5)
+    box.add_control("fig1", "tail", min=1, max=60, value=30, integer=True)
+    box.bind_property("fig1", "a1", "reveal", "r")
+    box.bind_property("fig1", "a1", "trail", "tail")
+    box.animate("fig1", frames=4, stages=[{"frames": 4, "animate": {"r": [0, 1], "tail": [1, 50]}}])
+    timeline = dynamics.build_timeline(
+        frames=4,
+        controls={"r": 0.5, "tail": 30.0},
+        stages=[{"frames": 4, "animate": {"r": [0, 1], "tail": [1, 50]}}],
+    )
+    frames_match(
+        box,
+        monkeypatch,
+        [
+            (
+                i,
+                {
+                    "r": float(timeline.variables["r"][i]),
+                    "tail": float(timeline.variables["tail"][i]),
+                },
+            )
+            for i in range(4)
+        ],
+    )
+
+
+def test_a_contour_with_a_bound_number_of_levels_matches_the_server(box, monkeypatch):
+    box.create_figure(width=500, height=400)
+    box.add_field(
+        "fig1",
+        "contour",
+        expression="sin(x)*cos(y*k)",
+        x_range=[-3, 3],
+        y_range=[-3, 3],
+        resolution=40,
+        parameters={"k": 1},
+        levels=5,
+    )
+    box.add_control("fig1", "L", min=3, max=20, value=5)
+    box.bind_property("fig1", "a1", "levels", "L")
+    box.animate("fig1", frames=3, stages=[{"frames": 3, "animate": {"L": [3, 20]}}])
+    frames_match(box, monkeypatch, [(i, {"L": v}) for i, v in enumerate((3.0, 11.5, 20.0))])
+
+
 def test_choose_binding_in_a_script(box, monkeypatch):
     box.create_figure(width=500, height=300)
     box.add_plot("fig1", "line", x=[0, 1, 2], y=[0, 1, 0])

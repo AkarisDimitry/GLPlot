@@ -438,10 +438,13 @@ def evaluate_value(
     *,
     limits: Limits = DEFAULT_LIMITS,
     what: str = "value",
+    text: bool = False,
 ) -> List[Any]:
     """The value ``spec`` takes at each of ``n`` frames, as plain Python values.
 
-    ``context`` maps names to arrays of length ``n`` (or scalars). A specification is
+    ``context`` maps names to arrays of length ``n`` (or scalars). With ``text`` set the property
+    is plain text (a colour, a label, a title...): a string is then that text, not an expression.
+    A specification is
 
     * a number -- constant;
     * a string -- an expression: ``"1 + 3*t"``, ``"amp * sin(2*pi*time)"``;
@@ -458,6 +461,8 @@ def evaluate_value(
             raise McpError(f"{what}: {spec!r} is not finite.")
         return [spec] * n
     if isinstance(spec, str):
+        if text:
+            return [spec] * n
         array = _expression_array(spec, context, n, limits, what)
         return [float(v) for v in array]
     if isinstance(spec, (list, tuple)):

@@ -478,6 +478,44 @@ class Toolbox:
         parameters = inspect.signature(getattr(Toolbox, tool)).parameters
         return frozenset(name for name, p in parameters.items() if "Mapping" in str(p.annotation))
 
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def _text_arguments(tool: str) -> frozenset:
+        """Names of the arguments of ``tool`` that are plain text (colour, label, title...)."""
+        parameters = inspect.signature(getattr(Toolbox, tool)).parameters
+        plain = ("str", "Optional[str]")
+        return frozenset(
+            name
+            for name, p in parameters.items()
+            if str(p.annotation).replace("typing.", "") in plain
+            and name not in ("self", "figure_id")
+        )
+
+    def _check_property(self, entry: _Figure, kind: str, ident: Any, prop: str) -> str:
+        """The tool a binding's ``prop`` is an argument of (and a readable error when it is not)."""
+        if kind == "artist":
+            op = next((o for o in entry.log if o.artist_id == ident), None)
+            tool = op.tool if op else "set_axes"
+        else:
+            tool = "set_axes"
+        hidden = ("self", "figure_id") + (("panel",) if tool == "set_axes" else ())
+        allowed = [
+            name
+            for name in inspect.signature(getattr(Toolbox, tool)).parameters
+            if name not in hidden
+        ]
+        head = prop.split(".")[0]
+        if head not in allowed:
+            what = (
+                f"{ident} was drawn by {tool}" if kind == "artist" else "axes are set by set_axes"
+            )
+            raise McpError(
+                f"{what}, which has no argument {head!r}.{suggest(head, allowed)} "
+                f"Arguments: {', '.join(allowed)}."
+            )
+        self._check_path(tool, prop)
+        return tool
+
     def _check_path(self, tool: str, path: str) -> None:
         """A dotted ``path`` may only reach into an argument that is an object."""
         head = path.split(".")[0]
@@ -606,12 +644,14 @@ class Toolbox:
                 raise McpError(
                     f"{binding.target!r}: {entry.figure_id} has {entry.panels} panel(s)."
                 )
+            tool = self._check_property(entry, kind, ident, binding.prop)
             values = dynamics.evaluate_value(
                 binding.value,
                 context,
                 n,
                 limits=self.limits,
                 what=f"{binding.target}.{binding.prop}",
+                text=binding.prop in self._text_arguments(tool),
             )
             for i, value in enumerate(values):
                 value = dynamics.coerce_property(binding.prop, value)
@@ -1398,19 +1438,22 @@ class Toolbox:
             )
         total = req.n
         count = total
+        # plot3d needs two points to make a line, so a 3-D line never shows fewer (reveal=0 and
+        # trail=1 then show the first segment, which is how a curve starts to draw itself)
+        floor = 2 if kind == "line" and req.z is not None and total >= 2 else 1
         if reveal is not None:
             if isinstance(reveal, bool) or not isinstance(reveal, (int, float)):
                 raise McpError("reveal is a fraction between 0 and 1 of the points to show.")
             if not math.isfinite(reveal) or not 0.0 <= reveal <= 1.0:
                 raise McpError(f"reveal must be between 0 and 1, got {reveal!r}.")
-            count = max(1, min(total, int(math.ceil(reveal * total - 1e-9))))
+            count = max(floor, min(total, int(math.ceil(reveal * total - 1e-9))))
         first = 0
         if trail is not None:
             if isinstance(trail, bool) or not isinstance(trail, int) or trail < 1:
                 raise McpError(
                     "trail is a whole number of points (at least 1) kept behind the head."
                 )
-            first = max(0, count - trail)
+            first = max(0, count - max(trail, floor))
         if first == 0 and count == total:
             return []
         for name in ("x", "y", "z", "error", "y2", "color_by", "size_by"):

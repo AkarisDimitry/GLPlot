@@ -940,9 +940,37 @@ def test_a_binding_that_fails_on_frame_zero_names_the_artist_and_leaves_the_figu
     dot_figure(box)
     with pytest.raises(McpError, match="Could not rebuild.*a1"):
         box.animate(
-            "fig1", frames=4, bindings=[{"target": "a1", "property": "colour", "value": "t"}]
+            "fig1", frames=4, bindings=[{"target": "a1", "property": "color", "value": "nocolour"}]
         )
     assert list(box._figures) == ["fig1"]
+
+
+def test_a_property_the_artist_does_not_have_is_named_with_a_suggestion(box):
+    dot_figure(box)
+    with pytest.raises(McpError, match=r"no argument 'colour'.*Did you mean 'color'"):
+        box.animate(
+            "fig1", frames=4, bindings=[{"target": "a1", "property": "colour", "value": "red"}]
+        )
+    with pytest.raises(McpError, match="axes are set by set_axes.*no argument 'titel'"):
+        box.bind_property("fig1", "axes", "titel", "t")
+    assert "bindings" not in box.describe_figure("fig1").data
+
+
+def test_a_plain_string_for_a_text_property_is_that_text_not_an_expression(box):
+    dot_figure(box)
+    result = box.animate(
+        "fig1",
+        frames=4,
+        bindings=[
+            {"target": "a1", "property": "color", "value": "red"},
+            {"target": "a1", "property": "x", "value": ["10*t"]},
+            {"target": "axes", "property": "title", "value": "Fixed title"},
+        ],
+    )
+    assert result.data["frames"] == 4
+    # a number property still takes an expression, and a typo in it is still an error
+    with pytest.raises(McpError, match="not defined"):
+        box.animate("fig1", frames=4, bindings=[{"target": "a1", "property": "x", "value": ["tt"]}])
 
 
 # ======================================================================================
@@ -1050,3 +1078,23 @@ def test_describe_figure_shows_recipes_controls_and_bindings(box):
     assert data["controls"][0]["name"] == "w" and data["bindings"][0]["property"] == "linewidth"
     assert data["animation"]["frames"] == 3
     json.dumps(data)
+
+
+def test_a_3d_curve_can_start_from_nothing(box):
+    # reveal=0 leaves one point, and plot3d cannot draw a line through one: the line keeps its first
+    # segment rather than the whole animation failing on frame 0.
+    th = np.linspace(0, 6 * np.pi, 100)
+    box.create_dataset("h", {"x": list(np.cos(th)), "y": list(np.sin(th)), "z": list(th / 10)})
+    box.create_figure(width=500, height=400, projection="3d")
+    box.add_plot("fig1", "line", dataset="h", x="x", y="y", z="z", head=True)
+    box.set_axes("fig1", xlim=[-1.2, 1.2], ylim=[-1.2, 1.2], zlim=[0, 2], xlabel="x", ylabel="y")
+    result = box.animate(
+        "fig1",
+        frames=5,
+        bindings=[
+            {"target": "a1", "property": "reveal", "value": "t"},
+            {"target": "a1", "property": "trail", "value": "1 + 40*t"},
+        ],
+    )
+    assert result.data["frames"] == 5
+    assert not [i for i in result.data["issues"] if i["code"] == "static"]

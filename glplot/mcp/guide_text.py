@@ -81,6 +81,11 @@ A **value** is a number, an expression string, or one of:
 * `{{"format": "amp = {{amp:.2f}} at {{time:.1f}} s"}}` -- text with variables filled in (titles,
   labels). Only `{{name}}` and `{{name:.2f}}` are allowed; write a brace twice to get a literal one.
 
+For a **text** property (`color`, `cmap`, `label`, `title`, `marker`, `linestyle`, `hatch`, `axis`) a plain
+string is the text itself: `"color": "red"`, `"title": "Stage 2"`. Use `colormap`, `choose` or `format` to
+make text change over time. Everything else takes numbers, so a plain string there is an expression.
+A property the artist's call does not have is refused with a suggestion (`colour` -> `color`).
+
 A column named like a variable (`t`!) wins inside `data:` expressions; use `time` or `frame` for the
 clock there (`animate` says when this happens).
 
@@ -88,7 +93,8 @@ clock there (`animate` says when this happens).
 
 * `add_plot(..., reveal=0.3)` shows only the first 30% of the points; bind `reveal` to a variable and the
   curve **draws itself**. `trail=N` keeps only the last N points (a moving tail); `head=true` puts a dot on
-  the newest point. They cut every series together (colours, sizes) and work in 3-D.
+  the newest point. They cut every series together (colours, sizes) and work in 3-D, where a line always
+  shows at least its first two points (one point cannot make a line), so `reveal` may start at 0.
 * A moving dot: bind `x` / `y` (`["10*t"]`), or reveal a trajectory with `head=true`.
 * Growing bars, morphing points, changing data: a `data:` binding on the dataset the artist reads.
 * A 3-D camera orbit: bind `azim` (and `elev`) on `"axes"`. Pin `xlim`, `ylim`, `zlim` first.
