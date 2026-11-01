@@ -26,7 +26,9 @@ per call instead, and removal takes the whole group back out.
 from __future__ import annotations
 
 import contextlib
+import copy
 import functools
+import inspect
 import json
 import math
 import sys
@@ -44,6 +46,11 @@ from ..gui.datasets import Column, DataSet
 from ..gui.expressions import ExpressionError, evaluate_2d
 from ..pyplot import MatplotlibCompatWarning
 from ..utils.preview import render_preview_bytes
+from . import animator, dynamics, motion
+from . import script as scripting
+from . import simulate as simulation
+from . import textdata
+from .review import review_figure
 from .state import (
     DEFAULT_LIMITS,
     DatasetStore,
@@ -104,6 +111,8 @@ _USER_ERRORS = (ValueError, TypeError, KeyError, IndexError, RuntimeError, Expre
 _CYCLED_KINDS = {"scatter", "errorbar", "bar", "barh", "area", "hist"}
 #: Kinds that read *one* series of values (from ``y``, else ``x``) rather than ``x`` vs ``y``.
 _SINGLE_SERIES = {"hist", "box", "violin", "pie"}
+#: Kinds that can be drawn on a second (right-hand) y axis.
+_TWIN_KINDS = {"line", "scatter", "step", "bar", "area", "errorbar"}
 #: Kinds that cannot be drawn without a ``y`` ... all the x-vs-y ones.
 _XY_KINDS = set(PLOT_KINDS) - _SINGLE_SERIES
 
@@ -121,7 +130,11 @@ class ToolResult:
         """The message, then the data as one compact JSON line the model can parse."""
         if not self.data:
             return self.message
-        payload = json.dumps(_finite(self.data), separators=(",", ":"), default=_json_default)
+        # ensure_ascii=False: a title like "T (°C)" or a label with µ/Å/accents is read by the model
+        # as written, not as \\u00b0 escapes it has to decode in its head.
+        payload = json.dumps(
+            _finite(self.data), separators=(",", ":"), default=_json_default, ensure_ascii=False
+        )
         return f"{self.message}\n{payload}"
 
 
@@ -193,6 +206,24 @@ class _Artist:
 
 
 @dataclass
+class _Op:
+    """One successful scene-building tool call, kept so the figure can be rebuilt from it.
+
+    Rebuilding is how ``update_artist`` changes something already drawn, how a control or an
+    animation frame gives a property another value, and what ``export_script`` turns into code.
+    ``args`` are exactly the arguments the caller passed (not the defaults), so a replay makes
+    the same call.
+    """
+
+    tool: str
+    args: Dict[str, Any]
+    artist_id: Optional[str] = None
+    #: Choices the toolbox made for the caller (the colour taken from the figure's cycle...),
+    #: kept so an exported script makes the very same call.
+    resolved: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class _Figure:
     figure_id: str
     plot: Any
@@ -209,6 +240,19 @@ class _Figure:
     #: not honour ``axis("equal")`` (the pie below would come out an ellipse), so the export
     #: applies it to the matplotlib axes itself; this is what it consults.
     equal_panels: set = field(default_factory=set)
+    #: What the last reviewed render found (see :mod:`glplot.mcp.review`).
+    issues: List[Dict[str, Any]] = field(default_factory=list)
+    #: The arguments ``create_figure`` was called with (title, style, grid, size...).
+    spec: Dict[str, Any] = field(default_factory=dict)
+    #: Every scene-building call so far, in order (see :class:`_Op`).
+    log: List[_Op] = field(default_factory=list)
+    #: The right-hand y axis of a panel (1-based), created by the first ``axis="right"`` plot.
+    twins: Dict[int, Any] = field(default_factory=dict)
+    #: Named values the figure's properties can depend on, and the properties that do.
+    controls: Dict[str, dynamics.Control] = field(default_factory=dict)
+    bindings: List[dynamics.Binding] = field(default_factory=list)
+    #: The last ``animate`` specification (what ``export_script`` turns into an animation).
+    animation: Optional[Dict[str, Any]] = None
 
     @property
     def panels(self) -> int:
@@ -244,11 +288,50 @@ def _tool(method: Callable[..., ToolResult]) -> Callable[..., ToolResult]:
                 except _USER_ERRORS as exc:
                     raise McpError(f"{method.__name__}: {exc}") from exc
             notes = sorted(
-                {str(w.message) for w in caught if issubclass(w.category, MatplotlibCompatWarning)}
+                {
+                    str(w.message)
+                    for w in caught
+                    if issubclass(w.category, MatplotlibCompatWarning)
+                    # Every MCP picture is the export, which does draw hatching.
+                    and "is drawn in exported figures only" not in str(w.message)
+                }
             )
             if notes:
                 result.data.setdefault("warnings", notes)
             return result
+
+    return wrapper
+
+
+def _scene_op(method: Callable[..., ToolResult]) -> Callable[..., ToolResult]:
+    """Record a successful scene-building call on its figure, so the figure can be replayed.
+
+    Only the outermost call is recorded: ``add_function`` draws by calling ``add_plot``, and the
+    replay must repeat ``add_function``, not both. Nothing is recorded while replaying.
+    """
+    signature = inspect.signature(method)
+
+    @functools.wraps(method)
+    def wrapper(self: "Toolbox", *args: Any, **kwargs: Any) -> ToolResult:
+        bound = signature.bind(self, *args, **kwargs)
+        figure_id = bound.arguments.get("figure_id")
+        outermost = self._op_depth == 0 and not self._replaying
+        if outermost:
+            self._resolved = {}
+        self._op_depth += 1
+        try:
+            result = method(self, *args, **kwargs)
+        finally:
+            self._op_depth -= 1
+        entry = self._figures.get(figure_id) if outermost else None
+        if entry is not None:
+            given = {
+                key: copy.deepcopy(value)
+                for key, value in bound.arguments.items()
+                if key not in ("self", "figure_id")
+            }
+            self._log_operation(entry, method.__name__, given, result)
+        return result
 
     return wrapper
 
@@ -267,6 +350,11 @@ class Toolbox:
         self._figures: Dict[str, _Figure] = {}
         self._next_figure = 1
         self._lock = threading.RLock()
+        #: Nesting of scene-building calls, and whether a figure is being replayed (see _scene_op).
+        self._op_depth = 0
+        self._replaying = False
+        self._resolved: Dict[str, Any] = {}
+        self._next_scratch = 1
 
     # ------------------------------------------------------------------
     # Figures
@@ -301,11 +389,31 @@ class Toolbox:
 
         figure_id = f"fig{self._next_figure}"
         self._next_figure += 1
+        spec = {
+            "title": title,
+            "width": width,
+            "height": height,
+            "rows": rows,
+            "cols": cols,
+            "projection": projection,
+            "style": style,
+        }
+        entry = self._make_entry(figure_id, spec, _FIGURE_NUM_BASE + int(figure_id[3:]))
+        self._figures[figure_id] = entry
+        return ToolResult(
+            f"Created {figure_id} ({width}x{height}px, {rows}x{cols} panel"
+            f"{'s' if entry.panels > 1 else ''}, {projection}).",
+            {"figure_id": figure_id, "panels": entry.panels},
+        )
+
+    def _make_entry(self, figure_id: str, spec: Mapping[str, Any], num: int) -> _Figure:
+        """A new empty figure for ``spec`` (the arguments of ``create_figure``); not registered."""
+        width, height = spec["width"], spec["height"]
+        rows, cols, projection = spec["rows"], spec["cols"], spec["projection"]
         three_d = projection == "3d"
         # An integer ``num`` and the stock window title: a string ``num`` doubles as the window
         # caption, and a non-stock caption is drawn as the plot's title -- every render would
         # carry "mcp-fig1" above the axes. The real title is set below, only if one was asked.
-        num = _FIGURE_NUM_BASE + int(figure_id[3:])
         projection_kw = {"projection": "3d"} if three_d else {}
         if rows * cols > 1:
             # ``subplots`` rather than a figure plus ``subplot`` calls: it is the one that
@@ -325,22 +433,285 @@ class Toolbox:
             )
         else:
             plot = gplt.figure(num=num, title="GLPlot", width=width, height=height, **projection_kw)
-        entry = _Figure(figure_id, plot, rows, cols, projection, width, height, num=num)
-        self._figures[figure_id] = entry
+        entry = _Figure(
+            figure_id, plot, rows, cols, projection, width, height, num=num, spec=dict(spec)
+        )
         try:
             if entry.panels > 1:
                 self._activate(entry, 1)
-            if style:
-                self._apply_style(style)
-            if title:
-                (gplt.suptitle if entry.panels > 1 else gplt.title)(title)
+            if spec.get("style"):
+                self._apply_style(spec["style"])
+            if spec.get("title"):
+                (gplt.suptitle if entry.panels > 1 else gplt.title)(spec["title"])
         except Exception:
-            self._discard(figure_id)
+            gplt.close(plot)
             raise
-        return ToolResult(
-            f"Created {figure_id} ({width}x{height}px, {rows}x{cols} panel"
-            f"{'s' if entry.panels > 1 else ''}, {projection}).",
-            {"figure_id": figure_id, "panels": entry.panels},
+        return entry
+
+    # ------------------------------------------------------------------
+    # Replay: the figure rebuilt from what was asked of it
+    # ------------------------------------------------------------------
+
+    def _log_operation(
+        self, entry: _Figure, tool: str, args: Dict[str, Any], result: ToolResult
+    ) -> None:
+        """Remember a scene-building call (see :func:`_scene_op`)."""
+        if tool == "set_axes" and entry.log:
+            last = entry.log[-1]
+            if last.tool == "set_axes" and last.args.get("panel", 1) == args.get("panel", 1):
+                last.args.update(args)  # the same panel set again: later values win
+                return
+        cap = self.limits.animation.max_operations
+        if len(entry.log) >= cap:
+            raise McpError(
+                f"{entry.figure_id} already holds {cap} operations. Start a new figure, or "
+                "remove artists you no longer need."
+            )
+        artist_id = result.data.get("artist_id") if isinstance(result.data, dict) else None
+        entry.log.append(_Op(tool, args, artist_id, dict(self._resolved)))
+        self._resolved = {}
+
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def _object_arguments(tool: str) -> frozenset:
+        """Names of the arguments of ``tool`` that are objects (``parameters``, ``columns``...)."""
+        parameters = inspect.signature(getattr(Toolbox, tool)).parameters
+        return frozenset(name for name, p in parameters.items() if "Mapping" in str(p.annotation))
+
+    def _check_path(self, tool: str, path: str) -> None:
+        """A dotted ``path`` may only reach into an argument that is an object."""
+        head = path.split(".")[0]
+        if "." in path and head not in self._object_arguments(tool):
+            objects = sorted(self._object_arguments(tool)) or ["(none)"]
+            raise McpError(
+                f"{path!r}: {head!r} is not an object argument of {tool}, so it has no "
+                f"parts to set. Object arguments: {', '.join(objects)}."
+            )
+
+    def _scratch_id(self, entry: _Figure) -> str:
+        self._next_scratch += 1
+        return f"{entry.figure_id}~{self._next_scratch}"
+
+    def _build(
+        self,
+        entry: _Figure,
+        *,
+        ops: Optional[Sequence[_Op]] = None,
+        artist_args: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        axes_args: Optional[Mapping[int, Mapping[str, Any]]] = None,
+        datasets: Optional[DatasetStore] = None,
+    ) -> _Figure:
+        """Replay ``ops`` (default: the figure's own log) into a brand-new, unregistered figure.
+
+        ``artist_args`` maps an artist id to ``{property path: value}`` replacing arguments of
+        the call that drew it (``None`` removes one, back to its default); ``axes_args`` maps a
+        panel to ``set_axes`` arguments applied last; ``datasets`` stands in for the dataset
+        store (an animation frame's recomputed columns). The caller owns the result and must
+        :meth:`_adopt` or :meth:`_release` it. Failure leaves no trace.
+        """
+        scratch = self._scratch_id(entry)
+        built = self._make_entry(
+            scratch, entry.spec, _FIGURE_NUM_BASE + 100_000 + self._next_scratch
+        )
+        self._figures[scratch] = built
+        saved_store, saved_flag = self.datasets, self._replaying
+        self._replaying = True
+        if datasets is not None:
+            self.datasets = datasets
+        try:
+            for op in entry.log if ops is None else ops:
+                args = copy.deepcopy(op.args)
+                for path, value in ((artist_args or {}).get(op.artist_id or "") or {}).items():
+                    self._check_path(op.tool, path)
+                    if value is None:
+                        args.pop(path, None)
+                    else:
+                        dynamics.set_path(args, path, value)
+                if op.artist_id:
+                    built.next_artist = int(op.artist_id[1:])
+                try:
+                    getattr(self, op.tool)(scratch, **args)
+                except McpError as exc:
+                    where = f" ({op.artist_id})" if op.artist_id else ""
+                    text = str(exc).replace(scratch, entry.figure_id)
+                    raise McpError(
+                        f"Could not rebuild {entry.figure_id}: {op.tool}{where} failed: {text}"
+                    ) from exc
+            for panel, values in (axes_args or {}).items():
+                if values:
+                    try:
+                        self.set_axes(scratch, panel=panel, **values)
+                    except McpError as exc:
+                        text = str(exc).replace(scratch, entry.figure_id)
+                        raise McpError(f"Setting axes of panel {panel}: {text}") from exc
+            built.next_artist = max(built.next_artist, entry.next_artist)
+            return built
+        except BaseException:
+            self._release(built)
+            raise
+        finally:
+            self.datasets, self._replaying = saved_store, saved_flag
+
+    def _release(self, built: _Figure) -> None:
+        """Throw away a figure made by :meth:`_build`."""
+        self._figures.pop(built.figure_id, None)
+        gplt.close(built.plot)
+
+    def _adopt(self, entry: _Figure, built: _Figure) -> None:
+        """Make the rebuilt figure ``entry``'s own: its scene replaces the old one."""
+        old_plot = entry.plot
+        self._figures.pop(built.figure_id, None)
+        entry.plot, entry.num = built.plot, built.num
+        entry.artists, entry.next_artist = built.artists, built.next_artist
+        entry.equal_panels, entry.twins = built.equal_panels, built.twins
+        gplt.close(old_plot)
+
+    def _context_values(self, entry: _Figure) -> Dict[str, float]:
+        """The number each control currently stands for, by name."""
+        out: Dict[str, float] = {}
+        for name, control in entry.controls.items():
+            value = dynamics.control_variable(control)
+            if value is not None:
+                out[name] = value
+        return out
+
+    def _bound_arguments(
+        self,
+        entry: _Figure,
+        bindings: Sequence[dynamics.Binding],
+        context: Mapping[str, Any],
+        n: int,
+    ) -> Tuple[List[Dict[str, Dict[str, Any]]], List[Dict[int, Dict[str, Any]]], List[Any]]:
+        """Evaluate scalar bindings for ``n`` frames: per-frame artist and axes arguments.
+
+        The third item lists the ``data:`` bindings, which are computed per frame from the
+        dataset's own columns and so are not evaluated here.
+        """
+        per_artist: List[Dict[str, Dict[str, Any]]] = [dict() for _ in range(n)]
+        per_axes: List[Dict[int, Dict[str, Any]]] = [dict() for _ in range(n)]
+        data: List[Any] = []
+        known = {a.artist_id for a in entry.artists}
+        for binding in bindings:
+            kind, ident = dynamics.parse_target(binding.target)
+            if kind == "data":
+                self.datasets.get(ident)
+                data.append(binding)
+                continue
+            if kind == "artist" and ident not in known:
+                raise McpError(
+                    f"No artist {ident!r} in {entry.figure_id} (artists: "
+                    f"{', '.join(sorted(known)) or 'none'})."
+                )
+            if kind == "axes" and not 1 <= ident <= entry.panels:
+                raise McpError(
+                    f"{binding.target!r}: {entry.figure_id} has {entry.panels} panel(s)."
+                )
+            values = dynamics.evaluate_value(
+                binding.value,
+                context,
+                n,
+                limits=self.limits,
+                what=f"{binding.target}.{binding.prop}",
+            )
+            for i, value in enumerate(values):
+                value = dynamics.coerce_property(binding.prop, value)
+                if kind == "artist":
+                    per_artist[i].setdefault(ident, {})[binding.prop] = value
+                else:
+                    per_axes[i].setdefault(ident, {})[binding.prop] = value
+        return per_artist, per_axes, data
+
+    def _frame_datasets(
+        self, data_bindings: Sequence[dynamics.Binding], scalars: Mapping[str, float]
+    ) -> Optional[DatasetStore]:
+        """A dataset store whose bound columns are recomputed for one frame (None: no change)."""
+        if not data_bindings:
+            return None
+        store = DatasetStore(self.limits)
+        store._sets = dict(self.datasets._sets)
+        copies: Dict[str, DataSet] = {}
+        variables = {**dynamics.HELPERS, **scalars}
+        for binding in data_bindings:
+            _, name = dynamics.parse_target(binding.target)
+            table = copies.get(name)
+            if table is None:
+                source = store.get(name)
+                table = DataSet(name, [Column(c.name, c.values.copy()) for c in source.columns])
+                table.source = source.source
+                table.categories = {k: list(v) for k, v in source.categories.items()}
+                table.date_columns = dict(source.date_columns)
+                copies[name] = table
+            rows = table.n_rows()
+            scope = dict(variables)
+            scope.update({c.name: np.asarray(c.values, dtype=np.float64) for c in table.columns})
+            expression = binding.value
+            if not isinstance(expression, str):
+                raise McpError(
+                    f"data:{name}.{binding.prop}: the value of a data binding is an expression "
+                    "string over the dataset's columns, e.g. 'sin(k*x - phase)'."
+                )
+            result = evaluate_expression(
+                expression, scope, limits=self.limits, what=f"data:{name}.{binding.prop}"
+            )
+            values = as_float_array(
+                result, f"data:{name}.{binding.prop}", length=rows, limits=self.limits
+            )
+            for column in table.columns:
+                if column.name == binding.prop:
+                    column.values = values
+                    column.invalidate()
+                    break
+            else:
+                table.columns.append(Column(binding.prop, values))
+        for name, table in copies.items():
+            store._sets[name] = table
+        return store
+
+    def _refresh(self, entry: _Figure, ops: Optional[Sequence[_Op]] = None) -> None:
+        """Rebuild ``entry`` from ``ops`` (default: its log) with bindings at the control values.
+
+        With ``ops`` given they become the figure's log once the rebuild has succeeded.
+        """
+        built = self._build_for(entry, ops=ops)
+        self._adopt(entry, built)
+        if ops is not None:
+            entry.log = list(ops)
+
+    def _build_for(
+        self,
+        entry: _Figure,
+        *,
+        ops: Optional[Sequence[_Op]] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> _Figure:
+        """A rebuilt copy of ``entry`` with its bindings evaluated at the (overridden) controls."""
+        controls = {k: copy.copy(v) for k, v in entry.controls.items()}
+        for name, raw in (params or {}).items():
+            if name not in controls:
+                known = ", ".join(controls) or "none -- add one with add_control"
+                raise McpError(
+                    f"{entry.figure_id} has no control {name!r}.{suggest(name, controls)} "
+                    f"Controls: {known}."
+                )
+            if controls[name].kind == "button":
+                raise McpError(
+                    f"{name!r} is a button; params sets values (sliders, toggles, choices)."
+                )
+            controls[name].value = dynamics.set_control_value(controls[name], raw)
+        values = {
+            n: dynamics.control_variable(c)
+            for n, c in controls.items()
+            if dynamics.control_variable(c) is not None
+        }
+        context = {k: np.full(1, v) for k, v in values.items()}
+        artist_args, axes_args, data = self._bound_arguments(entry, entry.bindings, context, 1)
+        datasets = self._frame_datasets(data, values)
+        return self._build(
+            entry,
+            ops=ops,
+            artist_args=artist_args[0],
+            axes_args=axes_args[0],
+            datasets=datasets,
         )
 
     @_tool
@@ -369,14 +740,28 @@ class Toolbox:
             )
         entry = self._figure(figure_id)
         view = self._resolve_view(entry)
-        data = {
+        recipes_by_artist = {op.artist_id: op for op in entry.log if op.artist_id}
+        artists = []
+        for artist in entry.artists:
+            item = artist.describe()
+            op = recipes_by_artist.get(artist.artist_id)
+            if op is not None:
+                item["recipe"] = {"tool": op.tool, **_brief(op.args)}
+            artists.append(item)
+        data: Dict[str, Any] = {
             "figure_id": entry.figure_id,
             "size_px": [entry.width, entry.height],
             "projection": entry.projection,
             "grid": [entry.rows, entry.cols],
-            "artists": [a.describe() for a in entry.artists],
+            "artists": artists,
             "panels": view,
         }
+        if entry.controls:
+            data["controls"] = [c.describe() for c in entry.controls.values()]
+        if entry.bindings:
+            data["bindings"] = [b.describe() for b in entry.bindings]
+        if entry.animation:
+            data["animation"] = _brief(entry.animation)
         return ToolResult(f"{entry.figure_id}: {len(entry.artists)} artists.", data)
 
     # ------------------------------------------------------------------
@@ -427,6 +812,12 @@ class Toolbox:
 
         table = DataSet(name, [Column(key, value) for key, value in built.items()])
         table.source = "mcp"
+        table.mcp_origin = {
+            "kind": "create",
+            "columns": copy.deepcopy(dict(columns)),
+            "base": base,
+            "names": table.column_names(),
+        }
         replaced = self.datasets.put(table)
         verb = "Replaced" if replaced else "Created"
         return ToolResult(
@@ -445,11 +836,30 @@ class Toolbox:
             raise McpError(str(exc)) from exc
         table.name = dataset_name
         table.source = "mcp"
+        table.mcp_origin = {
+            "kind": "file",
+            "path": str(resolved),
+            "names": table.column_names(),
+        }
+        encoding: Dict[str, Any] = {}
+        if resolved.suffix.lower() not in (
+            *dataio.ARRAY_EXTENSIONS,
+            *dataio.JSON_EXTENSIONS,
+            *dataio.IMAGE_EXTENSIONS,
+        ):
+            try:
+                text = dataio.text_columns(str(resolved))
+            except dataio.DataIOError:
+                text = {}
+            if text:
+                encoding = textdata.interpret_text_columns(table, text)
         replaced = self.datasets.put(table)
         verb = "Replaced" if replaced else "Loaded"
+        sentence = textdata.describe_encoding(encoding)
         return ToolResult(
             f"{verb} {resolved.name} as dataset {dataset_name!r} "
-            f"({table.n_rows()} rows x {table.n_cols()} columns).",
+            f"({table.n_rows()} rows x {table.n_cols()} columns)."
+            + (f" {sentence}" if sentence else ""),
             self.datasets.describe(dataset_name, rows=3),
         )
 
@@ -472,6 +882,347 @@ class Toolbox:
         return ToolResult(f"Dataset {name!r}: {data['rows']} rows.", data)
 
     @_tool
+    def analyze_dataset(
+        self,
+        dataset: str,
+        operation: str,
+        y: Optional[str] = None,
+        x: Optional[str] = None,
+        options: Optional[Mapping[str, Any]] = None,
+        output: Optional[str] = None,
+    ) -> ToolResult:
+        """Run a numerical analysis (fit, smooth, FFT, peaks, filter...) and keep the result."""
+        from . import analysis
+
+        op = analysis.operation(operation)
+        table = self.datasets.get(dataset)
+        rows = table.n_rows()
+        if rows > self.limits.max_analysis_rows:
+            raise McpError(
+                f"Dataset {dataset!r} has {rows} rows; analyze_dataset works on at most "
+                f"{self.limits.max_analysis_rows}. Reduce it first (create_dataset with base= and "
+                "a resampled expression, or load a smaller file)."
+            )
+        if rows < 2:
+            raise McpError(f"Dataset {dataset!r} has {rows} row(s); an analysis needs at least 2.")
+        names = table.column_names()
+        notes: List[str] = []
+
+        # x: a real column, or the row index (unit spacing) when the operation wants one and none
+        # was named. Operations that compare two series insist on a real column.
+        x_is_index = True
+        x_name = "(index)"
+        x_values = np.arange(rows, dtype=np.float64)
+        if x is not None and x != "(index)":
+            if not op.uses_x:
+                notes.append(f"{op.name} does not use x; the x column {x!r} was ignored.")
+            else:
+                x_values = np.array(self.datasets.column(dataset, x), dtype=np.float64)
+                x_is_index, x_name = False, x
+        elif op.x_required:
+            raise McpError(
+                f"{op.name} compares two series: give both x and y columns "
+                f"(columns: {', '.join(names)})."
+            )
+
+        if y is None:
+            candidates = [n for n in names if n != x_name]
+            if len(candidates) != 1:
+                raise McpError(
+                    f"Which column should {op.name} use? Pass y=... (columns: {', '.join(names)})."
+                )
+            y = candidates[0]
+        y_values = np.array(self.datasets.column(dataset, y), dtype=np.float64)
+
+        ctx = analysis.Context(
+            x=x_values,
+            y=y_values,
+            options=analysis.validate_options(op, options),
+            x_name=x_name,
+            y_name=y,
+            x_is_index=x_is_index,
+            limits=self.limits,
+            columns={
+                column.name: np.asarray(column.values, dtype=np.float64) for column in table.columns
+            },
+            categories=table.categories,
+        )
+        outcome = op.run(ctx)
+        notes = outcome.notes + notes
+        if x_is_index and op.uses_x and op.index_note and not op.x_required:
+            notes.append("No x column given: the row index (unit spacing) was used as x.")
+
+        data: Dict[str, Any] = {
+            "operation": op.name,
+            "dataset": dataset,
+            "y": y,
+            "x": None if x_is_index else x_name,
+            "rows": rows,
+            "result": outcome.report,
+        }
+        hint = None
+        if outcome.column is not None:
+            column_name = self._analysis_column_name(output, y, x_name, outcome, op)
+            values = np.asarray(outcome.column, dtype=np.float64)
+            if values.shape != (rows,):
+                raise McpError(f"{op.name} produced {values.size} values for {rows} rows.")
+            table.remove_column(column_name)
+            table.add_column(column_name, values)
+            data["created"] = {"column": column_name, "dataset": dataset}
+            where = "" if x_is_index else f", x={x_name!r}"
+            hint = f"add_plot(figure_id, 'line', dataset={dataset!r}{where}, y={column_name!r})"
+            summary = f"added column {column_name!r} to {dataset!r}"
+        elif outcome.table is not None:
+            new_name = self._analysis_table_name(output, dataset, op.name)
+            lengths = {len(v) for v in outcome.table.values()}
+            if len(lengths) != 1:
+                raise McpError(f"{op.name} produced columns of different lengths.")
+            result_table = DataSet(
+                new_name,
+                [Column(key, np.asarray(v, dtype=np.float64)) for key, v in outcome.table.items()],
+            )
+            result_table.source = "mcp"
+            for column_name, labels in outcome.categories.items():
+                if column_name in outcome.table:
+                    result_table.categories[column_name] = list(labels)
+            replaced = self.datasets.put(result_table)
+            data["created"] = {
+                "dataset": new_name,
+                "columns": list(outcome.table),
+                "rows": result_table.n_rows(),
+                "replaced": replaced,
+            }
+            if outcome.plot is not None:
+                kind, px, py = outcome.plot
+                hint = f"add_plot(figure_id, {kind!r}, dataset={new_name!r}, x={px!r}, y={py!r})"
+            summary = f"created dataset {new_name!r} ({result_table.n_rows()} rows)"
+        else:
+            summary = "report only; nothing was stored"
+        if hint:
+            data["plot_hint"] = hint
+        if notes:
+            data["notes"] = notes
+        headline = f"{outcome.headline}; " if outcome.headline else ""
+        return ToolResult(f"{op.name} of {y!r}: {headline}{summary}.", data)
+
+    @_tool
+    def simulate(
+        self,
+        name: str,
+        equations: Mapping[str, str],
+        initial: Mapping[str, float],
+        t_end: float,
+        t_start: float = 0.0,
+        steps: int = 1000,
+        parameters: Optional[Mapping[str, float]] = None,
+        derived: Optional[Mapping[str, str]] = None,
+        method: str = "rk45",
+        substeps: int = 4,
+    ) -> ToolResult:
+        """Integrate ordinary differential equations into a dataset: t, each state, derived."""
+        check_name(name, "dataset name")
+        self.datasets.check_room(name)
+        table, report = simulation.simulate(
+            name,
+            equations,
+            initial,
+            t_end=t_end,
+            t_start=t_start,
+            steps=steps,
+            parameters=parameters,
+            derived=derived,
+            method=method,
+            substeps=substeps,
+            limits=self.limits,
+        )
+        table.source = "mcp"
+        table.mcp_origin = {
+            "kind": "simulate",
+            "names": table.column_names(),
+            "spec": {
+                "equations": dict(equations),
+                "initial": dict(initial),
+                "t_start": t_start,
+                "t_end": t_end,
+                "steps": steps,
+                "parameters": dict(parameters or {}),
+                "derived": dict(derived or {}),
+                "method": str(method).lower(),
+            },
+        }
+        replaced = self.datasets.put(table)
+        states = report["states"]
+        hint = f"add_plot(figure_id, 'line', dataset='{name}', x='t', y='{states[0]}')"
+        if len(states) > 1:
+            hint += (
+                f"; phase portrait: add_plot(figure_id, 'line', dataset='{name}', "
+                f"x='{states[0]}', y='{states[1]}', reveal=..., head=true)"
+            )
+        return ToolResult(
+            f"Solved {len(states)} equation{'s' if len(states) != 1 else ''} with "
+            f"{report['method']} over t = {t_start:g}..{t_end:g} into dataset {name!r} "
+            f"({steps} rows).",
+            {
+                "dataset": name,
+                "replaced": replaced,
+                "report": report,
+                "plot_hint": hint,
+                **self.datasets.describe(name, rows=3),
+            },
+        )
+
+    @_tool
+    def select_rows(
+        self,
+        dataset: str,
+        where: Optional[str] = None,
+        equals: Optional[Mapping[str, Any]] = None,
+        sort_by: Optional[str] = None,
+        descending: bool = False,
+        every: Optional[int] = None,
+        limit: Optional[int] = None,
+        output: Optional[str] = None,
+    ) -> ToolResult:
+        """Keep some rows of a dataset (filter, sort, thin out) as a new dataset."""
+        table = self.datasets.get(dataset)
+        rows = table.n_rows()
+        if where is None and not equals and sort_by is None and every is None and limit is None:
+            raise McpError(
+                "Nothing to do: pass where=, equals=, sort_by=, every= or limit= "
+                "(for example where='temp > 10', equals={'city': 'Lima'})."
+            )
+        for name, value in (("every", every), ("limit", limit)):
+            if value is not None and (not isinstance(value, int) or value < 1):
+                raise McpError(f"{name} must be a whole number of at least 1, got {value!r}.")
+        names = table.column_names()
+        mask = np.ones(rows, dtype=bool)
+        steps: List[str] = []
+
+        if where is not None:
+            try:
+                mask &= table.row_mask(where)
+            except ExpressionError as exc:
+                raise McpError(f"Could not evaluate where {where!r}: {exc}") from exc
+            steps.append(f"where {where}")
+
+        if equals:
+            if not isinstance(equals, Mapping):
+                raise McpError("equals must be an object like {'city': 'Lima'}.")
+            for column_name, wanted in equals.items():
+                if column_name not in names:
+                    raise McpError(
+                        f"equals: no column {column_name!r}.{suggest(str(column_name), names)} "
+                        f"Columns: {', '.join(names)}."
+                    )
+                values = np.asarray(table.get(column_name), dtype=np.float64)
+                choices = list(wanted) if isinstance(wanted, (list, tuple)) else [wanted]
+                labels = table.categories.get(column_name)
+                if labels is not None:
+                    codes = []
+                    for choice in choices:
+                        if not isinstance(choice, str) or choice not in labels:
+                            raise McpError(
+                                f"equals: {choice!r} is not a label of {column_name!r}."
+                                f"{suggest(str(choice), labels)} Labels: {', '.join(labels)}."
+                            )
+                        codes.append(float(labels.index(choice)))
+                    mask &= np.isin(values, codes)
+                else:
+                    try:
+                        numbers = [float(choice) for choice in choices]
+                    except (TypeError, ValueError):
+                        raise McpError(
+                            f"equals: column {column_name!r} is numeric; give numbers, "
+                            f"got {choices!r}."
+                        ) from None
+                    mask &= np.isin(values, numbers)
+                steps.append(f"{column_name} in {choices}")
+
+        picked = np.nonzero(mask)[0]
+        if picked.size == 0:
+            raise McpError(
+                f"No rows match ({', '.join(steps) or 'no filter'}); {dataset!r} has {rows} rows. "
+                "Check the condition against describe_dataset's min/max per column."
+            )
+        if sort_by is not None:
+            if sort_by not in names:
+                raise McpError(
+                    f"sort_by: no column {sort_by!r}.{suggest(sort_by, names)} "
+                    f"Columns: {', '.join(names)}."
+                )
+            key = np.asarray(table.get(sort_by), dtype=np.float64)[picked]
+            finite = np.isfinite(key)
+            order = np.argsort(key[finite], kind="stable")
+            if descending:
+                # Negating the key keeps ties in their original order (unlike reversing).
+                order = np.argsort(-key[finite], kind="stable")
+            picked = np.concatenate([picked[finite][order], picked[~finite]])
+            steps.append(f"sorted by {sort_by}{' (descending)' if descending else ''}")
+        if every is not None and every > 1:
+            picked = picked[::every]
+            steps.append(f"every {every}th row")
+        if limit is not None:
+            picked = picked[:limit]
+            steps.append(f"first {limit}")
+
+        name = (
+            check_name(output, "output dataset name")
+            if output
+            else self.datasets.unique_name(check_name(f"{dataset}_rows"[:64], "output name"))
+        )
+        kept = DataSet(
+            name,
+            [Column(c.name, np.asarray(c.values, dtype=np.float64)[picked]) for c in table.columns],
+        )
+        kept.source = "mcp"
+        kept.categories = {key: list(labels) for key, labels in table.categories.items()}
+        kept.date_columns = dict(table.date_columns)
+        replaced = self.datasets.put(kept)
+        return ToolResult(
+            f"Kept {picked.size} of {rows} rows of {dataset!r} ({'; '.join(steps)}) as dataset "
+            f"{name!r}.",
+            {
+                "dataset": name,
+                "rows_in": rows,
+                "rows_out": int(picked.size),
+                "steps": steps,
+                "replaced": replaced,
+                **self.datasets.describe(name, rows=3),
+            },
+        )
+
+    @staticmethod
+    def _identifier(text: str) -> str:
+        """``text`` as a column name an expression can use (spaces and symbols become ``_``)."""
+        import re
+
+        cleaned = re.sub(r"[^0-9A-Za-z_]+", "_", text).strip("_") or "col"
+        return cleaned if not cleaned[0].isdigit() else f"c_{cleaned}"
+
+    def _analysis_column_name(
+        self, output: Optional[str], y: str, x_name: str, outcome: Any, op: Any
+    ) -> str:
+        if output is not None:
+            if not isinstance(output, str) or not is_identifier(output):
+                raise McpError(
+                    f"output {output!r} must be a column name made of letters, digits and '_'."
+                )
+            name = output
+        else:
+            name = f"{self._identifier(y)}_{outcome.column_suffix or op.suffix or op.name}"
+        if name in (y, x_name):
+            raise McpError(
+                f"The result column would overwrite the input column {name!r}. "
+                "Pass output=... to choose another name."
+            )
+        return name
+
+    def _analysis_table_name(self, output: Optional[str], dataset: str, operation: str) -> str:
+        if output is not None:
+            return check_name(output, "output dataset name")
+        return self.datasets.unique_name(check_name(f"{dataset}_{operation}"[:64], "output name"))
+
+    @_tool
     def delete_dataset(self, name: str) -> ToolResult:
         """Forget a dataset. Figures already drawn from it are unaffected."""
         self.datasets.remove(name)
@@ -482,6 +1233,7 @@ class Toolbox:
     # ------------------------------------------------------------------
 
     @_tool
+    @_scene_op
     def add_plot(
         self,
         figure_id: str,
@@ -508,6 +1260,11 @@ class Toolbox:
         tick_labels: Optional[Sequence[str]] = None,
         colorbar: bool = False,
         panel: int = 1,
+        hatch: Optional[str] = None,
+        axis: str = "left",
+        reveal: Optional[float] = None,
+        trail: Optional[int] = None,
+        head: bool = False,
     ) -> ToolResult:
         """Add data to a figure as a line, scatter, bar, histogram, ... (see PLOT_KINDS)."""
         entry = self._figure(figure_id)
@@ -573,41 +1330,161 @@ class Toolbox:
             "cmap": cmap,
             "bins": bins,
             "width": width,
+            "hatch": hatch,
         }
+        if axis not in ("left", "right"):
+            raise McpError("axis must be 'left' or 'right' (a second y axis on the right).")
+        if axis == "right" and (entry.is_3d or kind not in _TWIN_KINDS):
+            raise McpError(
+                "axis='right' draws on a second y axis; it is for 2-D "
+                f"{', '.join(sorted(_TWIN_KINDS))} (this is kind={kind!r} in "
+                f"{'a 3-D' if entry.is_3d else 'a 2-D'} figure)."
+            )
+        motion_notes = self._apply_motion(req, kind, reveal, trail)
         req.tick_labels = list(tick_labels) if tick_labels else None
+        notes = self._category_labels(req, dataset, kind, x, y, color_by, tick_labels)
+        notes.extend(motion_notes)
         req.color_label = color_by if isinstance(color_by, str) else None
         req.colorbar = bool(colorbar)
 
         self._activate(entry, panel)
+        req.api = self._axes_api(entry, panel, axis)
+        if head:
+            if kind not in ("line", "scatter", "step"):
+                raise McpError(
+                    "head=true puts a dot on the last point: use kind line, scatter or step."
+                )
+            req.head = True
         if color is None and req.color_by is None and kind in _CYCLED_KINDS:
             # GLPlot draws a bare scatter or errorbar in black; matplotlib walks its colour
             # cycle. A model overlaying two series needs them told apart without having to
             # name a colour for each, so take the figure's next cycle colour (the one
             # ``plot()`` is already advancing) rather than the black default.
             req.options["color"] = gplt._next_cycle_color(entry.plot)
+            self._resolved["color"] = req.options["color"]
         if kind == "area" and alpha is None:
             # A translucent fill is exported as one outlined quad per sample, and the
             # overlapping outlines show as vertical hatching. Opaque is seamless.
             req.options["alpha"] = 1.0
+            self._resolved["alpha"] = 1.0
         artist = self._record(entry, panel, kind, label or "", lambda: _DRAW[kind](req), req)
         if kind == "pie":
             entry.equal_panels.add(panel)
         artist.dataset = dataset
         note = f" Ignored for kind={kind!r}: {', '.join(req.ignored)}." if req.ignored else ""
+        data: Dict[str, Any] = {"artist_id": artist.artist_id, "layers": len(artist.layer_ids)}
+        if req.ignored:
+            data["ignored"] = req.ignored
+        if notes:
+            data["notes"] = notes
         return ToolResult(
-            f"Added {kind} {artist.artist_id} ({req.n} points) to {figure_id}.{note}",
-            (
-                {
-                    "artist_id": artist.artist_id,
-                    "layers": len(artist.layer_ids),
-                    "ignored": req.ignored,
-                }
-                if req.ignored
-                else {"artist_id": artist.artist_id, "layers": len(artist.layer_ids)}
-            ),
+            f"Added {kind} {artist.artist_id} ({req.n} points) to {figure_id}.{note}", data
         )
 
+    def _apply_motion(
+        self, req: "_PlotRequest", kind: str, reveal: Optional[float], trail: Optional[int]
+    ) -> List[str]:
+        """Show only part of the data: the first ``reveal`` fraction, the last ``trail`` of that.
+
+        This is what makes a curve draw itself in, or a moving point drag a tail behind it, when
+        the numbers change from frame to frame; used on its own it is a partial plot.
+        """
+        if reveal is None and trail is None:
+            return []
+        if kind not in _XY_KINDS:
+            raise McpError(
+                f"reveal/trail cut a series short, so they need an x-vs-y kind "
+                f"({', '.join(sorted(_XY_KINDS))}); kind={kind!r} reads one set of values."
+            )
+        total = req.n
+        count = total
+        if reveal is not None:
+            if isinstance(reveal, bool) or not isinstance(reveal, (int, float)):
+                raise McpError("reveal is a fraction between 0 and 1 of the points to show.")
+            if not math.isfinite(reveal) or not 0.0 <= reveal <= 1.0:
+                raise McpError(f"reveal must be between 0 and 1, got {reveal!r}.")
+            count = max(1, min(total, int(math.ceil(reveal * total - 1e-9))))
+        first = 0
+        if trail is not None:
+            if isinstance(trail, bool) or not isinstance(trail, int) or trail < 1:
+                raise McpError(
+                    "trail is a whole number of points (at least 1) kept behind the head."
+                )
+            first = max(0, count - trail)
+        if first == 0 and count == total:
+            return []
+        for name in ("x", "y", "z", "error", "y2", "color_by", "size_by"):
+            values = getattr(req, name)
+            if values is not None and values.size == total:
+                setattr(req, name, values[first:count])
+        if req.tick_labels and len(req.tick_labels) == total:
+            req.tick_labels = req.tick_labels[first:count]
+        req.n = count - first
+        req.visible = (first, count, total)
+        return []
+
+    def _axes_api(self, entry: _Figure, panel: int, axis: str) -> Any:
+        """What drawing calls go to: pyplot itself, or the panel's right-hand twin axes."""
+        if axis != "right":
+            return gplt
+        twin = entry.twins.get(panel)
+        if twin is None:
+            twin = entry.twins[panel] = gplt.twinx()
+        return twin
+
+    def _category_labels(
+        self,
+        req: Any,
+        dataset: Optional[str],
+        kind: str,
+        x: SeriesRef,
+        y: SeriesRef,
+        color_by: SeriesRef,
+        tick_labels: Optional[Sequence[str]],
+    ) -> List[str]:
+        """Use the labels of a category column as tick/slice names; say what the other uses mean.
+
+        A category column stores the *index* of each row's label. For a bar or pie that index is
+        only a position, so its labels become the tick/slice names automatically; anywhere else the
+        numbers are what is plotted and the reply says which label each one stands for.
+        """
+        if dataset is None:
+            return []
+        table = self.datasets.get(dataset)
+        notes: List[str] = []
+
+        def labels_of(ref: SeriesRef) -> Optional[List[str]]:
+            return table.categories.get(ref) if isinstance(ref, str) else None
+
+        def per_point(labels: List[str], values: np.ndarray) -> List[str]:
+            return [
+                labels[int(v)] if np.isfinite(v) and 0 <= int(v) < len(labels) else ""
+                for v in values
+            ]
+
+        x_labels = labels_of(x)
+        if tick_labels is None and x_labels and kind in ("bar", "barh") and req.x is not None:
+            req.tick_labels = per_point(x_labels, req.x)
+            notes.append(f"Tick labels taken from the categories of {x!r}.")
+            x_labels = None
+        elif tick_labels is None and x_labels and kind == "pie":
+            values = self._series(x, dataset, "x", required=True)
+            if values.size == req.y.size:
+                req.tick_labels = per_point(x_labels, values)
+                notes.append(f"Slice names taken from the categories of {x!r}.")
+                x_labels = None
+        for role, ref in (("x", x), ("y", y), ("color_by", color_by)):
+            labels = x_labels if role == "x" else labels_of(ref)
+            if labels:
+                shown = ", ".join(f"{i}={label}" for i, label in enumerate(labels[:8]))
+                notes.append(
+                    f"{role} column {ref!r} is categorical: its values are label indices "
+                    f"({shown}{', ...' if len(labels) > 8 else ''})."
+                )
+        return notes
+
     @_tool
+    @_scene_op
     def add_function(
         self,
         figure_id: str,
@@ -664,6 +1541,7 @@ class Toolbox:
         return outcome
 
     @_tool
+    @_scene_op
     def add_field(
         self,
         figure_id: str,
@@ -831,6 +1709,7 @@ class Toolbox:
         return ToolResult(f"{len(rows)} recipes{scope}.", {"recipes": rows})
 
     @_tool
+    @_scene_op
     def add_recipe(
         self,
         figure_id: str,
@@ -991,6 +1870,7 @@ class Toolbox:
                 )
 
     @_tool
+    @_scene_op
     def add_annotation(
         self,
         figure_id: str,
@@ -1061,10 +1941,198 @@ class Toolbox:
             for layer in [l for l in scene.layers if l.layer_id in set(artist.layer_ids)]:
                 layerops.remove_layer(entry.plot, None, layer)
             entry.artists.remove(artist)
+        gone = {a.artist_id for a in targets}
+        entry.log = [op for op in entry.log if op.artist_id not in gone]
+        entry.bindings = [b for b in entry.bindings if b.target not in gone]
         remaining = [a.artist_id for a in entry.artists]
         return ToolResult(
             f"Removed {len(targets)} artist{'s' if len(targets) != 1 else ''} from {figure_id}.",
             {"remaining": remaining},
+        )
+
+    @_tool
+    def update_artist(
+        self, figure_id: str, artist_id: str, changes: Mapping[str, Any]
+    ) -> ToolResult:
+        """Change something already drawn: colour, width, data columns, label... or refresh it.
+
+        ``changes`` holds arguments of the call that drew the artist (see its ``recipe`` in
+        ``describe_figure``); a ``None`` value puts that argument back to its default; a dotted
+        name reaches inside an object argument (``"parameters.a"``). An empty ``changes``
+        redraws the artist from the datasets as they are now.
+        """
+        entry = self._figure(figure_id)
+        index = next((i for i, op in enumerate(entry.log) if op.artist_id == artist_id), None)
+        if index is None:
+            known = ", ".join(a.artist_id for a in entry.artists) or "none"
+            raise McpError(f"{figure_id} has no artist {artist_id!r} (artists: {known}).")
+        if not isinstance(changes, Mapping):
+            raise McpError("changes must be an object like {'color': 'tab:red', 'linewidth': 3}.")
+        op = entry.log[index]
+        allowed = [
+            name
+            for name in inspect.signature(getattr(Toolbox, op.tool)).parameters
+            if name not in ("self", "figure_id")
+        ]
+        revised = copy.deepcopy(op)
+        for path, value in changes.items():
+            head = str(path).split(".")[0]
+            if head not in allowed:
+                raise McpError(
+                    f"{artist_id} was drawn by {op.tool}, which has no argument {head!r}."
+                    f"{suggest(head, allowed)} Arguments: {', '.join(allowed)}."
+                )
+            self._check_path(op.tool, str(path))
+            if value is None:
+                revised.args.pop(path, None)
+            else:
+                dynamics.set_path(revised.args, str(path), value)
+        ops = list(entry.log)
+        ops[index] = revised
+        self._refresh(entry, ops)
+        artist = next(a for a in entry.artists if a.artist_id == artist_id)
+        return ToolResult(
+            f"Updated {artist_id} of {figure_id}"
+            + (f" ({', '.join(map(str, changes))})." if changes else " (redrawn from the data)."),
+            {"artist": artist.describe(), "recipe": {"tool": op.tool, **revised.args}},
+        )
+
+    # ------------------------------------------------------------------
+    # Controls and bindings: parameters the figure depends on
+    # ------------------------------------------------------------------
+
+    @_tool
+    def add_control(
+        self,
+        figure_id: str,
+        name: str,
+        kind: str = "slider",
+        min: Optional[float] = None,  # noqa: A002 - the argument name a model expects
+        max: Optional[float] = None,  # noqa: A002
+        value: Any = None,
+        step: Optional[float] = None,
+        options: Optional[Sequence[str]] = None,
+        label: Optional[str] = None,
+        integer: bool = False,
+        log: bool = False,
+        sets: Optional[Mapping[str, Any]] = None,
+    ) -> ToolResult:
+        """Define a slider, toggle, choice or button: a named value expressions can use."""
+        entry = self._figure(figure_id)
+        control = dynamics.make_control(
+            name,
+            kind,
+            label=label,
+            minimum=min,
+            maximum=max,
+            value=value,
+            step=step,
+            integer=integer,
+            log=log,
+            options=options,
+            sets=sets,
+        )
+        if name not in entry.controls and len(entry.controls) >= self.limits.animation.max_controls:
+            raise McpError(
+                f"{figure_id} already has {self.limits.animation.max_controls} controls."
+            )
+        if control.kind == "button" and control.sets:
+            for target in control.sets:
+                if target not in entry.controls:
+                    raise McpError(
+                        f"The button sets {target!r}, which is not a control of {figure_id}."
+                        f"{suggest(target, entry.controls)} Add that control first."
+                    )
+        replaced = name in entry.controls
+        entry.controls[name] = control
+        return ToolResult(
+            f"{'Replaced' if replaced else 'Added'} {control.kind} {name!r} on {figure_id}. "
+            "Use its name in expressions (bind_property, animate).",
+            {
+                "control": control.describe(),
+                "controls": [c.describe() for c in entry.controls.values()],
+            },
+        )
+
+    @_tool
+    def set_control(self, figure_id: str, name: str, value: Any = None) -> ToolResult:
+        """Move a control (the figure is redrawn at the new value), or press a button."""
+        entry = self._figure(figure_id)
+        control = entry.controls.get(name)
+        if control is None:
+            known = ", ".join(entry.controls) or "none -- add one with add_control"
+            raise McpError(
+                f"{figure_id} has no control {name!r}.{suggest(name, entry.controls)} "
+                f"Controls: {known}."
+            )
+        before = {n: c.value for n, c in entry.controls.items()}
+        if control.kind == "button":
+            targets = (
+                control.sets
+                if control.sets is not None
+                else {n: c.default for n, c in entry.controls.items() if c.kind != "button"}
+            )
+            for target, raw in targets.items():
+                other = entry.controls.get(target)
+                if other is None:
+                    raise McpError(f"The button sets {target!r}, which no longer exists.")
+                other.value = dynamics.set_control_value(other, raw)
+        else:
+            if value is None:
+                raise McpError(f"Give the new value of {name!r}.")
+            control.value = dynamics.set_control_value(control, value)
+        try:
+            self._refresh(entry)
+        except McpError:
+            for n, v in before.items():
+                entry.controls[n].value = v
+            raise
+        changed = {n: c.value for n, c in entry.controls.items() if before.get(n) != c.value}
+        return ToolResult(
+            f"{'Pressed' if control.kind == 'button' else 'Set'} {name!r}"
+            + (f": {changed}." if changed else " (nothing changed)."),
+            {"changed": changed, "controls": [c.describe() for c in entry.controls.values()]},
+        )
+
+    @_tool
+    def bind_property(
+        self, figure_id: str, target: str, property: str, value: Any = None  # noqa: A002
+    ) -> ToolResult:
+        """Make a property follow an expression of the controls (and, in animate, of time)."""
+        entry = self._figure(figure_id)
+        kind, ident = dynamics.parse_target(target)
+        if not isinstance(property, str) or not property:
+            raise McpError(
+                "property is the name to drive: 'linewidth', 'xlim', 'azim', 'parameters.a'."
+            )
+        previous = list(entry.bindings)
+        entry.bindings = [
+            b for b in entry.bindings if not (b.target == target and b.prop == property)
+        ]
+        if value is None:
+            removed = len(previous) - len(entry.bindings)
+            if not removed:
+                raise McpError(f"{target}.{property} has no binding to remove.")
+        else:
+            if len(entry.bindings) >= self.limits.animation.max_bindings:
+                entry.bindings = previous
+                raise McpError(
+                    f"{figure_id} already has {self.limits.animation.max_bindings} bindings."
+                )
+            entry.bindings.append(dynamics.Binding(target, property, copy.deepcopy(value)))
+        try:
+            self._refresh(entry)
+        except BaseException:
+            entry.bindings = previous
+            raise
+        return ToolResult(
+            (
+                f"{target}.{property} now follows {value!r}."
+                if value is not None
+                else f"Removed the binding of {target}.{property}."
+            )
+            + (" Move controls with set_control; animate uses them too." if entry.controls else ""),
+            {"bindings": [b.describe() for b in entry.bindings], "kind": kind, "target": ident},
         )
 
     # ------------------------------------------------------------------
@@ -1072,6 +2140,7 @@ class Toolbox:
     # ------------------------------------------------------------------
 
     @_tool
+    @_scene_op
     def set_axes(
         self,
         figure_id: str,
@@ -1091,6 +2160,9 @@ class Toolbox:
         hide_axes: Optional[bool] = None,
         elev: Optional[float] = None,
         azim: Optional[float] = None,
+        y2label: Optional[str] = None,
+        y2lim: Optional[Sequence[float]] = None,
+        y2scale: Optional[str] = None,
     ) -> ToolResult:
         """Set titles, labels, limits, scales, grid, legend and (3-D) camera on one panel."""
         entry = self._figure(figure_id)
@@ -1111,16 +2183,7 @@ class Toolbox:
             if not entry.is_3d:
                 raise McpError("zlabel is only meaningful on a 3-D figure.")
             do("zlabel", gplt.zlabel, zlabel)
-        for name, limits_, fn in (
-            ("xlim", xlim, gplt.xlim),
-            ("ylim", ylim, gplt.ylim),
-            ("zlim", zlim, getattr(gplt, "set_zlim", None)),
-        ):
-            if limits_ is not None:
-                lo, hi = self._range(limits_, name)
-                if name == "zlim" and not entry.is_3d:
-                    raise McpError("zlim is only meaningful on a 3-D figure.")
-                do(name, fn, lo, hi)
+        # Scales first: switching one re-fits the view and would throw away a limit set before it.
         for name, value, fn in (("xscale", xscale, gplt.xscale), ("yscale", yscale, gplt.yscale)):
             if value is not None:
                 if entry.panels > 1:
@@ -1135,6 +2198,16 @@ class Toolbox:
                 if value not in ("linear", "log", "symlog", "logit"):
                     raise McpError(f"{name} must be one of: linear, log, symlog, logit.")
                 do(name, fn, value)
+        for name, limits_, fn in (
+            ("xlim", xlim, gplt.xlim),
+            ("ylim", ylim, gplt.ylim),
+            ("zlim", zlim, getattr(gplt, "set_zlim", None)),
+        ):
+            if limits_ is not None:
+                lo, hi = self._range(limits_, name)
+                if name == "zlim" and not entry.is_3d:
+                    raise McpError("zlim is only meaningful on a 3-D figure.")
+                do(name, fn, lo, hi)
         if grid is not None:
             do("grid", gplt.grid, bool(grid))
         if legend:
@@ -1148,6 +2221,22 @@ class Toolbox:
             if not entry.is_3d:
                 raise McpError("elev/azim set the 3-D camera; this is a 2-D figure.")
             do("view", lambda: gplt.view_init(elev=elev, azim=azim))
+        if y2label is not None or y2lim is not None or y2scale is not None:
+            twin = entry.twins.get(panel)
+            if twin is None:
+                raise McpError(
+                    f"Panel {panel} has no right-hand y axis yet: draw something on it first with "
+                    "add_plot(..., axis='right')."
+                )
+            if y2label is not None:
+                do("y2label", twin.set_ylabel, y2label)
+            if y2scale is not None:
+                if y2scale not in ("linear", "log", "symlog", "logit"):
+                    raise McpError("y2scale must be one of: linear, log, symlog, logit.")
+                do("y2scale", twin.set_yscale, y2scale)
+            if y2lim is not None:
+                lo, hi = self._range(y2lim, "y2lim")
+                do("y2lim", twin.set_ylim, lo, hi)
         if not applied:
             raise McpError("Nothing to set: pass at least one of title, xlabel, ylabel, xlim, ...")
         return ToolResult(
@@ -1155,6 +2244,7 @@ class Toolbox:
         )
 
     @_tool
+    @_scene_op
     def set_style(self, figure_id: str, preset: str) -> ToolResult:
         """Apply a GLPlot style preset (``chalk``, ``journal``, ``clean``...) to the whole figure."""  # noqa: E501
         entry = self._figure(figure_id)
@@ -1167,15 +2257,40 @@ class Toolbox:
     # ------------------------------------------------------------------
 
     @_tool
-    def render_figure(self, figure_id: str, scale: float = 1.0) -> ToolResult:
+    def render_figure(
+        self, figure_id: str, scale: float = 1.0, params: Optional[Mapping[str, Any]] = None
+    ) -> ToolResult:
         """Render the figure to a PNG the model can look at, with a text summary of the axes."""
         entry = self._figure(figure_id)
         if not 0.25 <= float(scale) <= 3.0:
             raise McpError("scale must be between 0.25 and 3.0.")
-        data, view = self._render(entry, float(scale), "png", self.limits.max_image_edge)
+        shown = entry
+        if params:
+            shown = self._build_for(entry, params=params)
+        try:
+            data, view = self._render(
+                shown, float(scale), "png", self.limits.max_image_edge, review=True
+            )
+            found = shown.issues
+        finally:
+            if shown is not entry:
+                self._release(shown)
+        worst = sum(1 for item in found if item["severity"] == "warning")
+        note = (
+            f" {len(found)} thing{'s' if len(found) != 1 else ''} to consider"
+            + (f" ({worst} warning{'s' if worst != 1 else ''})" if worst else "")
+            + ": see issues."
+            if found
+            else " No issues found."
+        )
         return ToolResult(
-            f"Rendered {figure_id}.",
-            {"figure_id": figure_id, "artists": len(entry.artists), "panels": view},
+            f"Rendered {figure_id}.{note}",
+            {
+                "figure_id": figure_id,
+                "artists": len(entry.artists),
+                "panels": view,
+                "issues": found,
+            },
             image=data,
         )
 
@@ -1187,6 +2302,7 @@ class Toolbox:
         scale: float = 1.0,
         transparent: bool = False,
         overwrite: bool = False,
+        params: Optional[Mapping[str, Any]] = None,
     ) -> ToolResult:
         """Save the figure as PNG, SVG, PDF or JPEG inside the server's output directory."""
         entry = self._figure(figure_id)
@@ -1195,12 +2311,251 @@ class Toolbox:
         target = self.sandbox.write_path(path, overwrite=bool(overwrite))
         fmt = target.suffix.lower().lstrip(".")
         fmt = "jpeg" if fmt == "jpg" else fmt
-        data, _ = self._render(entry, float(scale), fmt, 6000, transparent=bool(transparent))
+        shown = self._build_for(entry, params=params) if params else entry
+        try:
+            data, _ = self._render(shown, float(scale), fmt, 6000, transparent=bool(transparent))
+        finally:
+            if shown is not entry:
+                self._release(shown)
         target.write_bytes(data)
         return ToolResult(
             f"Saved {figure_id} to {target} ({len(data) / 1024:.0f} KiB).",
             {"path": str(target), "bytes": len(data)},
         )
+
+    @_tool
+    def animate(
+        self,
+        figure_id: str,
+        output: Optional[str] = None,
+        frames: Optional[int] = None,
+        duration: Optional[float] = None,
+        fps: float = 30.0,
+        loop: bool = False,
+        stages: Optional[Sequence[Mapping[str, Any]]] = None,
+        variables: Optional[Mapping[str, Any]] = None,
+        bindings: Optional[Sequence[Mapping[str, Any]]] = None,
+        scale: Optional[float] = None,
+        hold_start: float = 0.0,
+        hold_end: float = 0.0,
+        sheet_frames: int = 8,
+        frame: Optional[int] = None,
+        overwrite: bool = False,
+        repeat: int = 0,
+        quality: str = "good",
+    ) -> ToolResult:
+        """Animate a figure: properties follow expressions of time, across stages. See the guide."""
+        entry = self._figure(figure_id)
+        data, image, headline = animator.run_animation(
+            self,
+            entry,
+            output=output,
+            frames=frames,
+            duration=duration,
+            fps=fps,
+            loop=loop,
+            stages=stages,
+            variables=variables,
+            bindings=bindings,
+            scale=scale,
+            hold_start=hold_start,
+            hold_end=hold_end,
+            sheet_frames=sheet_frames,
+            frame=frame,
+            overwrite=overwrite,
+            repeat=repeat,
+            quality=quality,
+        )
+        if frame is None:
+            entry.animation = {
+                "frames": frames,
+                "duration": duration,
+                "fps": fps,
+                "loop": loop,
+                "stages": copy.deepcopy(stages),
+                "variables": copy.deepcopy(variables),
+                "bindings": copy.deepcopy(bindings),
+                "hold_start": hold_start,
+                "hold_end": hold_end,
+            }
+        return ToolResult(headline, data, image=image)
+
+    @_tool
+    def export_script(self, figure_id: str, kind: str = "figure") -> ToolResult:
+        """The Python script that rebuilds this figure (also interactive, or as an animation)."""
+        entry = self._figure(figure_id)
+        text, notes = scripting.export_script(self, entry, kind)
+        limit = 120_000
+        if len(text) > limit:
+            raise McpError(
+                f"The script is {len(text):,} characters, over the {limit:,} this tool returns "
+                "(inline data is the usual cause). Draw from expressions or smaller datasets."
+            )
+        lines = text.count("\n")
+        data: Dict[str, Any] = {"kind": kind, "lines": lines}
+        if notes:
+            data["notes"] = notes
+        return ToolResult(
+            f"Python script for {figure_id} ({kind}, {lines} lines). Save it as a .py file and run "
+            f"it with python:\n```python\n{text}```",
+            data,
+        )
+
+    # ------------------------------------------------------------------
+    # Knowledge: what GLPlot can do and how to use it
+    #
+    # Read-only and SDK-free, so a client that lists tools but never reads resources (most do)
+    # can still learn the whole library, and the built-in stdio server serves them unchanged.
+    # ------------------------------------------------------------------
+
+    #: Longest reply these tools return, in characters. A docstring or guide is bounded in practice;
+    #: this is the guard that keeps one call from flooding a model's context.
+    MAX_KNOWLEDGE_CHARS = 60_000
+
+    def _guide_topics(self) -> List[Any]:
+        from . import guide as guide_module
+
+        return guide_module.mcp_topics(self.sandbox, self.limits)
+
+    @_tool
+    def get_guide(self, topic: Optional[str] = None) -> ToolResult:
+        """A guide topic as Markdown, or the list of topics when none is named."""
+        from .. import llm
+
+        extra = self._guide_topics()
+        text = llm.guide(topic, extra)
+        if len(text) > self.MAX_KNOWLEDGE_CHARS:
+            text = text[: self.MAX_KNOWLEDGE_CHARS] + "\n\n[truncated]"
+        listing = [t.id for t in llm.guides.list_topics(tuple(extra))]
+        return ToolResult(text, {"topic": topic or None, "topics": listing} if not topic else {})
+
+    @_tool
+    def search_api(
+        self, query: str = "", limit: int = 8, category: Optional[str] = None
+    ) -> ToolResult:
+        """Find GLPlot Python functions by name or what they do; no query lists categories."""
+        from .. import llm
+
+        limit = int(limit)
+        if not 1 <= limit <= 40:
+            raise McpError("limit must be between 1 and 40.")
+        valid = [c["id"] for c in llm.api_categories()]
+        if category and category not in valid:
+            raise McpError(
+                f"Unknown category {category!r}.{suggest(category, valid)} "
+                f"Valid: {', '.join(valid)}."
+            )
+        if not str(query).strip():
+            cats = llm.api_categories()
+            lines = [f"{c['title']} [{c['id']}]: {', '.join(c['names'])}" for c in cats]
+            return ToolResult(
+                "GLPlot API by category (pass words to search, or a name to get_api_doc):\n"
+                + "\n".join(lines),
+                {"categories": [{"id": c["id"], "count": len(c["names"])} for c in cats]},
+            )
+        hits = llm.search_api(query, limit=limit, category=category)
+        if not hits:
+            return ToolResult(
+                f"No function matches {query!r}. Try other words, a matplotlib name, or call "
+                "search_api with no query to list every category.",
+                {"matches": []},
+            )
+        rows = [f"{e.name}{e.brief} -- {e.summary}" for e in hits]
+        return ToolResult(
+            f"{len(hits)} match(es) for {query!r}; call get_api_doc(name) for the full docstring.\n"
+            + "\n".join(rows),
+            {"matches": [{"name": e.name, "category": e.category, "usage": e.usage} for e in hits]},
+        )
+
+    @_tool
+    def get_api_doc(self, name: str) -> ToolResult:
+        """The signature and full docstring of one GLPlot function or class."""
+        from .. import llm
+
+        try:
+            info = llm.describe_api(name)
+        except KeyError as exc:
+            raise McpError(str(exc)) from exc
+        doc = str(info["doc"]) or "(no docstring)"
+        text = f"{info['usage']}\n\ncategory: {info['category']}\n\n{doc}"
+        if len(text) > self.MAX_KNOWLEDGE_CHARS:
+            text = text[: self.MAX_KNOWLEDGE_CHARS] + "\n\n[truncated]"
+        return ToolResult(
+            text,
+            {"name": info["name"], "category": info["category"], "signature": info["signature"]},
+        )
+
+    @_tool
+    def get_example(self, name: Optional[str] = None) -> ToolResult:
+        """A runnable Python example script, or the list of examples when none is named."""
+        from .. import llm
+
+        if not name:
+            items = llm.examples()
+            lines = [f"{e['name']}: {e['title']}" for e in items]
+            return ToolResult(
+                "Runnable GLPlot scripts (each ends in plt.savefig, so it works with no display). "
+                "Call get_example(name) for the code.\n" + "\n".join(lines),
+                {"examples": [e["name"] for e in items]},
+            )
+        try:
+            item = llm.example(name)
+        except KeyError as exc:
+            raise McpError(str(exc)) from exc
+        return ToolResult(
+            f"{item['title']}\n\n{item['description']}\n\n```python\n{item['code']}```",
+            {"name": item["name"], "filename": item["filename"]},
+        )
+
+    #: Set by whichever server wraps this toolbox ("mcp-sdk" or "builtin").
+    server_flavor: str = "unknown"
+
+    @_tool
+    def server_info(self) -> ToolResult:
+        """Versions, what this server may do (files, limits), and what is open right now."""
+        from .. import llm
+        from . import analysis as analysis_module
+
+        info = llm.capabilities()
+        files = (
+            {"enabled": True, "roots": [str(r) for r in self.sandbox.roots]}
+            if self.sandbox.enabled
+            else {"enabled": False, "note": "started without --root: no file reads or writes"}
+        )
+        info["server"] = {
+            "implementation": self.server_flavor,
+            "files": files,
+            "plot_kinds": list(PLOT_KINDS),
+            "field_kinds": list(FIELD_KINDS),
+            "annotation_kinds": list(ANNOTATION_KINDS),
+            "analysis_operations": [op.name for op in analysis_module.OPERATIONS],
+            "animation": {
+                "formats": {
+                    name: ("available" if why is None else why)
+                    for name, why in motion.available_formats().items()
+                },
+                "easings": list(dynamics.EASINGS),
+                "functions": list(dynamics.HELPERS),
+                "max_frames": self.limits.animation.max_frames,
+                "max_stages": self.limits.animation.max_stages,
+                "max_seconds": self.limits.animation.max_seconds,
+                "ode_methods": list(simulation.METHODS),
+                "control_kinds": list(dynamics.CONTROL_KINDS),
+                "script_kinds": list(scripting.SCRIPT_KINDS),
+            },
+            "limits": {
+                "max_figures": self.limits.max_figures,
+                "max_datasets": self.limits.max_datasets,
+                "max_inline_values": self.limits.max_inline_values,
+                "max_dataset_rows": self.limits.max_dataset_rows,
+                "max_analysis_rows": self.limits.max_analysis_rows,
+                "figure_px": [self.limits.min_figure_px, self.limits.max_figure_px],
+                "max_image_edge": self.limits.max_image_edge,
+            },
+            "open_figures": list(self._figures),
+            "datasets": self.datasets.names(),
+        }
+        return ToolResult("GLPlot server information.", info)
 
     def render_png(self, figure_id: str) -> bytes:
         """The figure as PNG bytes, for the resource endpoint. Raises :class:`McpError`."""
@@ -1434,8 +2789,16 @@ class Toolbox:
         max_edge: int,
         *,
         transparent: bool = False,
+        review: bool = False,
+        crop: Optional[Any] = None,
+        bounds: Optional[List[Any]] = None,
+        dpi: Optional[float] = None,
     ) -> Tuple[bytes, List[Dict[str, Any]]]:
-        """Render to ``fmt`` bytes and read the resolved axes from the same matplotlib figure."""
+        """Render to ``fmt`` bytes and read the resolved axes from the same matplotlib figure.
+
+        With ``review`` the finished figure is also checked (:func:`review_figure`) and the
+        findings are left in ``entry.issues``.
+        """
         view: List[Dict[str, Any]] = []
 
         def inspect(fig: Any) -> Dict[str, Any]:
@@ -1445,7 +2808,15 @@ class Toolbox:
                     if index in entry.equal_panels and not hasattr(ax, "get_zlim"):
                         ax.set_aspect("equal")
             view.extend(_summarise_axes(fig))
-            if fmt in ("png", "jpeg"):
+            if bounds is not None:
+                bounds.append(fig.get_tightbbox(fig.canvas.get_renderer()))
+            if review:
+                labelled: Dict[int, List[str]] = {}
+                for artist in entry.artists:
+                    if artist.label:
+                        labelled.setdefault(artist.panel, []).append(artist.label)
+                entry.issues = review_figure(fig, labelled=labelled)
+            if fmt in ("png", "jpeg") and crop is None and dpi is None:
                 edge = max(fig.get_size_inches()) * fig.dpi
                 if edge > max_edge:
                     # Lower the *export* dpi: ``savefig`` does not read ``fig.dpi`` back.
@@ -1453,7 +2824,16 @@ class Toolbox:
             return {}
 
         self._activate(entry, 1)
-        kwargs: Dict[str, Any] = {"bbox_inches": "tight", "pad_inches": 0.15}
+        # An animation passes one fixed ``crop`` (a Bbox in inches) for all its frames: a tight
+        # crop per frame would fit each to its own text, so the frames would differ in size and
+        # the axes would slide about. ``bounds`` collects each figure's tight box to build it.
+        kwargs: Dict[str, Any] = (
+            {"bbox_inches": crop, "pad_inches": 0.0}
+            if crop is not None
+            else {"bbox_inches": "tight", "pad_inches": 0.15}
+        )
+        if dpi is not None:
+            kwargs["dpi"] = float(dpi)
         if transparent:
             kwargs["transparent"] = True
         if fmt == "jpeg":
@@ -1492,6 +2872,10 @@ class _PlotRequest:
     color_label: Optional[str] = None
     colorbar: bool = False
     ignored: List[str] = field(default_factory=list)
+    #: Where drawing calls go (``gplt`` or a twin axes) and the span of the data actually shown.
+    api: Any = None
+    visible: Optional[Tuple[int, int, int]] = None
+    head: bool = False
 
     def style(self, mapping: Mapping[str, str]) -> Dict[str, Any]:
         """Translate the options this kind understands to pyplot kwargs; note the rest.
@@ -1545,6 +2929,17 @@ def _describe_recipe(spec: recipes.Recipe) -> Dict[str, Any]:
     }
 
 
+def _brief(value: Any, limit: int = 12) -> Any:
+    """``value`` with long lists replaced by a count, so a description stays short."""
+    if isinstance(value, Mapping):
+        return {k: _brief(v, limit) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        if len(value) > limit and not any(isinstance(v, (Mapping, list, tuple)) for v in value):
+            return f"[{len(value)} values]"
+        return [_brief(v, limit) for v in value]
+    return value
+
+
 def _summarise_axes(fig: Any) -> List[Dict[str, Any]]:
     """Per-axes facts a model cannot read off pixels reliably: limits, labels, legend text."""
     panels: List[Dict[str, Any]] = []
@@ -1576,6 +2971,32 @@ def _summarise_axes(fig: Any) -> List[Dict[str, Any]]:
 # ----------------------------------------------------------------------------------
 
 
+def _api(r: _PlotRequest) -> Any:
+    """The object drawing calls go to: pyplot, or the panel's right-hand twin axes."""
+    return r.api if r.api is not None else gplt
+
+
+def _head_marker(r: _PlotRequest, layers: Any) -> None:
+    """A dot on the last point shown, in the colour of the line (the 'head' of a moving curve)."""
+    if not r.head or r.n == 0:
+        return
+    from matplotlib.colors import to_hex
+
+    layer = layers[0] if isinstance(layers, (list, tuple)) and layers else layers
+    colour = r.options.get("color")
+    if colour is None:
+        try:
+            colour = to_hex(tuple(float(v) for v in layer.style.color))
+        except (AttributeError, TypeError, ValueError):
+            colour = None
+    size = r.options.get("size")
+    dot: Dict[str, Any] = {"size": float(size) * 1.6 if size else 10.0, "marker": "o"}
+    if colour is not None:
+        dot["color"] = colour
+    args = (r.x[-1:], r.y[-1:]) + ((r.z[-1:],) if r.z is not None else ())
+    _api(r).scatter(*args, **dot)
+
+
 def _draw_line(r: _PlotRequest) -> Any:
     kw = r.style(
         {
@@ -1589,8 +3010,11 @@ def _draw_line(r: _PlotRequest) -> Any:
         }
     )
     if r.z is not None:
-        return gplt.plot(r.x, r.y, r.z, **kw)
-    return gplt.plot(r.x, r.y, **kw)
+        layers = _api(r).plot(r.x, r.y, r.z, **kw)
+    else:
+        layers = _api(r).plot(r.x, r.y, **kw)
+    _head_marker(r, layers)
+    return layers
 
 
 def _draw_scatter(r: _PlotRequest) -> Any:
@@ -1612,11 +3036,12 @@ def _draw_scatter(r: _PlotRequest) -> Any:
         unit = (r.size_by - np.nanmin(r.size_by)) / span if span > 0 else np.full(r.n, 0.5)
         kw["size"] = 4.0 + 24.0 * unit
     if r.z is not None:
-        layer = gplt.scatter(r.x, r.y, r.z, **kw)
+        layer = _api(r).scatter(r.x, r.y, r.z, **kw)
     else:
-        layer = gplt.scatter(r.x, r.y, **kw)
+        layer = _api(r).scatter(r.x, r.y, **kw)
     if r.colorbar and r.color_by is not None:
         gplt.colorbar(label=r.color_label) if r.color_label else gplt.colorbar()
+    _head_marker(r, layer)
     return layer
 
 
@@ -1630,7 +3055,9 @@ def _draw_step(r: _PlotRequest) -> Any:
             "label": "label",
         }
     )
-    return gplt.step(r.x, r.y, where="mid", **kw)
+    layers = _api(r).step(r.x, r.y, where="mid", **kw)
+    _head_marker(r, layers)
+    return layers
 
 
 def _draw_stem(r: _PlotRequest) -> Any:
@@ -1639,17 +3066,19 @@ def _draw_stem(r: _PlotRequest) -> Any:
 
 
 def _draw_bar(r: _PlotRequest) -> Any:
-    kw = r.style({"color": "color", "alpha": "alpha", "label": "label", "width": "width"})
+    kw = r.style(
+        {"color": "color", "alpha": "alpha", "label": "label", "width": "width", "hatch": "hatch"}
+    )
     if r.error is not None:
         kw["yerr"] = r.error
-    bars = gplt.bar(r.x, r.y, **kw)
+    bars = _api(r).bar(r.x, r.y, **kw)
     if r.tick_labels:
         gplt.xticks(list(r.x), r.tick_labels)
     return bars
 
 
 def _draw_barh(r: _PlotRequest) -> Any:
-    kw = r.style({"color": "color", "alpha": "alpha", "label": "label"})
+    kw = r.style({"color": "color", "alpha": "alpha", "label": "label", "hatch": "hatch"})
     bars = gplt.barh(r.x, r.y, **kw)
     if r.tick_labels:
         gplt.yticks(list(r.x), r.tick_labels)
@@ -1657,17 +3086,19 @@ def _draw_barh(r: _PlotRequest) -> Any:
 
 
 def _draw_area(r: _PlotRequest) -> Any:
-    kw = r.style({"color": "color", "alpha": "alpha", "label": "label"})
-    return gplt.fill_between(r.x, r.y, r.y2 if r.y2 is not None else 0.0, **kw)
+    kw = r.style({"color": "color", "alpha": "alpha", "label": "label", "hatch": "hatch"})
+    return _api(r).fill_between(r.x, r.y, r.y2 if r.y2 is not None else 0.0, **kw)
 
 
 def _draw_errorbar(r: _PlotRequest) -> Any:
     kw = r.style({"color": "color", "label": "label"})
-    return gplt.errorbar(r.x, r.y, yerr=r.error, **kw)
+    return _api(r).errorbar(r.x, r.y, yerr=r.error, **kw)
 
 
 def _draw_hist(r: _PlotRequest) -> Any:
-    kw = r.style({"color": "color", "alpha": "alpha", "label": "label", "bins": "bins"})
+    kw = r.style(
+        {"color": "color", "alpha": "alpha", "label": "label", "bins": "bins", "hatch": "hatch"}
+    )
     return gplt.hist(r.y, **kw)
 
 

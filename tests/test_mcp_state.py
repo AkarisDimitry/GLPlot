@@ -139,6 +139,8 @@ class TestExpressions:
             "arange(1e12)",
             "arange(0, 1e12, 1)",
             "linspace(0, 1, 10**10)",
+            "logspace(0, 4, 10**10)",
+            "geomspace(1, 1e4, 10**10)",
             "noise(10**10)",
             "zeros((100000, 100000))",
         ],
@@ -151,6 +153,11 @@ class TestExpressions:
         assert evaluate_expression("linspace(0, 1, 1000)").size == 1000
         assert evaluate_expression("arange(10)").size == 10
         assert evaluate_expression("zeros(100)").sum() == 0.0
+        decades = evaluate_expression("logspace(0, 4, 5)")
+        assert list(decades) == [1.0, 10.0, 100.0, 1000.0, 10000.0]
+        assert evaluate_expression("geomspace(1, 1000, 4)").tolist() == pytest.approx(
+            [1.0, 10.0, 100.0, 1000.0]
+        )
         assert evaluate_expression("noise(50, 0.1, 3)").size == 50
 
     def test_limit_is_configurable(self):
@@ -196,6 +203,7 @@ class TestExpressions:
     def test_vocabulary_is_generated_from_the_evaluator(self):
         vocab = expression_vocabulary()
         assert "sin" in vocab["functions"] and "linspace" in vocab["functions"]
+        assert "logspace" in vocab["functions"] and "geomspace" in vocab["functions"]
         assert "pi" in vocab["constants"]
 
 

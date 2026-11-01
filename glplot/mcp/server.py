@@ -9,19 +9,18 @@ Two SDK generations are supported: ``mcp`` 2.x (``MCPServer``) and 1.x (``FastMC
 differ in a class name and where ``ToolError`` lives; everything else used here is common.
 """
 
-import argparse
-import json
 import logging
-import sys
 from typing import Annotated, Any, Dict, List, Optional, Sequence, Union
 
 from pydantic import Field
 
-from .guide import build_guide, build_instructions
+from . import analysis, catalog
+from .cli import build_parser
+from .guide import build_instructions
 from .state import DEFAULT_LIMITS, FileSandbox, Limits, McpError
 from .toolbox import ANNOTATION_KINDS, FIELD_KINDS, PLOT_KINDS, Toolbox, ToolResult
 
-__all__ = ["SdkUnavailable", "build_server", "main"]
+__all__ = ["SdkUnavailable", "build_parser", "build_server", "main"]
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +108,7 @@ def build_server(
     ToolError, Annotations = sdk["ToolError"], sdk["ToolAnnotations"]
     box = toolbox if toolbox is not None else Toolbox(sandbox, limits)
     server = sdk["MCPServer"](name, instructions=build_instructions(box.sandbox))
+    box.server_flavor = "mcp-sdk"
 
     def run(method: Any, *args: Any, **kwargs: Any) -> Any:
         """Call a toolbox method; make its ``McpError`` the one thing the model is shown."""
@@ -199,6 +199,8 @@ def build_server(
         Expressions are evaluated safely (no attribute access, no builtins) with numpy
         functions such as sin, exp, sqrt, linspace, arange, noise(n, scale, seed); see
         glplot://guide for the full list. Use this instead of typing out data points.
+
+        Example: create_dataset("run", {"t": "linspace(0, 10, 500)", "v": "sin(t)*exp(-t/5)"}).
         """
         return run(box.create_dataset, name, columns, base)
 
@@ -214,8 +216,10 @@ def build_server(
     ) -> Any:
         """Load a CSV/TSV/TXT, NPY/NPZ, JSON or image file as a dataset.
 
-        The first row is used as column names when it is a header. A 2-D .npy becomes one
-        column per array column. Returns the columns with min/max/mean/std and the first rows.
+        The first row is used as column names when it is a header. Text columns become categories
+        (labels kept; see select_rows and analyze_dataset 'aggregate') and ISO date columns become
+        days since 1970-01-01. A 2-D .npy becomes one column per array column. Returns the
+        columns with min/max/mean/std and the first rows.
         """
         return run(box.load_dataset, path, name)
 
@@ -228,6 +232,109 @@ def build_server(
     ) -> Any:
         """Show a dataset's columns, per-column statistics and first rows, or list all datasets."""
         return run(box.describe_dataset, name, rows)
+
+    def analyze_dataset(
+        dataset: Annotated[
+            str, Field(description="Dataset to analyse (from create_dataset / load_dataset).")
+        ],
+        operation: Annotated[
+            str,
+            Field(
+                description="One of: "
+                + ", ".join(op.name for op in analysis.OPERATIONS)
+                + ". get_guide('mcp-analysis') lists each one's options."
+            ),
+        ],
+        y: Annotated[
+            Optional[str],
+            Field(description="Column to analyse. Default: the only column that is not x."),
+        ] = None,
+        x: Annotated[
+            Optional[str],
+            Field(
+                description="x column (the abscissa). Default: the row index, i.e. unit spacing. "
+                "Required by correlate."
+            ),
+        ] = None,
+        options: Annotated[
+            Optional[Dict[str, Any]],
+            Field(
+                description="Operation-specific options, e.g. {'model': 'exp_decay'} for fit, "
+                "{'method': 'savgol', 'window': 31} for smooth, {'cutoff': 5} for filter. Unknown "
+                "names are refused with the valid ones listed."
+            ),
+        ] = None,
+        output: Annotated[
+            Optional[str],
+            Field(
+                description="Name for the column (same-length results) or the new dataset (tables) "
+                "to create. Default: <y>_<suffix> or <dataset>_<operation>."
+            ),
+        ] = None,
+    ) -> Any:
+        return run(box.analyze_dataset, dataset, operation, y, x, options, output)
+
+    # The operation list is generated from the registry, so the description cannot drift from it.
+    analyze_dataset.__doc__ = (
+        "Analyse a dataset numerically and keep the result so it can be plotted. Operations: "
+        + analysis.operations_summary()
+        + ".\n\n"
+        "A 'column' result is added to the dataset (e.g. v_fit), a 'table' result becomes a new "
+        "dataset (e.g. run_fft), a 'report' only returns numbers. The reply includes a plot_hint "
+        "with the add_plot call that draws it. fit supports linear, polynomial, gaussian, "
+        "lorentzian, exp_decay, power_law, sigmoid, multipeak and custom expressions, and reports "
+        "parameters with standard errors and R^2. Options per operation: "
+        "get_guide('mcp-analysis').\n\n"
+        'Examples: analyze_dataset("run", "fit", x="t", y="v", options={"model": "exp_decay"}); '
+        'analyze_dataset("signal", "fft", x="t", y="v"); '
+        'analyze_dataset("run", "smooth", y="v", options={"window": 31}).'
+    )
+    tool()(analyze_dataset)
+
+    @tool()
+    def select_rows(
+        dataset: Annotated[str, Field(description="Dataset to take rows from.")],
+        where: Annotated[
+            Optional[str],
+            Field(
+                description="Keep rows where this expression over the columns is true, e.g. "
+                "'temp > 10' or '(temp > 10) & (year == 2021)' (use & | ~ with parentheses, "
+                "not and/or/not)."
+            ),
+        ] = None,
+        equals: Annotated[
+            Optional[Dict[str, Any]],
+            Field(
+                description="Keep rows whose column equals a value or any of a list: "
+                "{'city': 'Lima'} or {'city': ['Lima', 'Oslo']} for a text (category) column, "
+                "{'year': 2021} for a numeric one."
+            ),
+        ] = None,
+        sort_by: Annotated[
+            Optional[str], Field(description="Column to sort the kept rows by (NaN last).")
+        ] = None,
+        descending: Annotated[bool, Field(description="Sort from largest to smallest.")] = False,
+        every: Annotated[
+            Optional[int], Field(ge=1, description="Keep every n-th of the remaining rows.")
+        ] = None,
+        limit: Annotated[
+            Optional[int], Field(ge=1, description="Keep only the first n rows (after sorting).")
+        ] = None,
+        output: Annotated[
+            Optional[str], Field(description="Name of the new dataset. Default: <dataset>_rows.")
+        ] = None,
+    ) -> Any:
+        """Filter, sort or thin out a dataset's rows into a new dataset (the original is kept).
+
+        Conditions combine: where and equals first, then sort_by, every and limit. Text columns
+        keep their labels. Fails, saying so, when no row matches. Examples:
+        select_rows("weather", equals={"city": "Lima"});
+        select_rows("run", where="v > 0", sort_by="t");
+        select_rows("scores", sort_by="score", descending=True, limit=10).
+        """
+        return run(
+            box.select_rows, dataset, where, equals, sort_by, descending, every, limit, output
+        )
 
     @tool(destructive=True)
     def delete_dataset(name: Annotated[str, Field(description="Dataset to delete.")]) -> Any:
@@ -301,12 +408,48 @@ def build_server(
             bool, Field(description="Add a colourbar (scatter with color_by).")
         ] = False,
         panel: Panel = 1,
+        hatch: Annotated[
+            Optional[str],
+            Field(
+                description="bar/barh/area/hist fill pattern: '/', 'x', '+', '.', 'o', '//' "
+                "(a backslash pattern works too)."
+            ),
+        ] = None,
+        axis: Annotated[
+            str,
+            Field(
+                description="'left' (default) or 'right': draw against a second y axis on the "
+                "right (line, scatter, step, bar, area, errorbar). Label it with "
+                "set_axes(y2label=..., y2lim=...)."
+            ),
+        ] = "left",
+        reveal: Annotated[
+            Optional[float],
+            Field(
+                ge=0,
+                le=1,
+                description="Show only the first fraction (0-1) of the points: a curve drawing "
+                "itself in. Bind it to time in animate. line/scatter/step/bar/area/errorbar.",
+            ),
+        ] = None,
+        trail: Annotated[
+            Optional[int],
+            Field(ge=1, description="Show only the last N of the revealed points: a moving tail."),
+        ] = None,
+        head: Annotated[
+            bool,
+            Field(description="Put a dot on the last shown point (line/scatter/step): the 'head'."),
+        ] = False,
     ) -> Any:
         """Draw data as a line, scatter, bar, histogram, box, pie, ... and return an artist_id.
 
         Each kind needs different series; the per-kind table is in glplot://guide. Options a
         kind does not use are ignored and listed in the reply. Returns the artist_id used by
         remove_artist.
+
+        Examples: add_plot("fig1", "scatter", x=[1, 2, 3], y=[2, 4, 9], color="red");
+        add_plot("fig1", "line", dataset="run", x="t", y="v", label="run");
+        add_plot("fig1", "hist", dataset="run", y="v", bins=30).
         """
         return run(
             box.add_plot,
@@ -334,6 +477,11 @@ def build_server(
             tick_labels,
             colorbar,
             panel,
+            hatch,
+            axis,
+            reveal,
+            trail,
+            head,
         )
 
     @tool()
@@ -368,6 +516,8 @@ def build_server(
         """Plot y = expression(x) over [x_min, x_max] in one call, without making a dataset.
 
         The quickest way to draw a formula or to overlay several (call it once per curve).
+
+        Example: add_function("fig1", "sin(a*x)/x", x_min=-10, x_max=10, parameters={"a": 2}).
         """
         return run(
             box.add_function,
@@ -628,10 +778,24 @@ def build_server(
         azim: Annotated[
             Optional[float], Field(ge=-360, le=360, description="3-D camera azimuth, degrees.")
         ] = None,
+        y2label: Annotated[
+            Optional[str],
+            Field(description="Label of the right-hand y axis (after add_plot(axis='right'))."),
+        ] = None,
+        y2lim: Annotated[
+            Optional[List[float]],
+            Field(min_length=2, max_length=2, description="[low, high] of the right-hand y axis."),
+        ] = None,
+        y2scale: Annotated[
+            Optional[str], Field(description="Scale of the right-hand y axis: 'linear', 'log'...")
+        ] = None,
     ) -> Any:
         """Set title, axis labels, limits, scales, grid, legend and (3-D) camera on one panel.
 
         Pass only what you want to change. Always label axes with units.
+
+        Example: set_axes("fig1", title="Decay", xlabel="t (s)", ylabel="signal (V)", yscale="log",
+        legend=True).
         """
         return run(
             box.set_axes,
@@ -652,6 +816,9 @@ def build_server(
             hide_axes,
             elev,
             azim,
+            y2label,
+            y2lim,
+            y2scale,
         )
 
     @tool()
@@ -668,13 +835,25 @@ def build_server(
     def render_figure(
         figure_id: FigureId,
         scale: Annotated[float, Field(ge=0.25, le=3.0, description="Size multiplier.")] = 1.0,
+        params: Annotated[
+            Optional[Dict[str, Any]],
+            Field(
+                description="Control values to render at, e.g. {'amp': 2, 'mode': 'cos'} "
+                "(see add_control). The figure itself keeps its own values."
+            ),
+        ] = None,
     ) -> Any:
         """Render the figure and return it as an image plus a text summary of each panel's axes.
 
         Look at the image and the summary (axis limits, labels, legend) before telling the
         user it is done; fix problems with set_axes / remove_artist / add_*.
+
+        The reply also reviews the figure and lists `issues` it can prove (missing axis labels or
+        title, an empty panel, overlapping tick labels, points a log axis cannot draw, data cut off
+        by the limits...), each with a severity and the call that fixes it. An empty list means
+        nothing was found.
         """
-        return run(box.render_figure, figure_id, scale)
+        return run(box.render_figure, figure_id, scale, params)
 
     @tool()
     def save_figure(
@@ -691,176 +870,518 @@ def build_server(
         ] = 1.0,
         transparent: Annotated[bool, Field(description="Transparent background.")] = False,
         overwrite: Annotated[bool, Field(description="Replace an existing file.")] = False,
+        params: Annotated[
+            Optional[Dict[str, Any]],
+            Field(
+                description="Control values to render at, e.g. {'amp': 2, 'mode': 'cos'} "
+                "(see add_control). The figure itself keeps its own values."
+            ),
+        ] = None,
     ) -> Any:
         """Save the figure to a file. Refuses to overwrite unless overwrite=true."""
-        return run(box.save_figure, figure_id, path, scale, transparent, overwrite)
+        return run(box.save_figure, figure_id, path, scale, transparent, overwrite, params)
+
+    # -- change what is drawn, controls, animation, scripts ---------------------------
+
+    @tool()
+    def update_artist(
+        figure_id: FigureId,
+        artist_id: Annotated[str, Field(description="Artist to change, e.g. 'a2'.")],
+        changes: Annotated[
+            Dict[str, Any],
+            Field(
+                description="Arguments of the call that drew it, with their new values: "
+                "{'color': 'tab:red', 'linewidth': 3}. null puts one back to its default; "
+                "'parameters.a' reaches inside an object argument; {} redraws from the data."
+            ),
+        ],
+    ) -> Any:
+        """Change something already drawn without removing it: colour, width, columns, label...
+
+        The artist keeps its id and its place in the stacking order. `describe_figure` lists the
+        artists; the reply shows the recipe (the arguments now in force).
+
+        Examples: update_artist("fig1", "a1", {"color": "tab:green", "linewidth": 3});
+        update_artist("fig1", "a2", {"y": "v_fit"});
+        update_artist("fig1", "a1", {"parameters.a": 4}).
+        """
+        return run(box.update_artist, figure_id, artist_id, changes)
+
+    @tool()
+    def add_control(
+        figure_id: FigureId,
+        name: Annotated[
+            str,
+            Field(description="Identifier used in expressions (e.g. 'amp'). Not t, s, time, x, y."),
+        ],
+        kind: Annotated[
+            str,
+            Field(
+                description="'slider' (needs min and max), 'toggle' (true/false -> 1/0), "
+                "'choice' (needs options; its value in expressions is the option's index) or "
+                "'button' (sets other controls, or resets them all)."
+            ),
+        ] = "slider",
+        min: Annotated[Optional[float], Field(description="Slider minimum.")] = None,  # noqa: A002
+        max: Annotated[Optional[float], Field(description="Slider maximum.")] = None,  # noqa: A002
+        value: Annotated[
+            Any, Field(description="Starting value (slider/toggle/choice). Default: the middle.")
+        ] = None,
+        step: Annotated[Optional[float], Field(gt=0, description="Slider snap step.")] = None,
+        options: Annotated[
+            Optional[List[str]], Field(description="choice: two or more option names.")
+        ] = None,
+        label: Annotated[Optional[str], Field(description="Text shown beside it.")] = None,
+        integer: Annotated[bool, Field(description="Slider takes whole numbers only.")] = False,
+        log: Annotated[bool, Field(description="Slider spans decades (min > 0).")] = False,
+        sets: Annotated[
+            Optional[Dict[str, Any]],
+            Field(description="button: {control: value} pairs it applies; omit to reset all."),
+        ] = None,
+    ) -> Any:
+        """Define a slider, toggle, choice or button: a named value the figure can depend on.
+
+        A control does nothing until a property follows it: bind_property(figure, 'a1',
+        'linewidth', 'width'). Then set_control moves it and the figure is redrawn, render_figure
+        (params={...}) tries values without keeping them, animate can sweep it, and
+        export_script(kind='interactive') writes the real widgets as Python.
+
+        Example: add_control("fig1", "amp", min=0, max=5, value=1).
+        """
+        return run(
+            box.add_control, figure_id, name, kind, min, max, value, step, options, label,
+            integer, log, sets,
+        )  # fmt: skip
+
+    @tool()
+    def set_control(
+        figure_id: FigureId,
+        name: Annotated[str, Field(description="Control name.")],
+        value: Annotated[
+            Any,
+            Field(
+                description="New value (slider number, toggle true/false, choice option name). "
+                "Omit for a button."
+            ),
+        ] = None,
+    ) -> Any:
+        """Move a control (the figure is redrawn at the new value) or press a button."""
+        return run(box.set_control, figure_id, name, value)
+
+    @tool()
+    def bind_property(
+        figure_id: FigureId,
+        target: Annotated[
+            str,
+            Field(
+                description="What to drive: an artist id ('a1'); 'axes' or 'axes:2' (panel "
+                "title, xlabel, xlim, ylim, zlim, elev, azim, legend...); or 'data:<dataset>' "
+                "(then `property` is a column recomputed from the others)."
+            ),
+        ],
+        property: Annotated[  # noqa: A002
+            str,
+            Field(
+                description="The argument to drive: 'color', 'linewidth', 'alpha', 'size', "
+                "'reveal', 'trail', 'parameters.a' (a function's parameter), 'x_max', 'azim'..."
+            ),
+        ],
+        value: Annotated[
+            Any,
+            Field(
+                description="A number, an expression of controls and time ('1 + 2*amp', "
+                "'sin(2*pi*t)'), a list of those ('xlim': ['0', '10*t']), "
+                "{'colormap': 'viridis'|[colours], 'at': expr}, {'choose': [...], 'index': expr} "
+                "or {'format': 'phase {time:.1f} s'}. null removes the binding."
+            ),
+        ] = None,
+    ) -> Any:
+        """Make one property follow an expression of the figure's controls (and of time).
+
+        Bindings apply on every redraw and in `animate`. Names in the expression are control
+        names; inside animate also t (0..1), time (s), frame, s (stage progress) and variables.
+
+        Examples: bind_property("fig1", "a1", "parameters.amp", "amp");
+        bind_property("fig1", "axes", "title", {"format": "amp = {amp:.1f}"}).
+        """
+        return run(box.bind_property, figure_id, target, property, value)
+
+    @tool()
+    def animate(
+        figure_id: FigureId,
+        output: Annotated[
+            Optional[str],
+            Field(
+                description="File to write in the allowed directory: .gif, .apng, .mp4 or "
+                ".webm (those two need ffmpeg), or 'frames/f_%04d.png' for numbered images. "
+                "Omit to only preview: a contact sheet of frames is always returned."
+            ),
+        ] = None,
+        frames: Annotated[
+            Optional[int], Field(ge=2, le=600, description="Number of frames (or give duration).")
+        ] = None,
+        duration: Annotated[
+            Optional[float], Field(gt=0, description="Length in seconds (frames = duration*fps).")
+        ] = None,
+        fps: Annotated[float, Field(ge=1, le=120, description="Frames per second.")] = 30.0,
+        loop: Annotated[
+            bool,
+            Field(
+                description="True for a seamless loop: t runs 0..1 excluding the end, so the "
+                "last frame leads into the first. Use whole periods (2*pi*t)."
+            ),
+        ] = False,
+        stages: Annotated[
+            Optional[List[Dict[str, Any]]],
+            Field(
+                description="Consecutive stages, each {'name', 'duration' (s) or 'frames', "
+                "'ease', 'animate': {...}}. `animate` moves variables: {'amp': [1, 3]} (from, to), "
+                "{'amp': 3} (to, from wherever it is), {'amp': {'from': 1, 'to': 3, 'ease': "
+                "'in_out'}} or {'k': '2 + 3*s'} (expression of s, 0..1 across the stage). A stage "
+                "starts where the last ended and ends exactly on its target; afterwards the value "
+                "holds. Easings: linear, in, out, in_out, smooth, smoother, sine."
+            ),
+        ] = None,
+        variables: Annotated[
+            Optional[Dict[str, Any]],
+            Field(
+                description="Named values: a NUMBER is a parameter (its starting value; stages "
+                "may move it), an expression STRING is derived each frame from t, time, s, stage "
+                "and the parameters: {'amp': 1, 'phase': '2*pi*t', 'w': '2*pi*f'}."
+            ),
+        ] = None,
+        bindings: Annotated[
+            Optional[List[Dict[str, Any]]],
+            Field(
+                description="What the variables drive, [{'target', 'property', 'value'}] -- the "
+                "same as bind_property (added to the figure's own bindings). value is an "
+                "expression of the variables: {'target': 'a1', 'property': 'parameters.phase', "
+                "'value': 'phase'}; {'target': 'axes', 'property': 'azim', 'value': '30+360*t'}."
+            ),
+        ] = None,
+        scale: Annotated[
+            Optional[float],
+            Field(ge=0.25, le=3.0, description="Resolution multiplier. Default: fit ~960 px."),
+        ] = None,
+        hold_start: Annotated[
+            float, Field(ge=0, le=30, description="Seconds to hold the first frame.")
+        ] = 0.0,
+        hold_end: Annotated[
+            float, Field(ge=0, le=30, description="Seconds to hold the last frame.")
+        ] = 0.0,
+        sheet_frames: Annotated[
+            int, Field(ge=1, le=16, description="Frames in the contact sheet returned.")
+        ] = 8,
+        frame: Annotated[
+            Optional[int],
+            Field(ge=0, description="Render only this frame, full size (nothing is written)."),
+        ] = None,
+        overwrite: Annotated[bool, Field(description="Replace an existing file.")] = False,
+        repeat: Annotated[
+            int,
+            Field(ge=0, le=1000, description="GIF/APNG: extra plays after the first (0=forever)."),
+        ] = 0,
+        quality: Annotated[str, Field(description="mp4/webm: 'draft', 'good' or 'high'.")] = "good",
+    ) -> Any:
+        """Animate the figure: properties follow time, in stages, and save a GIF/MP4/WebM/PNGs.
+
+        You cannot watch an animation, so the reply is a contact sheet (frames side by side) plus
+        measured facts: variable ranges per stage and `issues` (nothing moves, the axes rescale,
+        the loop does not close, an abrupt jump). Build the figure first, pin the axes
+        (set_axes xlim/ylim), then say what varies: variables (+ stages) and bindings.
+        Preview with output omitted, fix, then write the file. Read get_guide('mcp-animation').
+
+        Example, a wave that travels, grows, then squeezes:
+        animate("fig1", output="wave.gif", fps=25, variables={"phase": "2*pi*t", "amp": 1, "k": 2},
+        stages=[{"name": "travel", "duration": 2}, {"name": "grow", "duration": 2,
+        "animate": {"amp": [1, 3]}}, {"name": "squeeze", "duration": 2, "animate": {"k": [2, 5]}}],
+        bindings=[{"target": "a1", "property": "parameters.phase", "value": "phase"},
+        {"target": "a1", "property": "parameters.amp", "value": "amp"},
+        {"target": "a1", "property": "parameters.k", "value": "k"}]).
+        3-D orbit: bindings=[{"target": "axes", "property": "azim", "value": "30 + 360*t"}].
+        """
+        return run(
+            box.animate, figure_id, output, frames, duration, fps, loop, stages, variables,
+            bindings, scale, hold_start, hold_end, sheet_frames, frame, overwrite, repeat, quality,
+        )  # fmt: skip
+
+    @tool()
+    def simulate(
+        name: Annotated[str, Field(description="Name of the dataset to create.")],
+        equations: Annotated[
+            Dict[str, str],
+            Field(
+                description="Each state's derivative as an expression of the states, t and the "
+                "parameters: {'theta': 'omega', 'omega': '-g/L*sin(theta) - c*omega'}."
+            ),
+        ],
+        initial: Annotated[Dict[str, float], Field(description="Starting value of every state.")],
+        t_end: Annotated[float, Field(description="Final time.")],
+        t_start: Annotated[float, Field(description="Initial time.")] = 0.0,
+        steps: Annotated[
+            int, Field(ge=2, le=200000, description="Rows returned (evenly spaced in t).")
+        ] = 1000,
+        parameters: Annotated[
+            Optional[Dict[str, float]], Field(description="Constants: {'g': 9.81, 'L': 1}.")
+        ] = None,
+        derived: Annotated[
+            Optional[Dict[str, str]],
+            Field(
+                description="Extra columns computed from the solution, e.g. "
+                "{'energy': '0.5*omega**2 + g/L*(1-cos(theta))'}."
+            ),
+        ] = None,
+        method: Annotated[
+            str,
+            Field(
+                description="'rk45' (default), 'dop853' (accurate), 'lsoda'/'radau'/'bdf' "
+                "(stiff), 'rk23', or 'rk4' (fixed step)."
+            ),
+        ] = "rk45",
+        substeps: Annotated[
+            int, Field(ge=1, le=200, description="rk4: internal steps between rows.")
+        ] = 4,
+    ) -> Any:
+        """Integrate ordinary differential equations into a dataset (t, each state, derived).
+
+        For dynamics that are not a formula of t: a pendulum, predator-prey, Lorenz, an orbit, a
+        driven oscillator. Plot the result, and animate it with add_plot(reveal=..., head=true)
+        bound to time. Equations use the same safe expression language as everywhere.
+
+        Example: simulate("lorenz", {"x": "s*(y-x)", "y": "x*(r-z)-y", "z": "x*y-b*z"},
+        {"x": 1, "y": 1, "z": 1}, t_end=40, parameters={"s": 10, "r": 28, "b": 2.667}).
+        """
+        return run(
+            box.simulate, name, equations, initial, t_end, t_start, steps, parameters, derived,
+            method, substeps,
+        )  # fmt: skip
+
+    @tool(read_only=True)
+    def export_script(
+        figure_id: FigureId,
+        kind: Annotated[
+            str,
+            Field(
+                description="'figure' (the figure as it is now, saved to PNG), 'interactive' "
+                "(controls become real sliders/toggles/menus/buttons that redraw it) or "
+                "'animation' (the last animate call as a FuncAnimation saved to GIF)."
+            ),
+        ] = "figure",
+    ) -> Any:
+        """Return the Python script that rebuilds this figure, to give the user to keep and edit.
+
+        Generated from the calls that built the figure; datasets are rebuilt from how they were
+        made (expressions -> numpy, simulate -> solve_ivp). The script is returned as text in the
+        reply (nothing is written to disk). Run it with python; it needs only glplot.
+        """
+        return run(box.export_script, figure_id, kind)
+
+    # -- knowledge: learn the library on demand ------------------------------------
+
+    @tool(read_only=True)
+    def get_guide(
+        topic: Annotated[
+            Optional[str],
+            Field(
+                description="Topic id, e.g. 'quickstart', 'three-d', 'animation', "
+                "'mcp-plot-kinds'. "
+                "Omit to list every topic."
+            ),
+        ] = None,
+    ) -> Any:
+        """Read GLPlot's documentation: a guide topic as Markdown, or the list of topics.
+
+        Topics starting `mcp-` explain these tools; the others cover the Python API (plot types,
+        axes and styling, 3-D, animation, controls, performance, differences from matplotlib,
+        troubleshooting). Read the relevant one before writing a script or choosing a plot kind.
+        """
+        return run(box.get_guide, topic)
+
+    @tool(read_only=True)
+    def search_api(
+        query: Annotated[
+            str,
+            Field(
+                description="What you want to do or a name: 'heatmap', 'second y axis', 'error "
+                "bars', 'save gif'. Empty lists every category."
+            ),
+        ] = "",
+        limit: Annotated[int, Field(ge=1, le=40, description="Most matches to return.")] = 8,
+        category: Annotated[
+            Optional[str],
+            Field(
+                description="Only this category id (figure, plot2d, fields, plot3d, axes, "
+                "annotate, "
+                "color, controls, output, signal, perf, interaction, compat)."
+            ),
+        ] = None,
+    ) -> Any:
+        """Find GLPlot Python functions by name or by what they do (about 250 functions).
+
+        Returns each match's call shape and one-line summary. Follow up with get_api_doc for the
+        full docstring. Useful before writing a script, or to answer "can GLPlot do X?".
+        """
+        return run(box.search_api, query, limit, category)
+
+    @tool(read_only=True)
+    def get_api_doc(
+        name: Annotated[
+            str,
+            Field(
+                description="Function or class name, e.g. 'hist2d', 'plt.twinx', 'FuncAnimation'."
+            ),
+        ],
+    ) -> Any:
+        """The exact signature and full docstring of one GLPlot function (read from the code).
+
+        An unknown name returns near-miss suggestions.
+        """
+        return run(box.get_api_doc, name)
+
+    @tool(read_only=True)
+    def get_example(
+        name: Annotated[
+            Optional[str],
+            Field(description="Example id, e.g. 'line_plot', 'surface_3d'. Omit to list them."),
+        ] = None,
+    ) -> Any:
+        """A complete runnable Python script using GLPlot, or the list of examples.
+
+        Every example ends in plt.savefig, so it runs with no display. Use one as the starting
+        point for a script rather than writing it from memory.
+        """
+        return run(box.get_example, name)
+
+    @tool(read_only=True)
+    def server_info() -> Any:
+        """Versions, what this server may do (file roots, limits), and what is open now."""
+        return run(box.server_info)
 
     # -- resources & prompts ------------------------------------------------------
+    def serve(template: str, **params: str) -> Any:
+        """Read the catalog resource ``template``; its ``McpError`` is what the client sees."""
+        definition = next(d for d in catalog.RESOURCES if d.uri == template)
+        try:
+            return definition.read(box, params)
+        except McpError as exc:
+            raise ToolError(str(exc)) from exc
 
-    @server.resource(
-        "glplot://guide",
-        name="guide",
-        description="How to plot with GLPlot: workflow, per-kind arguments, expression functions.",
-        mime_type="text/markdown",
-    )
+    def resource(template: str) -> Any:
+        definition = next(d for d in catalog.RESOURCES if d.uri == template)
+        return server.resource(
+            definition.uri,
+            name=definition.name,
+            description=definition.description,
+            mime_type=definition.mime_type,
+        )
+
+    @resource("glplot://guide")
     def guide() -> str:
-        return build_guide(box.sandbox, box.limits)
+        return serve("glplot://guide")
 
-    @server.resource(
-        "glplot://figures/{figure_id}/image",
-        name="figure-image",
-        description="The current rendering of an open figure, as a PNG.",
-        mime_type="image/png",
-    )
+    @resource("glplot://guide/{topic}")
+    def guide_topic(topic: str) -> str:
+        return serve("glplot://guide/{topic}", topic=topic)
+
+    @resource("glplot://api")
+    def api_reference() -> str:
+        return serve("glplot://api")
+
+    @resource("glplot://api/{name}")
+    def api_doc(name: str) -> str:
+        return serve("glplot://api/{name}", name=name)
+
+    @resource("glplot://examples")
+    def examples_index() -> str:
+        return serve("glplot://examples")
+
+    @resource("glplot://examples/{name}")
+    def example_code(name: str) -> str:
+        return serve("glplot://examples/{name}", name=name)
+
+    @resource("glplot://llms.txt")
+    def llms_txt() -> str:
+        return serve("glplot://llms.txt")
+
+    @resource("glplot://llms-full.txt")
+    def llms_full_txt() -> str:
+        return serve("glplot://llms-full.txt")
+
+    @resource("glplot://capabilities")
+    def capabilities() -> str:
+        return serve("glplot://capabilities")
+
+    @resource("glplot://recipes")
+    def recipes_resource() -> str:
+        return serve("glplot://recipes")
+
+    @resource("glplot://styles")
+    def styles_resource() -> str:
+        return serve("glplot://styles")
+
+    @resource("glplot://figures/{figure_id}/image")
     def figure_image(figure_id: str) -> bytes:
-        try:
-            return box.render_png(figure_id)
-        except McpError as exc:
-            raise ToolError(str(exc)) from exc
+        return serve("glplot://figures/{figure_id}/image", figure_id=figure_id)
 
-    @server.resource(
-        "glplot://datasets/{name}",
-        name="dataset",
-        description="A dataset's columns, statistics and first rows, as JSON.",
-        mime_type="application/json",
-    )
+    @resource("glplot://datasets/{name}")
     def dataset_resource(name: str) -> str:
-        try:
-            return json.dumps(box.describe_dataset(name, 10).data)
-        except McpError as exc:
-            raise ToolError(str(exc)) from exc
+        return serve("glplot://datasets/{name}", name=name)
 
-    @server.prompt(
-        name="plot_data_file",
-        description="Plot a data file and iterate until the figure is publication-ready.",
-    )
+    def prompt(name: str) -> Any:
+        definition = catalog.find_prompt(name)
+        return server.prompt(name=definition.name, description=definition.description)
+
+    @prompt("plot_data_file")
     def plot_data_file(path: str, goal: str = "") -> str:
-        extra = f" The goal: {goal}" if goal else ""
-        return (
-            f"Load {path!r} with load_dataset, look at its columns with describe_dataset, then "
-            "choose the plot that best shows the data. Build the figure with create_figure and "
-            "add_plot, add a title, axis labels with units and a legend where useful, and call "
-            "render_figure to check it. Fix anything that looks wrong (overlapping labels, "
-            "unreadable scale, missing legend) before you answer." + extra
+        return catalog.find_prompt("plot_data_file").build(path=path, goal=goal)
+
+    @prompt("explore_function")
+    def explore_function(expression: str, x_min: float = -10.0, x_max: float = 10.0) -> str:
+        return catalog.find_prompt("explore_function").build(
+            expression=expression, x_min=x_min, x_max=x_max
         )
 
-    @server.prompt(
-        name="explore_function",
-        description="Plot a formula over a range and describe its behaviour.",
-    )
-    def explore_function(expression: str, x_min: float = -10.0, x_max: float = 10.0) -> str:
-        return (
-            f"Plot y = {expression} for x from {x_min} to {x_max} using create_figure and "
-            "add_function, label the axes, render_figure to look at it, then describe the "
-            "shape: zeros, extrema, asymptotes and symmetry. If the default range hides "
-            "something interesting, re-plot with a better one."
+    @prompt("quick_look")
+    def quick_look(dataset: str, question: str = "") -> str:
+        return catalog.find_prompt("quick_look").build(dataset=dataset, question=question)
+
+    @prompt("fix_my_figure")
+    def fix_my_figure(figure_id: str, problem: str = "") -> str:
+        return catalog.find_prompt("fix_my_figure").build(figure_id=figure_id, problem=problem)
+
+    @prompt("publication_figure")
+    def publication_figure(figure_id: str, venue: str = "a scientific journal") -> str:
+        return catalog.find_prompt("publication_figure").build(figure_id=figure_id, venue=venue)
+
+    @prompt("compare_series")
+    def compare_series(dataset: str, columns: str = "") -> str:
+        return catalog.find_prompt("compare_series").build(dataset=dataset, columns=columns)
+
+    @prompt("fit_and_plot")
+    def fit_and_plot(dataset: str, x: str, y: str, model: str = "") -> str:
+        return catalog.find_prompt("fit_and_plot").build(dataset=dataset, x=x, y=y, model=model)
+
+    @prompt("animate_this")
+    def animate_this(description: str, figure_id: str = "", output: str = "") -> str:
+        return catalog.find_prompt("animate_this").build(
+            description=description, figure_id=figure_id, output=output
         )
+
+    @prompt("interactive_figure")
+    def interactive_figure(figure_id: str, parameters: str = "") -> str:
+        return catalog.find_prompt("interactive_figure").build(
+            figure_id=figure_id, parameters=parameters
+        )
+
+    @prompt("python_script_for")
+    def python_script_for(task: str) -> str:
+        return catalog.find_prompt("python_script_for").build(task=task)
 
     return server
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="glplot-mcp",
-        description="Run GLPlot as a Model Context Protocol server so an LLM can make plots.",
-    )
-    parser.add_argument(
-        "--root",
-        action="append",
-        default=[],
-        metavar="DIR",
-        help="Directory the model may read data from and save images into (repeatable). "
-        "Default: none, which disables file access.",
-    )
-    parser.add_argument(
-        "--transport",
-        choices=("stdio", "streamable-http"),
-        default="stdio",
-        help="stdio (default) for a client that launches this process; streamable-http to serve.",
-    )
-    parser.add_argument(
-        "--host", default="127.0.0.1", help="HTTP bind address (default: localhost)."
-    )
-    parser.add_argument("--port", type=int, default=8765, help="HTTP port (default: 8765).")
-    parser.add_argument("--max-figures", type=int, default=Limits.max_figures)
-    parser.add_argument("--version", action="store_true", help="Print the SDK and GLPlot versions.")
-    return parser
-
-
-def _versions() -> str:
-    """``mcp X, glplot Y``; GLPlot may be run from a source tree with no installed metadata."""
-    import importlib.metadata as metadata
-
-    def version(distribution: str, fallback: str = "unknown") -> str:
-        try:
-            return metadata.version(distribution)
-        except metadata.PackageNotFoundError:
-            return fallback
-
-    import glplot
-
-    return f"mcp {version('mcp')}, glplot {version('glplot', glplot.__version__)}"
-
-
-def _warm_up() -> None:
-    """Render one throwaway figure before serving.
-
-    The first render in a fresh environment builds matplotlib's font cache, which can take
-    many seconds -- long enough that a client sees its first real tool call hang. Paying for
-    it here, before the client has been told the server is ready, moves that wait to startup,
-    and a broken matplotlib shows up in the log now rather than as a failed first plot. A
-    failure is logged, not fatal: the tools report their own errors.
-    """
-    toolbox = Toolbox()
-    try:
-        figure = toolbox.create_figure(width=300, height=200).data["figure_id"]
-        toolbox.add_plot(figure, "line", y=[0.0, 1.0])
-        toolbox.set_axes(figure, title="warm-up")
-        toolbox.render_figure(figure)
-    except Exception as exc:  # noqa: BLE001 - startup must survive any renderer problem
-        logger.warning("render warm-up failed (%s); the first plot may be slow or fail", exc)
-    finally:
-        toolbox.close_all()
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Entry point for ``python -m glplot.mcp`` and the ``glplot-mcp`` script."""
-    args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="glplot-mcp: %(message)s")
-    try:
-        _load_sdk()
-    except SdkUnavailable as exc:
-        print(f"glplot-mcp: {exc}", file=sys.stderr)
-        return 2
-    if args.version:
-        print(_versions(), file=sys.stderr)
-        return 0
-    try:
-        sandbox = FileSandbox(list(args.root))
-    except ValueError as exc:
-        print(f"glplot-mcp: {exc}", file=sys.stderr)
-        return 2
-    if args.max_figures < 1:
-        print("glplot-mcp: --max-figures must be at least 1", file=sys.stderr)
-        return 2
-    limits = Limits(max_figures=args.max_figures)
-    _warm_up()
-    server = build_server(sandbox=sandbox, limits=limits)
-    roots = ", ".join(str(r) for r in sandbox.roots) or "none (file access disabled)"
-    logger.info("serving over %s; file roots: %s", args.transport, roots)
-    if args.transport == "stdio":
-        server.run()
-    else:
-        if args.host not in ("127.0.0.1", "localhost", "::1"):
-            logger.warning(
-                "binding to %s exposes figure creation and file access to the network "
-                "with no authentication",
-                args.host,
-            )
-        try:  # mcp 2.x takes the bind address here
-            server.run(transport="streamable-http", host=args.host, port=args.port)
-        except TypeError:  # mcp 1.x keeps it in the settings
-            server.settings.host = args.host
-            server.settings.port = args.port
-            server.run(transport="streamable-http")
-    return 0
+    """Entry point kept for ``from glplot.mcp.server import main``; the CLI lives in :mod:`.cli`."""
+    from .cli import main as cli_main
+
+    return cli_main(argv)

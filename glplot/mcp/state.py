@@ -61,6 +61,29 @@ class McpError(Exception):
 
 
 @dataclass(frozen=True)
+class AnimationLimits:
+    """How much work one animation may ask for."""
+
+    #: Frames in one animation.
+    max_frames: int = 600
+    #: ``frames * width * height`` of the rendered images, in pixels (bounds memory and time).
+    max_pixels: int = 400_000_000
+    #: Seconds the frame loop may run before it gives up (the first frames are timed and the
+    #: whole animation is refused up front when the projection is far over this).
+    max_seconds: float = 120.0
+    #: Stages in one timeline.
+    max_stages: int = 64
+    #: Bindings per figure or animation.
+    max_bindings: int = 64
+    #: Controls per figure.
+    max_controls: int = 32
+    #: Recorded operations per figure (what ``update_artist`` and animations replay).
+    max_operations: int = 400
+    #: Right-hand-side evaluations one ``simulate`` call may make.
+    max_simulation_evals: int = 600_000
+
+
+@dataclass(frozen=True)
 class Limits:
     """How big things may get. Frozen: a server's limits do not change under it."""
 
@@ -69,6 +92,9 @@ class Limits:
     max_inline_values: int = 200_000
     #: Rows in a dataset, whether loaded from a file or built from expressions.
     max_dataset_rows: int = 5_000_000
+    #: Rows ``analyze_dataset`` will work on (fits and filters run to completion, with no way to
+    #: interrupt them): a bigger table is resampled first.
+    max_analysis_rows: int = 1_000_000
     #: Elements any array built by an expression constructor (``linspace``, ``zeros``...)
     #: may have, and cells in a 2-D field (``resolution ** 2``).
     max_array_elements: int = 4_000_000
@@ -87,6 +113,8 @@ class Limits:
     #: Longest expression, in characters. The evaluator has its own (larger) cap; this is
     #: the one a model is told about.
     max_expression_chars: int = 2000
+    #: Bounds on animations, controls and simulations.
+    animation: AnimationLimits = AnimationLimits()
 
 
 #: The limits a server uses unless told otherwise. ``Limits`` is frozen, so sharing one
@@ -201,14 +229,25 @@ class FileSandbox:
             )
         return resolved
 
-    def write_path(self, path: str, *, overwrite: bool = False) -> Path:
-        """Resolve ``path`` for writing an image; refuses to replace a file unless asked."""
+    def write_path(
+        self,
+        path: str,
+        *,
+        overwrite: bool = False,
+        extensions: Optional[Sequence[str]] = None,
+    ) -> Path:
+        """Resolve ``path`` for writing an image; refuses to replace a file unless asked.
+
+        ``extensions`` widens what may be written (an animation adds ``.gif`` and ``.mp4``);
+        by default only :attr:`WRITE_EXTENSIONS`.
+        """
         resolved = self._locate(path)
         extension = resolved.suffix.lower()
-        if extension not in self.WRITE_EXTENSIONS:
+        allowed = tuple(self.WRITE_EXTENSIONS) + tuple(extensions or ())
+        if extension not in allowed:
             raise McpError(
                 f"Cannot save a {extension or 'extensionless'!r} file. "
-                f"Use one of: {', '.join(self.WRITE_EXTENSIONS)}."
+                f"Use one of: {', '.join(allowed)}."
             )
         if resolved.is_dir():
             raise McpError(f"{path!r} is a directory; give a file name such as 'figure.png'.")
@@ -340,13 +379,18 @@ class DatasetStore:
         columns = []
         for column in table.columns:
             stats = column.stats()
-            columns.append(
-                {
-                    "name": column.name,
-                    **{key: _finite_or_none(value) for key, value in stats.items()},
-                    "nan_count": int(np.isnan(column.values).sum()),
-                }
-            )
+            entry: Dict[str, Any] = {
+                "name": column.name,
+                **{key: _finite_or_none(value) for key, value in stats.items()},
+                "nan_count": int(np.isnan(column.values).sum()),
+            }
+            if column.name in table.categories:
+                entry["kind"] = "category"
+                entry["labels"] = list(table.categories[column.name])
+            elif column.name in table.date_columns:
+                entry["kind"] = "date"
+                entry["unit"] = table.date_columns[column.name]
+            columns.append(entry)
         head = [
             [_finite_or_none(column.values[i]) for column in table.columns]
             for i in range(min(rows, table.n_rows()))
@@ -400,6 +444,14 @@ def guarded_constructors(limit: int) -> Dict[str, Callable[..., Any]]:
         _count(num, "linspace()", limit)
         return np.linspace(start, stop, int(num), *args, **kwargs)
 
+    def logspace(start, stop, num=50, *args, **kwargs):
+        _count(num, "logspace()", limit)
+        return np.logspace(start, stop, int(num), *args, **kwargs)
+
+    def geomspace(start, stop, num=50, *args, **kwargs):
+        _count(num, "geomspace()", limit)
+        return np.geomspace(start, stop, int(num), *args, **kwargs)
+
     def arange(start, stop=None, step=1.0, *args, **kwargs):
         low, high = (0.0, start) if stop is None else (start, stop)
         if float(step) == 0.0:
@@ -426,6 +478,8 @@ def guarded_constructors(limit: int) -> Dict[str, Callable[..., Any]]:
 
     return {
         "linspace": linspace,
+        "logspace": logspace,
+        "geomspace": geomspace,
         "arange": arange,
         "zeros": zeros,
         "ones": ones,

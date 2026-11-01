@@ -1,0 +1,48 @@
+# GLPlot
+
+> GLPlot is a Python plotting library with a matplotlib-like API that renders on the GPU (OpenGL): millions of points stay interactive, and a figure can be saved headless with plt.savefig(). It ships a built-in MCP server so a language model can build plots and see them.
+
+Install: `pip install glplot` (add `"glplot[mcp]"` for the official MCP SDK). Import: `import glplot.pyplot as plt`. In unattended scripts call `plt.savefig(...)`, never `plt.show()`.
+
+## Read this documentation from the install itself
+
+- `python -m glplot.llm guide [topic]` -- the guides below, as Markdown
+- `python -m glplot.llm search "what you want"` / `describe <function>` -- the API, introspected
+- `python -m glplot.llm example [name]` -- runnable scripts
+- `python -m glplot.llm llms-full` -- this whole reference as one document
+- `python -m glplot.llm agent-instructions` -- a note for CLAUDE.md / AGENTS.md; `skill --write DIR` writes a Claude Code skill
+- `python -m glplot.mcp` -- an MCP server (tools: create_figure, add_plot, render_figure, get_guide, search_api, ...)
+
+## Guides
+
+- `overview`: What GLPlot is, how a script uses it, and where to look next. Read this first.
+- `quickstart`: The smallest correct scripts for the common cases, and the habits that avoid the usual failures.
+- `choosing-a-plot`: A cheat sheet from what you want to show to the function that does it, with the full category list.
+- `axes-styling`: Limits, scales, ticks, legends, twin axes, colorbars, colormaps and the 25 style presets.
+- `three-d`: 3-D scatter, surfaces, bars, volumes and vector fields; the camera; what differs from mplot3d.
+- `animation`: FuncAnimation and ArtistAnimation, saving GIF/MP4 headless, live playback, and the rules that keep both consistent.
+- `controls`: Sliders, buttons and interact() that put widgets in a Controls panel beside the plot.
+- `performance`: What stays interactive at millions of points, density and LOD options, and why exports are slower than the window.
+- `export`: savefig options, output size, formats, and the two export paths (window versus headless).
+- `matplotlib-compat`: What carries over from matplotlib unchanged, what differs, and the names that deliberately do not exist.
+- `workstation`: `python -m glplot`, the interactive environment for editing scenes, data, styles and analysis, in case a user asks.
+- `mcp`: Run and register the MCP server (works after a plain `pip install glplot`), what its tools do, and its safety model.
+- `troubleshooting`: Symptom-to-cause list for the failures people (and agents) actually hit.
+
+## Examples
+
+- `animation_gif`: An animation saved as a GIF, with no window
+- `bars_categorical`: Categorical bars: with error bars, and grouped
+- `controls_interact`: Sliders that drive a plot (live window), and what happens without one
+- `error_bars_band`: Measurements with error bars over a model curve with an uncertainty band
+- `heatmap_contour`: A 2-D field as an image with contour lines and a colorbar
+- `histograms_density`: Histograms and 2-D density
+- `line_plot`: Line plot with several series, a legend and labelled axes
+- `log_scale_twin`: Log axes and a second y axis (a Bode plot)
+- `matplotlib_port`: Porting a matplotlib script: usually only the import changes
+- `scatter_3d`: A coloured 3-D point cloud
+- `scatter_colormap`: Scatter coloured and sized by data, with a colorbar
+- `styles_gallery`: The same plot in several style presets
+- `subplots_grid`: A 2 x 2 grid of panels, each with its own kind of plot
+- `surface_3d`: A 3-D surface with a chosen camera
+- `twin_axes`: Two y axes on one plot (twinx)

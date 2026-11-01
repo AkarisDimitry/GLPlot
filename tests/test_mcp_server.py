@@ -36,6 +36,8 @@ EXPECTED_TOOLS = {
     "load_dataset",
     "describe_dataset",
     "delete_dataset",
+    "select_rows",
+    "analyze_dataset",
     "add_plot",
     "add_function",
     "add_field",
@@ -43,12 +45,35 @@ EXPECTED_TOOLS = {
     "list_recipes",
     "add_annotation",
     "remove_artist",
+    "update_artist",
+    "add_control",
+    "set_control",
+    "bind_property",
+    "animate",
+    "simulate",
+    "export_script",
     "set_axes",
     "set_style",
     "render_figure",
     "save_figure",
+    "get_guide",
+    "search_api",
+    "get_api_doc",
+    "get_example",
+    "server_info",
 }
-READ_ONLY = {"describe_figure", "describe_dataset", "render_figure", "list_recipes"}
+READ_ONLY = {
+    "describe_figure",
+    "describe_dataset",
+    "render_figure",
+    "list_recipes",
+    "get_guide",
+    "search_api",
+    "get_api_doc",
+    "get_example",
+    "server_info",
+    "export_script",
+}
 DESTRUCTIVE = {"close_figure", "delete_dataset", "remove_artist"}
 
 
@@ -159,14 +184,19 @@ class TestRegistration:
                 prompts = await client.list_prompts()
                 return resources, templates, prompts
 
+        from glplot.mcp import catalog
+
         resources, templates, prompts = run(go())
-        assert [str(r.uri) for r in resources.resources] == ["glplot://guide"]
+        # What is served is exactly what the catalog (shared with the built-in server) lists.
+        assert sorted(str(r.uri) for r in resources.resources) == sorted(
+            d.uri for d in catalog.RESOURCES if not d.is_template
+        )
         uris = [
             str(attr(t, "uri_template", "uriTemplate"))
             for t in attr(templates, "resource_templates", "resourceTemplates")
         ]
-        assert sorted(uris) == ["glplot://datasets/{name}", "glplot://figures/{figure_id}/image"]
-        assert {p.name for p in prompts.prompts} == {"plot_data_file", "explore_function"}
+        assert sorted(uris) == sorted(d.uri for d in catalog.RESOURCES if d.is_template)
+        assert {p.name for p in prompts.prompts} == {d.name for d in catalog.PROMPTS}
 
 
 class TestCalls:
@@ -435,13 +465,24 @@ class TestEntryPoints:
         with pytest.raises(AttributeError):
             package.nonexistent  # noqa: B018
 
-    def test_a_missing_sdk_is_one_readable_line(self, monkeypatch, capsys):
+    def test_a_missing_sdk_is_not_an_error_the_builtin_server_takes_over(
+        self, monkeypatch, capsys, caplog
+    ):
+        """Used to be a one-line error. ``pip install glplot`` alone must now be enough."""
         from glplot.mcp import __main__ as entry
+        from glplot.mcp import builtin, cli
 
-        monkeypatch.setitem(sys.modules, "glplot.mcp.server", None)  # makes the import fail
-        assert entry.main() == 2
-        err = capsys.readouterr().err
-        assert 'pip install "glplot[mcp]"' in err and "Traceback" not in err
+        served = {}
+        monkeypatch.setattr(cli, "_sdk_version", lambda: None)
+        monkeypatch.setattr(cli, "_warm_up", lambda: None)
+        monkeypatch.setattr(
+            builtin, "serve_stdio", lambda server, *a, **k: served.setdefault("s", server) and 0
+        )
+        monkeypatch.setattr(sys, "argv", ["glplot-mcp"])
+        with caplog.at_level("INFO", logger="glplot.mcp"):
+            assert entry.main() == 0
+        assert isinstance(served["s"], builtin.BuiltinServer)
+        assert "built-in server" in caplog.text and "Traceback" not in capsys.readouterr().err
 
     def test_no_root_means_no_file_access_whatever_the_working_directory(
         self, monkeypatch, tmp_path

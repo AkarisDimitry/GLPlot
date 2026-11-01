@@ -12,6 +12,10 @@ The package is layered so that only one file needs the optional ``mcp`` SDK:
   no SDK installed).
 * :mod:`glplot.mcp.server` -- describes those methods to the protocol. The only importer of
   ``mcp``.
+* :mod:`glplot.mcp.builtin` -- the same server over plain stdio with no dependencies, used when the
+  SDK is not installed, so ``pip install glplot`` alone is enough.
+* :mod:`glplot.mcp.catalog` / :mod:`glplot.mcp.schema` -- the resources, prompts and tool schemas
+  both servers share.
 
 Importing this package is cheap and never imports the SDK.
 """
@@ -33,8 +37,12 @@ def __getattr__(name: str) -> Any:
         from .toolbox import Toolbox
 
         return Toolbox
-    if name in ("build_server", "main"):
+    if name == "main":
+        from . import cli
+
+        return cli.main
+    if name == "build_server":
         from . import server
 
-        return getattr(server, name)
+        return server.build_server
     raise AttributeError(f"module 'glplot.mcp' has no attribute {name!r}")

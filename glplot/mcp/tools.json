@@ -1,0 +1,2591 @@
+[
+ {
+  "name": "create_figure",
+  "description": "Create an empty figure and return its figure_id. Start here.\n\nUse rows/cols for a grid of panels; address a panel with `panel=N` in later calls.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "title": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Overall title."
+    },
+    "width": {
+     "type": "integer",
+     "default": 1000,
+     "description": "Width in pixels.",
+     "maximum": 3000,
+     "minimum": 200
+    },
+    "height": {
+     "type": "integer",
+     "default": 640,
+     "description": "Height in pixels.",
+     "maximum": 3000,
+     "minimum": 200
+    },
+    "rows": {
+     "type": "integer",
+     "default": 1,
+     "description": "Panel rows.",
+     "maximum": 6,
+     "minimum": 1
+    },
+    "cols": {
+     "type": "integer",
+     "default": 1,
+     "description": "Panel columns.",
+     "maximum": 6,
+     "minimum": 1
+    },
+    "projection": {
+     "type": "string",
+     "default": "2d",
+     "description": "'2d' or '3d' (applies to every panel)."
+    },
+    "style": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Style preset, e.g. 'journal', 'dark', 'chalk'. See glplot://guide."
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "describe_figure",
+  "description": "List open figures, or describe one: its artists and what each panel currently shows\n(axis limits, labels, legend entries). Cheaper than render_figure and returns no image.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Figure to describe; omit to list all open figures."
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "close_figure",
+  "description": "Close a figure and free its data. Datasets are kept.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    }
+   },
+   "required": [
+    "figure_id"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": true,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "create_dataset",
+  "description": "Create (or replace) a named table of equal-length numeric columns.\n\nExpressions are evaluated safely (no attribute access, no builtins) with numpy\nfunctions such as sin, exp, sqrt, linspace, arange, noise(n, scale, seed); see\nglplot://guide for the full list. Use this instead of typing out data points.\n\nExample: create_dataset(\"run\", {\"t\": \"linspace(0, 10, 500)\", \"v\": \"sin(t)*exp(-t/5)\"}).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "Dataset name: letters, digits, _ . - (no spaces)."
+    },
+    "columns": {
+     "type": "object",
+     "additionalProperties": {
+      "anyOf": [
+       {
+        "type": "array",
+        "items": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       {
+        "type": "string"
+       }
+      ]
+     },
+     "description": "Ordered map of column name -> list of numbers OR an expression string over earlier columns, e.g. {'t': 'linspace(0, 10, 500)', 'y': 'sin(t)*exp(-t/5)'}. Column names must be identifiers."
+    },
+    "base": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Start from this dataset's columns; new columns may use them."
+    }
+   },
+   "required": [
+    "name",
+    "columns"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "load_dataset",
+  "description": "Load a CSV/TSV/TXT, NPY/NPZ, JSON or image file as a dataset.\n\nThe first row is used as column names when it is a header. Text columns become categories\n(labels kept; see select_rows and analyze_dataset 'aggregate') and ISO date columns become\ndays since 1970-01-01. A 2-D .npy becomes one column per array column. Returns the\ncolumns with min/max/mean/std and the first rows.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "File inside the server's allowed directory (relative or absolute)."
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Name to give it; default: file name."
+    }
+   },
+   "required": [
+    "path"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "describe_dataset",
+  "description": "Show a dataset's columns, per-column statistics and first rows, or list all datasets.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Dataset to describe; omit to list all datasets."
+    },
+    "rows": {
+     "type": "integer",
+     "default": 5,
+     "description": "Rows of data to show.",
+     "maximum": 50,
+     "minimum": 0
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "analyze_dataset",
+  "description": "Analyse a dataset numerically and keep the result so it can be plotted. Operations: describe (report); fit (column); smooth (column); rolling (column); derivative (column); integrate (column); fft (table); peaks (table); filter (column); detrend (column); normalize (column); resample (table); histogram (table); correlate (report); aggregate (table); autocorrelation (table).\n\nA 'column' result is added to the dataset (e.g. v_fit), a 'table' result becomes a new dataset (e.g. run_fft), a 'report' only returns numbers. The reply includes a plot_hint with the add_plot call that draws it. fit supports linear, polynomial, gaussian, lorentzian, exp_decay, power_law, sigmoid, multipeak and custom expressions, and reports parameters with standard errors and R^2. Options per operation: get_guide('mcp-analysis').\n\nExamples: analyze_dataset(\"run\", \"fit\", x=\"t\", y=\"v\", options={\"model\": \"exp_decay\"}); analyze_dataset(\"signal\", \"fft\", x=\"t\", y=\"v\"); analyze_dataset(\"run\", \"smooth\", y=\"v\", options={\"window\": 31}).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "dataset": {
+     "type": "string",
+     "description": "Dataset to analyse (from create_dataset / load_dataset)."
+    },
+    "operation": {
+     "type": "string",
+     "description": "One of: describe, fit, smooth, rolling, derivative, integrate, fft, peaks, filter, detrend, normalize, resample, histogram, correlate, aggregate, autocorrelation. get_guide('mcp-analysis') lists each one's options."
+    },
+    "y": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Column to analyse. Default: the only column that is not x."
+    },
+    "x": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "x column (the abscissa). Default: the row index, i.e. unit spacing. Required by correlate."
+    },
+    "options": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": true
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Operation-specific options, e.g. {'model': 'exp_decay'} for fit, {'method': 'savgol', 'window': 31} for smooth, {'cutoff': 5} for filter. Unknown names are refused with the valid ones listed."
+    },
+    "output": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Name for the column (same-length results) or the new dataset (tables) to create. Default: <y>_<suffix> or <dataset>_<operation>."
+    }
+   },
+   "required": [
+    "dataset",
+    "operation"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "select_rows",
+  "description": "Filter, sort or thin out a dataset's rows into a new dataset (the original is kept).\n\nConditions combine: where and equals first, then sort_by, every and limit. Text columns\nkeep their labels. Fails, saying so, when no row matches. Examples:\nselect_rows(\"weather\", equals={\"city\": \"Lima\"});\nselect_rows(\"run\", where=\"v > 0\", sort_by=\"t\");\nselect_rows(\"scores\", sort_by=\"score\", descending=True, limit=10).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "dataset": {
+     "type": "string",
+     "description": "Dataset to take rows from."
+    },
+    "where": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Keep rows where this expression over the columns is true, e.g. 'temp > 10' or '(temp > 10) & (year == 2021)' (use & | ~ with parentheses, not and/or/not)."
+    },
+    "equals": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": true
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Keep rows whose column equals a value or any of a list: {'city': 'Lima'} or {'city': ['Lima', 'Oslo']} for a text (category) column, {'year': 2021} for a numeric one."
+    },
+    "sort_by": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Column to sort the kept rows by (NaN last)."
+    },
+    "descending": {
+     "type": "boolean",
+     "default": false,
+     "description": "Sort from largest to smallest."
+    },
+    "every": {
+     "anyOf": [
+      {
+       "type": "integer",
+       "minimum": 1
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Keep every n-th of the remaining rows."
+    },
+    "limit": {
+     "anyOf": [
+      {
+       "type": "integer",
+       "minimum": 1
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Keep only the first n rows (after sorting)."
+    },
+    "output": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Name of the new dataset. Default: <dataset>_rows."
+    }
+   },
+   "required": [
+    "dataset"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "delete_dataset",
+  "description": "Delete a dataset. Figures already drawn from it keep their picture.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "Dataset to delete."
+    }
+   },
+   "required": [
+    "name"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": true,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "add_plot",
+  "description": "Draw data as a line, scatter, bar, histogram, box, pie, ... and return an artist_id.\n\nEach kind needs different series; the per-kind table is in glplot://guide. Options a\nkind does not use are ignored and listed in the reply. Returns the artist_id used by\nremove_artist.\n\nExamples: add_plot(\"fig1\", \"scatter\", x=[1, 2, 3], y=[2, 4, 9], color=\"red\");\nadd_plot(\"fig1\", \"line\", dataset=\"run\", x=\"t\", y=\"v\", label=\"run\");\nadd_plot(\"fig1\", \"hist\", dataset=\"run\", y=\"v\", bins=30).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "kind": {
+     "type": "string",
+     "description": "One of: line, scatter, step, stem, bar, barh, area, errorbar, hist, box, violin, pie, hist2d, hexbin. See the table in glplot://guide."
+    },
+    "dataset": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Dataset that column-name arguments refer to."
+    },
+    "x": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "A column name (requires `dataset`) or a short list of numbers; null in a list is a gap. Prefer column names for anything over ~100 values."
+    },
+    "y": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "A column name (requires `dataset`) or a short list of numbers; null in a list is a gap. Prefer column names for anything over ~100 values."
+    },
+    "z": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Third coordinate. Required on a 3-D figure (line/scatter only)."
+    },
+    "error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "+/- size for errorbar (per point or a single number) and bar."
+    },
+    "y2": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "area: the lower edge (default 0)."
+    },
+    "columns": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "box/violin: dataset columns, one box per column."
+    },
+    "color": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Colour name ('red'), hex ('#1f77b4') or 'tab:blue'. Default: next in cycle."
+    },
+    "color_by": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "scatter: values mapped through `cmap` to colour each point."
+    },
+    "size_by": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "scatter: values mapped to marker size."
+    },
+    "cmap": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Colormap for color_by / hist2d / hexbin, e.g. 'viridis'."
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Legend text for this series."
+    },
+    "alpha": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 1,
+       "minimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Opacity 0-1."
+    },
+    "linewidth": {
+     "anyOf": [
+      {
+       "type": "number",
+       "exclusiveMinimum": 0,
+       "maximum": 50
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Line width in px."
+    },
+    "linestyle": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "'-', '--', '-.' or ':'."
+    },
+    "marker": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Marker: 'o', 's', '^', '+', 'x', ..."
+    },
+    "size": {
+     "anyOf": [
+      {
+       "type": "number",
+       "exclusiveMinimum": 0,
+       "maximum": 200
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Marker size in px (line markers, scatter)."
+    },
+    "bins": {
+     "anyOf": [
+      {
+       "type": "integer",
+       "maximum": 1000,
+       "minimum": 1
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "hist/hist2d: number of bins."
+    },
+    "width": {
+     "anyOf": [
+      {
+       "type": "number",
+       "exclusiveMinimum": 0,
+       "maximum": 10
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "bar: bar width."
+    },
+    "tick_labels": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "bar/barh: category names under the bars; pie: slice names."
+    },
+    "colorbar": {
+     "type": "boolean",
+     "default": false,
+     "description": "Add a colourbar (scatter with color_by)."
+    },
+    "panel": {
+     "type": "integer",
+     "default": 1,
+     "description": "Panel number in a multi-panel figure, 1-based, row-major. Leave at 1 for a single-panel figure.",
+     "maximum": 36,
+     "minimum": 1
+    },
+    "hatch": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "bar/barh/area/hist fill pattern: '/', 'x', '+', '.', 'o', '//' (a backslash pattern works too)."
+    },
+    "axis": {
+     "type": "string",
+     "default": "left",
+     "description": "'left' (default) or 'right': draw against a second y axis on the right (line, scatter, step, bar, area, errorbar). Label it with set_axes(y2label=..., y2lim=...)."
+    },
+    "reveal": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 1,
+       "minimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Show only the first fraction (0-1) of the points: a curve drawing itself in. Bind it to time in animate. line/scatter/step/bar/area/errorbar."
+    },
+    "trail": {
+     "anyOf": [
+      {
+       "type": "integer",
+       "minimum": 1
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Show only the last N of the revealed points: a moving tail."
+    },
+    "head": {
+     "type": "boolean",
+     "default": false,
+     "description": "Put a dot on the last shown point (line/scatter/step): the 'head'."
+    }
+   },
+   "required": [
+    "figure_id",
+    "kind"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "add_function",
+  "description": "Plot y = expression(x) over [x_min, x_max] in one call, without making a dataset.\n\nThe quickest way to draw a formula or to overlay several (call it once per curve).\n\nExample: add_function(\"fig1\", \"sin(a*x)/x\", x_min=-10, x_max=10, parameters={\"a\": 2}).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "expression": {
+     "type": "string",
+     "description": "y as a function of x, e.g. 'sin(a*x)/x'. Parameters go in `parameters`."
+    },
+    "x_min": {
+     "type": "number",
+     "description": "Left end of the x range."
+    },
+    "x_max": {
+     "type": "number",
+     "description": "Right end of the x range (> x_min)."
+    },
+    "samples": {
+     "type": "integer",
+     "default": 500,
+     "description": "Sample count.",
+     "maximum": 100000,
+     "minimum": 2
+    },
+    "parameters": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": {
+        "type": "number"
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Named constants usable in the expression, e.g. {'a': 2}."
+    },
+    "kind": {
+     "type": "string",
+     "default": "line",
+     "description": "'line', 'area', 'scatter' or 'step'."
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Legend text. Default: the expression itself."
+    },
+    "color": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Colour name ('red'), hex ('#1f77b4') or 'tab:blue'. Default: next in cycle."
+    },
+    "alpha": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 1,
+       "minimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Opacity 0-1."
+    },
+    "linewidth": {
+     "anyOf": [
+      {
+       "type": "number",
+       "exclusiveMinimum": 0,
+       "maximum": 50
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Line width in px."
+    },
+    "linestyle": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "'-', '--', '-.' or ':'."
+    },
+    "panel": {
+     "type": "integer",
+     "default": 1,
+     "description": "Panel number in a multi-panel figure, 1-based, row-major. Leave at 1 for a single-panel figure.",
+     "maximum": 36,
+     "minimum": 1
+    }
+   },
+   "required": [
+    "figure_id",
+    "expression",
+    "x_min",
+    "x_max"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "add_field",
+  "description": "Draw a 2-D scalar field z(x, y) as an image, contours, or a 3-D surface.\n\nGive exactly one source: `expression`, `matrix` or `file`.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "kind": {
+     "type": "string",
+     "default": "image",
+     "description": "One of: image, contour, contourf, pcolormesh, surface, wireframe (surface/wireframe need a 3-D figure)."
+    },
+    "expression": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "z in terms of x and y, e.g. 'sin(x)*cos(y)'."
+    },
+    "matrix": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "array",
+        "items": {
+         "type": "number"
+        }
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Small inline grid, rows of numbers (row 0 = lowest y)."
+    },
+    "file": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "A 2-D .npy file or an image file in the allowed directory."
+    },
+    "x_range": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "number"
+       },
+       "maxItems": 2,
+       "minItems": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "[x_min, x_max]. Default [0, 1]."
+    },
+    "y_range": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "number"
+       },
+       "maxItems": 2,
+       "minItems": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "[y_min, y_max]. Default [0, 1]."
+    },
+    "resolution": {
+     "anyOf": [
+      {
+       "type": "integer",
+       "maximum": 2000,
+       "minimum": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Cells per side for `expression` (default 200; 80 for surfaces)."
+    },
+    "parameters": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": {
+        "type": "number"
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Named constants for the expression."
+    },
+    "cmap": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Colormap, e.g. 'viridis'."
+    },
+    "levels": {
+     "anyOf": [
+      {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "contour/contourf: number of levels."
+    },
+    "vmin": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Value mapped to the low end of the colormap."
+    },
+    "vmax": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Value mapped to the high end of the colormap."
+    },
+    "alpha": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 1,
+       "minimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Opacity 0-1."
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Legend text."
+    },
+    "colorbar": {
+     "type": "boolean",
+     "default": false,
+     "description": "Add a colourbar."
+    },
+    "panel": {
+     "type": "integer",
+     "default": 1,
+     "description": "Panel number in a multi-panel figure, 1-based, row-major. Leave at 1 for a single-panel figure.",
+     "maximum": 36,
+     "minimum": 1
+    }
+   },
+   "required": [
+    "figure_id"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "list_recipes",
+  "description": "List the ready-made recipes: what each draws, the columns (slots) it reads, its look.\n\nA recipe is a plot kind *and* the look it was designed in (palette, colormap, page,\n3-D camera), so it is the quickest route to a figure that already looks good.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "category": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Only this category: Lines, Scatter, Density, Bars, Fields or 3D."
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "add_recipe",
+  "description": "Draw a ready-made recipe (plot kind + look) from a dataset, or from its sample data.\n\nAxis names come from the column names, the page and colours from the look. Returns an\nartist_id (for remove_artist) and the columns it used. A 3-D recipe needs a figure\ncreated with projection='3d'. Add titles, limits and a legend with set_axes afterwards.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "recipe": {
+     "type": "string",
+     "description": "Recipe key from list_recipes, e.g. 'signal_trace', 'starfield', 'surface3d'."
+    },
+    "dataset": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Dataset to draw from (create_dataset / load_dataset). Omit with sample=true."
+    },
+    "columns": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Slot -> column overrides, e.g. {'y': 'signal', 'c': 'age'}. Columns are guessed from their names; use '(index)' for the row number and null to empty a slot. Only what you want to change."
+    },
+    "sample": {
+     "type": "boolean",
+     "default": false,
+     "description": "Use the recipe's own example table instead of a dataset (it is added as a dataset)."
+    },
+    "look": {
+     "type": "string",
+     "default": "recipe",
+     "description": "'recipe' (its own page and palette, default), 'keep' (the figure's current look) or a style key such as 'journal' or 'dark'."
+    },
+    "title": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Panel title. Default: none."
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Legend text for this series. Omit and it stays out of the legend."
+    },
+    "panel": {
+     "type": "integer",
+     "default": 1,
+     "description": "Panel number in a multi-panel figure, 1-based, row-major. Leave at 1 for a single-panel figure.",
+     "maximum": 36,
+     "minimum": 1
+    }
+   },
+   "required": [
+    "figure_id",
+    "recipe"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "add_annotation",
+  "description": "Add a text note, a horizontal reference line (at y) or a vertical one (at x). 2-D only.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "kind": {
+     "type": "string",
+     "description": "One of: text, hline, vline."
+    },
+    "x": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "text position / vline position."
+    },
+    "y": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "text position / hline position."
+    },
+    "text": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Text for kind='text'."
+    },
+    "color": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Colour name ('red'), hex ('#1f77b4') or 'tab:blue'. Default: next in cycle."
+    },
+    "linestyle": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Line kinds: '-', '--', '-.' or ':'."
+    },
+    "linewidth": {
+     "anyOf": [
+      {
+       "type": "number",
+       "exclusiveMinimum": 0,
+       "maximum": 50
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Line width in px."
+    },
+    "fontsize": {
+     "anyOf": [
+      {
+       "type": "number",
+       "exclusiveMinimum": 0,
+       "maximum": 200
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Text size in px."
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Legend text for a line."
+    },
+    "panel": {
+     "type": "integer",
+     "default": 1,
+     "description": "Panel number in a multi-panel figure, 1-based, row-major. Leave at 1 for a single-panel figure.",
+     "maximum": 36,
+     "minimum": 1
+    }
+   },
+   "required": [
+    "figure_id",
+    "kind"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "remove_artist",
+  "description": "Remove what one add_* call drew (or everything). Use after render_figure shows a mistake.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "artist_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Artist to remove, e.g. 'a2'. Omit to remove everything."
+    }
+   },
+   "required": [
+    "figure_id"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": true,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "set_axes",
+  "description": "Set title, axis labels, limits, scales, grid, legend and (3-D) camera on one panel.\n\nPass only what you want to change. Always label axes with units.\n\nExample: set_axes(\"fig1\", title=\"Decay\", xlabel=\"t (s)\", ylabel=\"signal (V)\", yscale=\"log\",\nlegend=True).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "panel": {
+     "type": "integer",
+     "default": 1,
+     "description": "Panel number in a multi-panel figure, 1-based, row-major. Leave at 1 for a single-panel figure.",
+     "maximum": 36,
+     "minimum": 1
+    },
+    "title": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Panel title."
+    },
+    "xlabel": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "x-axis label; include units."
+    },
+    "ylabel": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "y-axis label; include units."
+    },
+    "zlabel": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "z-axis label (3-D only)."
+    },
+    "xlim": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "number"
+       },
+       "maxItems": 2,
+       "minItems": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "[low, high]."
+    },
+    "ylim": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "number"
+       },
+       "maxItems": 2,
+       "minItems": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "[low, high]."
+    },
+    "zlim": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "number"
+       },
+       "maxItems": 2,
+       "minItems": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "[low, high], 3-D only."
+    },
+    "xscale": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "'linear', 'log', 'symlog', 'logit'. Single-panel figures only."
+    },
+    "yscale": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "'linear', 'log', 'symlog', 'logit'. Single-panel figures only."
+    },
+    "grid": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Show or hide the grid."
+    },
+    "legend": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "True to show a legend of labelled series."
+    },
+    "equal_aspect": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Same units per pixel on x and y."
+    },
+    "hide_axes": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "True to hide the axes (images, pies)."
+    },
+    "elev": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 90,
+       "minimum": -90
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "3-D camera elevation, degrees."
+    },
+    "azim": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 360,
+       "minimum": -360
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "3-D camera azimuth, degrees."
+    },
+    "y2label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Label of the right-hand y axis (after add_plot(axis='right'))."
+    },
+    "y2lim": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "number"
+       },
+       "maxItems": 2,
+       "minItems": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "[low, high] of the right-hand y axis."
+    },
+    "y2scale": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Scale of the right-hand y axis: 'linear', 'log'..."
+    }
+   },
+   "required": [
+    "figure_id"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "set_style",
+  "description": "Apply a style preset (background, palette, line width, grid) to the whole figure.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "preset": {
+     "type": "string",
+     "description": "Preset key, e.g. 'journal', 'dark'."
+    }
+   },
+   "required": [
+    "figure_id",
+    "preset"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "render_figure",
+  "description": "Render the figure and return it as an image plus a text summary of each panel's axes.\n\nLook at the image and the summary (axis limits, labels, legend) before telling the\nuser it is done; fix problems with set_axes / remove_artist / add_*.\n\nThe reply also reviews the figure and lists `issues` it can prove (missing axis labels or\ntitle, an empty panel, overlapping tick labels, points a log axis cannot draw, data cut off\nby the limits...), each with a severity and the call that fixes it. An empty list means\nnothing was found.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "scale": {
+     "type": "number",
+     "default": 1.0,
+     "description": "Size multiplier.",
+     "maximum": 3.0,
+     "minimum": 0.25
+    },
+    "params": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": true
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Control values to render at, e.g. {'amp': 2, 'mode': 'cos'} (see add_control). The figure itself keeps its own values."
+    }
+   },
+   "required": [
+    "figure_id"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "save_figure",
+  "description": "Save the figure to a file. Refuses to overwrite unless overwrite=true.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "path": {
+     "type": "string",
+     "description": "Output file in the allowed directory; format from extension (.png .svg .pdf .jpg)."
+    },
+    "scale": {
+     "type": "number",
+     "default": 1.0,
+     "description": "Resolution multiplier (PNG/JPG).",
+     "maximum": 4.0,
+     "minimum": 0.25
+    },
+    "transparent": {
+     "type": "boolean",
+     "default": false,
+     "description": "Transparent background."
+    },
+    "overwrite": {
+     "type": "boolean",
+     "default": false,
+     "description": "Replace an existing file."
+    },
+    "params": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": true
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Control values to render at, e.g. {'amp': 2, 'mode': 'cos'} (see add_control). The figure itself keeps its own values."
+    }
+   },
+   "required": [
+    "figure_id",
+    "path"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "update_artist",
+  "description": "Change something already drawn without removing it: colour, width, columns, label...\n\nThe artist keeps its id and its place in the stacking order. `describe_figure` lists the\nartists; the reply shows the recipe (the arguments now in force).\n\nExamples: update_artist(\"fig1\", \"a1\", {\"color\": \"tab:green\", \"linewidth\": 3});\nupdate_artist(\"fig1\", \"a2\", {\"y\": \"v_fit\"});\nupdate_artist(\"fig1\", \"a1\", {\"parameters.a\": 4}).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "artist_id": {
+     "type": "string",
+     "description": "Artist to change, e.g. 'a2'."
+    },
+    "changes": {
+     "type": "object",
+     "additionalProperties": true,
+     "description": "Arguments of the call that drew it, with their new values: {'color': 'tab:red', 'linewidth': 3}. null puts one back to its default; 'parameters.a' reaches inside an object argument; {} redraws from the data."
+    }
+   },
+   "required": [
+    "figure_id",
+    "artist_id",
+    "changes"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "add_control",
+  "description": "Define a slider, toggle, choice or button: a named value the figure can depend on.\n\nA control does nothing until a property follows it: bind_property(figure, 'a1',\n'linewidth', 'width'). Then set_control moves it and the figure is redrawn, render_figure\n(params={...}) tries values without keeping them, animate can sweep it, and\nexport_script(kind='interactive') writes the real widgets as Python.\n\nExample: add_control(\"fig1\", \"amp\", min=0, max=5, value=1).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "name": {
+     "type": "string",
+     "description": "Identifier used in expressions (e.g. 'amp'). Not t, s, time, x, y."
+    },
+    "kind": {
+     "type": "string",
+     "default": "slider",
+     "description": "'slider' (needs min and max), 'toggle' (true/false -> 1/0), 'choice' (needs options; its value in expressions is the option's index) or 'button' (sets other controls, or resets them all)."
+    },
+    "min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Slider minimum."
+    },
+    "max": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Slider maximum."
+    },
+    "value": {
+     "default": null,
+     "description": "Starting value (slider/toggle/choice). Default: the middle."
+    },
+    "step": {
+     "anyOf": [
+      {
+       "type": "number",
+       "exclusiveMinimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Slider snap step."
+    },
+    "options": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "choice: two or more option names."
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Text shown beside it."
+    },
+    "integer": {
+     "type": "boolean",
+     "default": false,
+     "description": "Slider takes whole numbers only."
+    },
+    "log": {
+     "type": "boolean",
+     "default": false,
+     "description": "Slider spans decades (min > 0)."
+    },
+    "sets": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": true
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "button: {control: value} pairs it applies; omit to reset all."
+    }
+   },
+   "required": [
+    "figure_id",
+    "name"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "set_control",
+  "description": "Move a control (the figure is redrawn at the new value) or press a button.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "name": {
+     "type": "string",
+     "description": "Control name."
+    },
+    "value": {
+     "default": null,
+     "description": "New value (slider number, toggle true/false, choice option name). Omit for a button."
+    }
+   },
+   "required": [
+    "figure_id",
+    "name"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "bind_property",
+  "description": "Make one property follow an expression of the figure's controls (and of time).\n\nBindings apply on every redraw and in `animate`. Names in the expression are control\nnames; inside animate also t (0..1), time (s), frame, s (stage progress) and variables.\n\nExamples: bind_property(\"fig1\", \"a1\", \"parameters.amp\", \"amp\");\nbind_property(\"fig1\", \"axes\", \"title\", {\"format\": \"amp = {amp:.1f}\"}).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "target": {
+     "type": "string",
+     "description": "What to drive: an artist id ('a1'); 'axes' or 'axes:2' (panel title, xlabel, xlim, ylim, zlim, elev, azim, legend...); or 'data:<dataset>' (then `property` is a column recomputed from the others)."
+    },
+    "property": {
+     "type": "string",
+     "description": "The argument to drive: 'color', 'linewidth', 'alpha', 'size', 'reveal', 'trail', 'parameters.a' (a function's parameter), 'x_max', 'azim'..."
+    },
+    "value": {
+     "default": null,
+     "description": "A number, an expression of controls and time ('1 + 2*amp', 'sin(2*pi*t)'), a list of those ('xlim': ['0', '10*t']), {'colormap': 'viridis'|[colours], 'at': expr}, {'choose': [...], 'index': expr} or {'format': 'phase {time:.1f} s'}. null removes the binding."
+    }
+   },
+   "required": [
+    "figure_id",
+    "target",
+    "property"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "animate",
+  "description": "Animate the figure: properties follow time, in stages, and save a GIF/MP4/WebM/PNGs.\n\nYou cannot watch an animation, so the reply is a contact sheet (frames side by side) plus\nmeasured facts: variable ranges per stage and `issues` (nothing moves, the axes rescale,\nthe loop does not close, an abrupt jump). Build the figure first, pin the axes\n(set_axes xlim/ylim), then say what varies: variables (+ stages) and bindings.\nPreview with output omitted, fix, then write the file. Read get_guide('mcp-animation').\n\nExample, a wave that travels, grows, then squeezes:\nanimate(\"fig1\", output=\"wave.gif\", fps=25, variables={\"phase\": \"2*pi*t\", \"amp\": 1, \"k\": 2},\nstages=[{\"name\": \"travel\", \"duration\": 2}, {\"name\": \"grow\", \"duration\": 2,\n\"animate\": {\"amp\": [1, 3]}}, {\"name\": \"squeeze\", \"duration\": 2, \"animate\": {\"k\": [2, 5]}}],\nbindings=[{\"target\": \"a1\", \"property\": \"parameters.phase\", \"value\": \"phase\"},\n{\"target\": \"a1\", \"property\": \"parameters.amp\", \"value\": \"amp\"},\n{\"target\": \"a1\", \"property\": \"parameters.k\", \"value\": \"k\"}]).\n3-D orbit: bindings=[{\"target\": \"axes\", \"property\": \"azim\", \"value\": \"30 + 360*t\"}].",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "output": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "File to write in the allowed directory: .gif, .apng, .mp4 or .webm (those two need ffmpeg), or 'frames/f_%04d.png' for numbered images. Omit to only preview: a contact sheet of frames is always returned."
+    },
+    "frames": {
+     "anyOf": [
+      {
+       "type": "integer",
+       "maximum": 600,
+       "minimum": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Number of frames (or give duration)."
+    },
+    "duration": {
+     "anyOf": [
+      {
+       "type": "number",
+       "exclusiveMinimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Length in seconds (frames = duration*fps)."
+    },
+    "fps": {
+     "type": "number",
+     "default": 30.0,
+     "description": "Frames per second.",
+     "maximum": 120,
+     "minimum": 1
+    },
+    "loop": {
+     "type": "boolean",
+     "default": false,
+     "description": "True for a seamless loop: t runs 0..1 excluding the end, so the last frame leads into the first. Use whole periods (2*pi*t)."
+    },
+    "stages": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": true
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Consecutive stages, each {'name', 'duration' (s) or 'frames', 'ease', 'animate': {...}}. `animate` moves variables: {'amp': [1, 3]} (from, to), {'amp': 3} (to, from wherever it is), {'amp': {'from': 1, 'to': 3, 'ease': 'in_out'}} or {'k': '2 + 3*s'} (expression of s, 0..1 across the stage). A stage starts where the last ended and ends exactly on its target; afterwards the value holds. Easings: linear, in, out, in_out, smooth, smoother, sine."
+    },
+    "variables": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": true
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Named values: a NUMBER is a parameter (its starting value; stages may move it), an expression STRING is derived each frame from t, time, s, stage and the parameters: {'amp': 1, 'phase': '2*pi*t', 'w': '2*pi*f'}."
+    },
+    "bindings": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "additionalProperties": true
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "What the variables drive, [{'target', 'property', 'value'}] -- the same as bind_property (added to the figure's own bindings). value is an expression of the variables: {'target': 'a1', 'property': 'parameters.phase', 'value': 'phase'}; {'target': 'axes', 'property': 'azim', 'value': '30+360*t'}."
+    },
+    "scale": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 3.0,
+       "minimum": 0.25
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Resolution multiplier. Default: fit ~960 px."
+    },
+    "hold_start": {
+     "type": "number",
+     "default": 0.0,
+     "description": "Seconds to hold the first frame.",
+     "maximum": 30,
+     "minimum": 0
+    },
+    "hold_end": {
+     "type": "number",
+     "default": 0.0,
+     "description": "Seconds to hold the last frame.",
+     "maximum": 30,
+     "minimum": 0
+    },
+    "sheet_frames": {
+     "type": "integer",
+     "default": 8,
+     "description": "Frames in the contact sheet returned.",
+     "maximum": 16,
+     "minimum": 1
+    },
+    "frame": {
+     "anyOf": [
+      {
+       "type": "integer",
+       "minimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Render only this frame, full size (nothing is written)."
+    },
+    "overwrite": {
+     "type": "boolean",
+     "default": false,
+     "description": "Replace an existing file."
+    },
+    "repeat": {
+     "type": "integer",
+     "default": 0,
+     "description": "GIF/APNG: extra plays after the first (0=forever).",
+     "maximum": 1000,
+     "minimum": 0
+    },
+    "quality": {
+     "type": "string",
+     "default": "good",
+     "description": "mp4/webm: 'draft', 'good' or 'high'."
+    }
+   },
+   "required": [
+    "figure_id"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "simulate",
+  "description": "Integrate ordinary differential equations into a dataset (t, each state, derived).\n\nFor dynamics that are not a formula of t: a pendulum, predator-prey, Lorenz, an orbit, a\ndriven oscillator. Plot the result, and animate it with add_plot(reveal=..., head=true)\nbound to time. Equations use the same safe expression language as everywhere.\n\nExample: simulate(\"lorenz\", {\"x\": \"s*(y-x)\", \"y\": \"x*(r-z)-y\", \"z\": \"x*y-b*z\"},\n{\"x\": 1, \"y\": 1, \"z\": 1}, t_end=40, parameters={\"s\": 10, \"r\": 28, \"b\": 2.667}).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "Name of the dataset to create."
+    },
+    "equations": {
+     "type": "object",
+     "additionalProperties": {
+      "type": "string"
+     },
+     "description": "Each state's derivative as an expression of the states, t and the parameters: {'theta': 'omega', 'omega': '-g/L*sin(theta) - c*omega'}."
+    },
+    "initial": {
+     "type": "object",
+     "additionalProperties": {
+      "type": "number"
+     },
+     "description": "Starting value of every state."
+    },
+    "t_end": {
+     "type": "number",
+     "description": "Final time."
+    },
+    "t_start": {
+     "type": "number",
+     "default": 0.0,
+     "description": "Initial time."
+    },
+    "steps": {
+     "type": "integer",
+     "default": 1000,
+     "description": "Rows returned (evenly spaced in t).",
+     "maximum": 200000,
+     "minimum": 2
+    },
+    "parameters": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": {
+        "type": "number"
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Constants: {'g': 9.81, 'L': 1}."
+    },
+    "derived": {
+     "anyOf": [
+      {
+       "type": "object",
+       "additionalProperties": {
+        "type": "string"
+       }
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Extra columns computed from the solution, e.g. {'energy': '0.5*omega**2 + g/L*(1-cos(theta))'}."
+    },
+    "method": {
+     "type": "string",
+     "default": "rk45",
+     "description": "'rk45' (default), 'dop853' (accurate), 'lsoda'/'radau'/'bdf' (stiff), 'rk23', or 'rk4' (fixed step)."
+    },
+    "substeps": {
+     "type": "integer",
+     "default": 4,
+     "description": "rk4: internal steps between rows.",
+     "maximum": 200,
+     "minimum": 1
+    }
+   },
+   "required": [
+    "name",
+    "equations",
+    "initial",
+    "t_end"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "export_script",
+  "description": "Return the Python script that rebuilds this figure, to give the user to keep and edit.\n\nGenerated from the calls that built the figure; datasets are rebuilt from how they were\nmade (expressions -> numpy, simulate -> solve_ivp). The script is returned as text in the\nreply (nothing is written to disk). Run it with python; it needs only glplot.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "figure_id": {
+     "type": "string",
+     "description": "Figure id from create_figure, e.g. 'fig1'."
+    },
+    "kind": {
+     "type": "string",
+     "default": "figure",
+     "description": "'figure' (the figure as it is now, saved to PNG), 'interactive' (controls become real sliders/toggles/menus/buttons that redraw it) or 'animation' (the last animate call as a FuncAnimation saved to GIF)."
+    }
+   },
+   "required": [
+    "figure_id"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "get_guide",
+  "description": "Read GLPlot's documentation: a guide topic as Markdown, or the list of topics.\n\nTopics starting `mcp-` explain these tools; the others cover the Python API (plot types,\naxes and styling, 3-D, animation, controls, performance, differences from matplotlib,\ntroubleshooting). Read the relevant one before writing a script or choosing a plot kind.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "topic": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Topic id, e.g. 'quickstart', 'three-d', 'animation', 'mcp-plot-kinds'. Omit to list every topic."
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "search_api",
+  "description": "Find GLPlot Python functions by name or by what they do (about 250 functions).\n\nReturns each match's call shape and one-line summary. Follow up with get_api_doc for the\nfull docstring. Useful before writing a script, or to answer \"can GLPlot do X?\".",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "query": {
+     "type": "string",
+     "default": "",
+     "description": "What you want to do or a name: 'heatmap', 'second y axis', 'error bars', 'save gif'. Empty lists every category."
+    },
+    "limit": {
+     "type": "integer",
+     "default": 8,
+     "description": "Most matches to return.",
+     "maximum": 40,
+     "minimum": 1
+    },
+    "category": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Only this category id (figure, plot2d, fields, plot3d, axes, annotate, color, controls, output, signal, perf, interaction, compat)."
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "get_api_doc",
+  "description": "The exact signature and full docstring of one GLPlot function (read from the code).\n\nAn unknown name returns near-miss suggestions.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "Function or class name, e.g. 'hist2d', 'plt.twinx', 'FuncAnimation'."
+    }
+   },
+   "required": [
+    "name"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "get_example",
+  "description": "A complete runnable Python script using GLPlot, or the list of examples.\n\nEvery example ends in plt.savefig, so it runs with no display. Use one as the starting\npoint for a script rather than writing it from memory.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Example id, e.g. 'line_plot', 'surface_3d'. Omit to list them."
+    }
+   }
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "server_info",
+  "description": "Versions, what this server may do (file roots, limits), and what is open now.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": false
+  }
+ }
+]

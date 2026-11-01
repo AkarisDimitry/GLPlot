@@ -84,6 +84,7 @@ include = [
     "/LICENSE",
     "/CHANGELOG.md",
     "/CITATION.cff",
+    "/llms.txt",
     "/pyproject.toml",
 ]
 

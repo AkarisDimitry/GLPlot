@@ -37,7 +37,8 @@ package in your environment needs Matplotlib 3.10 or newer, install GLPlot in it
 environment.
 
 To let an LLM drive GLPlot through [MCP](https://modelcontextprotocol.io) (see
-[below](#use-glplot-from-an-llm-mcp)), add the optional extra:
+[below](#use-glplot-from-an-llm-mcp)) nothing more is needed: `glplot-mcp` runs a built-in stdio
+server. The optional extra adds the official SDK and the HTTP transport:
 
 ```bash
 pip install "glplot[mcp]"
@@ -481,9 +482,13 @@ plt.show()
 - **25 looks, each with its own colormap** — from journal and colour-blind-safe to aurora,
   synthwave and vintage print; the Style panel shows every preset rendered on a line plot, a
   scatter, bars, a heat map or a 3-D surface of your choice
-- **Native MCP server** — `python -m glplot.mcp` lets Claude or any MCP client build figures,
+- **Native MCP server** — `glplot-mcp` lets Claude or any MCP client build figures,
   datasets and plots and *look at the result* (every render returns an image), with no
-  arbitrary code execution and file access confined to directories you choose
+  arbitrary code execution and file access confined to directories you choose. It works after a
+  plain `pip install glplot`
+- **Documentation a model can read from the install** — `python -m glplot.llm` and the MCP tools
+  `get_guide` / `search_api` / `get_api_doc` / `get_example` serve guides, a searchable index of every
+  function and runnable examples, so an LLM learns GLPlot instead of guessing from matplotlib
 - **Numerically stable at extreme zoom** — double-precision, viewport-relative coordinate
   transforms avoid the jitter that single-precision GPU pipelines show at large offsets
 
@@ -494,25 +499,55 @@ loads data, draws, restyles, and gets every render back as an image plus a summa
 so it can check and fix its own plot. No window is opened.
 
 ```bash
-pip install "glplot[mcp]"
-claude mcp add glplot -- python -m glplot.mcp --root ~/data      # Claude Code
+pip install glplot                       # enough: a built-in stdio server needs no extra packages
+glplot-mcp config --root ~/data          # prints the settings for Claude Code, Claude Desktop, Cursor, VS Code, Codex
+glplot-mcp config --client claude-desktop --root ~/data --write   # or write them for you (keeps a .bak)
+claude mcp add glplot -- glplot-mcp --root ~/data                 # Claude Code, by hand
 ```
 
-For Claude Desktop, add to `claude_desktop_config.json`:
+For Claude Desktop, by hand, add to `claude_desktop_config.json` (use the absolute interpreter path
+`glplot-mcp config` prints if it is not on the client's `PATH`):
 
 ```json
 { "mcpServers": { "glplot": { "command": "python", "args": ["-m", "glplot.mcp", "--root", "/Users/me/data"] } } }
 ```
+
+`glplot-mcp doctor` checks the install and runs a protocol self-test. `pip install "glplot[mcp]"` adds the
+official SDK (preferred when present) and `--transport streamable-http`.
 
 `--root` sets the directories the model may read data from or save images into (repeatable);
 without it the model has no file access at all and builds data with `create_dataset`.
 Formulas run through the same restricted expression evaluator as
 the workstation, with size-capped array constructors, so the model can generate data
 (`"sin(2*pi*t) * exp(-t)"`) instead of typing it, and there is no tool that runs arbitrary code.
-Tools: `create_figure`, `create_dataset`, `load_dataset`, `add_plot` (14 kinds), `add_function`,
+Tools: `create_figure`, `create_dataset`, `load_dataset`, `analyze_dataset` (fit with parameter errors and
+R², smooth, FFT, peaks, filters, histogram, correlation... keeping the result as a plottable column or
+table), `add_plot` (14 kinds), `add_function`,
 `add_field` (image/contour/surface...), `add_recipe` (the gallery's 22 recipes: a plot kind in the
 look it was designed in, from your data or its own sample), `add_annotation`, `set_axes`,
-`set_style`, `render_figure`, `save_figure`, and a few more. Full guide: [docs/source/guide/mcp-server.rst](docs/source/guide/mcp-server.rst).
+`set_style`, `render_figure` (the image, the resolved axes, and a review listing provable problems --
+missing labels, overlapping ticks, points a log axis drops -- with the call that fixes each),
+`save_figure`, and more: `update_artist` (edit what is drawn), `simulate` (ODEs into a dataset),
+`add_control` / `bind_property` (sliders and buttons that drive properties), **`animate`** (properties follow
+time, in stages: GIF, MP4, WebM or PNG frames, with a contact sheet and measured problems) and
+`export_script` (the Python for a figure, with real widgets, or as a `FuncAnimation`).
+
+The server also teaches the model the library, so it does not have to guess: read-only tools
+`get_guide` (13 topics: the MCP workflow plus the Python API, 3-D, animation, controls, differences from
+matplotlib, troubleshooting), `search_api("second y axis")` (about 250 functions, by name or by what they
+do), `get_api_doc`, `get_example` (runnable scripts) and `server_info`; `glplot://` resources; and prompts such
+as `quick_look`, `fix_my_figure` and `python_script_for`. The same material is available without MCP:
+
+```bash
+python -m glplot.llm guide quickstart
+python -m glplot.llm search "confidence band"
+python -m glplot.llm example surface_3d
+python -m glplot.llm llms-full          # everything in one document (also: llms.txt in this repo)
+python -m glplot.llm agent-instructions >> CLAUDE.md   # tell a coding agent these docs exist (or AGENTS.md)
+```
+
+Full guides: [docs/source/guide/mcp-server.rst](docs/source/guide/mcp-server.rst) and
+[docs/source/guide/llm-docs.rst](docs/source/guide/llm-docs.rst).
 
 ## Quick Reference Recipes
 

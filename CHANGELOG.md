@@ -7,6 +7,139 @@ for public releases.
 
 ## [Unreleased]
 
+### Added
+
+- **Animation through MCP (`animate`).** A model can now make GIFs, APNGs, MP4s, WebMs and numbered PNGs of
+  any figure, 2-D or 3-D. Properties follow expressions of time (`t`, `time`, `frame`) and of **variables
+  that move in stages**: each stage starts where the last ended and ends exactly on its target, with easings
+  (`linear`, `in`, `out`, `in_out`, `smooth`, `smoother`, `sine`). Bindings drive any argument of the call that
+  drew an artist (`color`, `linewidth`, `reveal`, a function's `parameters.phase`...), axes properties (title,
+  limits, the 3-D camera `azim`/`elev`) or a dataset column recomputed every frame. The figure is rebuilt per
+  frame from a record of its construction, so every kind of artist animates the same way and the figure is
+  never touched. The reply is a **contact sheet** plus measured facts and `issues` -- nothing moves, the axes
+  rescale, the loop does not close, an abrupt jump, a huge GIF -- each with the fix. Every frame has the
+  same size (text is measured over sample frames and one crop is used); video needs `ffmpeg`, GIF/APNG need
+  nothing more than Pillow; frame count, pixels and render time are bounded and refused up front.
+- **`simulate`**: integrate ordinary differential equations written as expressions (pendulum, orbits,
+  predator-prey, Lorenz...) into a dataset with derived columns such as energy; RK45, DOP853, LSODA/Radau/BDF
+  or fixed-step RK4. Checked against closed-form solutions.
+- **`add_plot(reveal=, trail=, head=)`**: show the first fraction of a series, only its last N points, and a
+  dot on the newest -- a curve that draws itself, a moving tail -- in 2-D and 3-D.
+- **`update_artist`**: change what is already drawn (colour, width, which column, `parameters.a`...) without
+  removing it; the artist keeps its id and stacking order, and a change that cannot be drawn leaves the figure
+  exactly as it was. `describe_figure` now shows each artist's recipe.
+- **Controls: `add_control` / `set_control` / `bind_property`.** Sliders, toggles, choices and buttons that
+  drive properties; `render_figure(params=...)` / `save_figure(params=...)` try values without changing the
+  figure; a stage of `animate` can sweep a slider.
+- **`export_script`**: the Python that rebuilds a figure, from the record of its construction -- as a plain
+  figure, as an **interactive** script with real `plt.slider` / `checkbox` / `dropdown` / `button` widgets, or
+  as an **animation** (`FuncAnimation`, the timeline as numpy arrays). Datasets are rebuilt in the script
+  (expressions become numpy, `simulate` becomes `solve_ivp`). The tests execute every script and compare its
+  picture with the figure's pixel for pixel. The script is returned as text; the server writes no `.py` files.
+- **A second y axis and hatching in MCP**: `add_plot(axis="right")` with `set_axes(y2label=, y2lim=, y2scale=)`,
+  and `hatch=` on bar, barh, area and hist.
+- Guides `mcp-animation` (with eight worked recipes the test suite runs) and `mcp-interactive`; prompts
+  `animate_this` and `interactive_figure`; `server_info` reports the formats this machine can write.
+- The easing and interpolation functions `lerp`, `smoothstep`, `smootherstep`, `ease_in`, `ease_out`,
+  `ease_in_out`, `ease_sine`, `pingpong`, `ramp` and `pulse` joined the expression vocabulary (workstation too).
+- **`pip install glplot` is enough for MCP.** A dependency-free stdio MCP server (`glplot.mcp.builtin`,
+  standard library only) runs when the optional `mcp` package is absent, serving exactly the same
+  tools, resources and prompts as the SDK server; `glplot[mcp]` still adds the official SDK
+  (preferred when installed) and the HTTP transport. Tool schemas come from a shipped snapshot,
+  `glplot/mcp/tools.json`, kept in step with the SDK server by a test. Verified against the official
+  1.x and 2.x clients.
+- **`glplot-mcp` commands.** `config` prints (or `--write`s, keeping a `.bak`) the registration for Claude
+  Code, Claude Desktop, Cursor, VS Code and Codex with this interpreter's absolute path; `doctor`
+  checks the install and runs a protocol self-test; `tools` lists the tools; `--builtin` / `--sdk`
+  choose the server.
+- **Documentation a model can read from the install** (`glplot.llm`, `python -m glplot.llm`): 13
+  guide topics (overview, quickstart, choosing a plot, axes and styling, 3-D, animation, controls,
+  performance, export, matplotlib compatibility, workstation, MCP, troubleshooting), a searchable index
+  of every public function built by introspection (`search_api("second y axis")`), signatures and
+  docstrings, 15 runnable examples, `llms.txt` and `llms-full.txt`. The guides are tested against the
+  code: examples are executed, every function they name must exist, and tables are generated from the
+  live registries.
+- **`analyze_dataset` MCP tool: a model can analyse data, not just draw it.** Fifteen operations from the
+  Math Lab -- `fit` (linear, polynomial, gaussian, lorentzian, exp_decay, power_law, sigmoid, multipeak or a
+  custom expression such as `a*exp(-x/b)+c`, optionally outlier-robust, with parameter standard errors and
+  R^2), `smooth`, `rolling`, `derivative`, `integrate`, `fft`, `peaks`, `filter`, `detrend`, `normalize`,
+  `resample`, `histogram`, `correlate`, `autocorrelation`, `describe`. The result is kept: a same-length
+  result becomes a column of the dataset (`v_fit`), a different-length one a new dataset (`run_fft`), and
+  the reply carries a one-line result, the JSON report, notes and an `add_plot` hint. Options come from a
+  declared table that validates them, generates the `mcp-analysis` guide and the tool description.
+  New prompt `fit_and_plot`; `server_info` lists the operations; `Limits.max_analysis_rows` (1M) caps input.
+- **HTTP transport hardening.** `--transport streamable-http` now takes a bearer token (`--token`, or the
+  `GLPLOT_MCP_TOKEN` environment variable, constant-time compared and never logged) and **refuses to listen on
+  a non-localhost address without one** (`--insecure` overrides, with a warning). `--allow-host NAME` lists the
+  `Host` names clients may use and turns the SDK's DNS-rebinding check on for exactly those. Before, mcp 1.x
+  answered `421 Invalid Host header` to anything but localhost, so a server bound to a network interface was
+  unreachable, while mcp 2.x served it with no authentication at all. Tested with real servers and the
+  official clients on both SDK generations.
+- **`render_figure` reviews the figure.** The reply now carries `issues`: what a deterministic check of
+  the rendered figure can *prove* is wrong -- an axis without a label, no title, an empty panel,
+  overlapping tick labels (long category names), points a log axis cannot draw, data cut off by the
+  limits, a crowded legend, constant or gappy series -- each with a severity (`warning`,
+  `suggestion`, `info`), a code and the tool call that fixes it. An empty list means nothing was found,
+  so a model can render, fix and render again until it is clean. The check costs nothing measurable
+  and skips the one step that needs a second draw on figures of more than 50,000 points.
+- **Five read-only MCP knowledge tools** -- `get_guide`, `search_api`, `get_api_doc`, `get_example`,
+  `server_info` -- so clients that never read resources can still learn the library; 11 new resources
+  (`glplot://guide/{topic}`, `glplot://api/{name}`, `glplot://examples/{name}`, `glplot://llms.txt`,
+  `glplot://llms-full.txt`, `glplot://capabilities`, ...) and five new prompts (`quick_look`,
+  `fix_my_figure`, `publication_figure`, `compare_series`, `python_script_for`). The connect-time
+  instructions now point the model at them.
+- `python -m glplot.llm agent-instructions` prints a note to paste into `CLAUDE.md` / `AGENTS.md`, and
+  `skill --write DIR` writes a Claude Code skill, so a coding agent in a project that merely has GLPlot
+  installed is pointed at the packaged documentation. Tool descriptions of `add_plot`, `add_function`,
+  `set_axes` and `create_dataset` now include an example call.
+- **Text and dates in data files, for the MCP tools.** A CSV column of names used to load as all-NaN with
+  no hint that anything was lost. `load_dataset` now reads ISO dates as days since 1970-01-01 and other text
+  columns as categories (labels kept, shown by `describe_dataset`). New `select_rows` tool filters
+  (`where` expression, `equals` labels or numbers), sorts, thins and truncates a dataset into a new one;
+  `analyze_dataset` gains `aggregate` (mean, sum, median, min, max, std, count per category or value), and
+  `add_plot` takes bar/barh tick labels and pie slice names from the category column automatically. The
+  workstation's paste/import path shares the same table parser.
+- `logspace` and `geomspace` in the expression language (workstation and MCP, with the same size cap
+  as `linspace`), so a log-spaced x axis does not need `10**linspace(...)`.
+- `plt.stats()` is implemented (it always raised before): count and min/max/mean/std of the plotted
+  points, in the view or in total.
+
+### Changed
+
+- MCP tool replies keep non-ASCII text as written (`T (°C)`, `µm`, accents) instead of `\uXXXX` escapes.
+- `plt.step`, `mesh3d`, `annotate`, `arrow`, `axhline`, `axvline`, `axline`, `hlines`, `vlines`,
+  `alpha`, `set_global_alpha`, `export`, `blending`, `density`, `hud`, `lod`, `set_lod`, `reset_view` and
+  `stats` gained docstrings; every public function now has one (enforced by a test).
+
+### Fixed
+
+- **Axis limits now behave as in matplotlib.** `ylim(...)` / `xlim(...)` pin only the axis you set: before,
+  one limit on an axes with no data yet pinned *both* axes, so the other stayed at its empty default
+  (-1, 1); now it keeps following the data, including data added later (`Panel.pinned_x/pinned_y`; an
+  explicit `autoscale()` takes both back). On a log, symlog, asinh or logit axis, `xlim`, `ylim`, `axis(...)`
+  and `ax.set_xlim` now read and write **data units** (`xlim(10, 1000)` used to frame 10**10..10**1000, and
+  a limit a log axis cannot show is ignored with a warning, as in matplotlib). `axhline`, `axvline`,
+  `axhspan`, `axvspan`, `axline`, `figtext` and `text(transform=transAxes)` placed their points in log10
+  units on a log axis, which the axis then dropped, so the line or label was invisible; fractions of a log
+  axis are now taken along the drawn axis. A bare `axis()` returns `(xmin, xmax, ymin, ymax)` instead of
+  re-autoscaling.
+- `plt.subplots(r, c)` followed by `plt.subplot(r, c, i)` rebuilt the grid and emptied every panel; it now
+  selects the panel, as in matplotlib (a different shape still rebuilds).
+- MCP `set_axes(xscale="log", xlim=[...])` in one call lost the limits: the scale change re-fitted the view
+  after they were set. Scales are applied first.
+- `grouped_bar` laid groups out so that neighbouring groups overlapped with the default spacing; the bar
+  width is now computed as in matplotlib (`group_spacing` and `bar_spacing` in bar widths).
+- `plot(); xscale("log")` -- the usual order -- exported an empty plot: the export applied the
+  camera's log10 limits to a matplotlib axis as if they were data. It now converts them (all real
+  scales, per panel); this also made log axes work together with `twinx`.
+- A translucent `fill_between` / `fill_betweenx` exported with a field of vertical seams (per-triangle
+  strokes overlapping at the face's alpha); the default edge no longer has opacity of its own.
+- `plot(x, y, "o")` and `errorbar(fmt="o")` drew a connecting line; a marker-only format string now draws
+  markers only, as in matplotlib. `errorbar` bars take the data's colour instead of always black.
+- `fill_between(x, 0, y)` raised on a scalar boundary (also `fill_betweenx`); scalars now broadcast.
+- Violin bodies exported as a comb, and `set_aspect("equal")` / `axis("equal")` was ignored by
+  `savefig`; both are honoured in the export.
+
 ## [0.2.0] - 2026-10-24
 
 This release adds the Gallery panel, a native MCP server, interactive controls and real

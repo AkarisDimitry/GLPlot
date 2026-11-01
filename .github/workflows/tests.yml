@@ -57,6 +57,14 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[test]"
 
+    - name: MCP tool schemas are current
+      # The built-in MCP server (used when the `mcp` package is absent) serves the tool schemas
+      # from glplot/mcp/tools.json, a snapshot of what the SDK server publishes. This fails when a
+      # tool's signature or description changed and the snapshot did not:
+      #   python -m glplot.mcp.schema --write
+      timeout-minutes: 3
+      run: python -m glplot.mcp.schema --check
+
     - name: OpenGL smoke test (Linux, Mesa software rendering under a virtual display)
       # The suite runs without a window, so it cannot tell a working GL context from a
       # silent fall back to matplotlib. This asks for the OpenGL renderer explicitly and
@@ -130,3 +138,48 @@ jobs:
         flags: unittests
         name: codecov-umbrella
         fail_ci_if_error: false
+
+
+  no-sdk:
+    # `pip install glplot` on its own must be enough for an MCP client to connect: the built-in
+    # stdio server and the documentation tools use nothing beyond GLPlot's own dependencies. Every
+    # other job installs `.[test]`, which pulls in the `mcp` SDK, so without this job the no-SDK
+    # path would only ever be exercised through mocks.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install headless OpenGL libraries
+      timeout-minutes: 5
+      run: |
+        APT_OPTS="-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+        sudo apt-get update $APT_OPTS || true
+        sudo apt-get install -y $APT_OPTS libglvnd0 libgl1 libglu1-mesa libosmesa6
+
+    - name: Install GLPlot without the MCP SDK
+      timeout-minutes: 5
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e . pytest pytest-timeout
+        python -c "import importlib.util as u; assert u.find_spec('mcp') is None, 'the SDK must not be installed in this job'"
+
+    - name: glplot-mcp doctor (install check and protocol self-test)
+      timeout-minutes: 3
+      run: |
+        glplot-mcp doctor
+        python -m glplot.llm doctor
+
+    - name: MCP and documentation tests without the SDK
+      timeout-minutes: 8
+      run: |
+        pytest -o addopts="" -p no:cacheprovider tests/test_mcp_builtin.py tests/test_mcp_cli.py \
+          tests/test_mcp_knowledge.py tests/test_mcp_toolbox.py tests/test_mcp_state.py \
+          tests/test_mcp_recipes.py tests/test_mcp_analysis.py tests/test_mcp_review.py \
+          tests/test_mcp_http.py tests/test_mcp_textdata.py tests/test_mcp_dynamics.py \
+          tests/test_mcp_motion.py tests/test_mcp_animation.py tests/test_mcp_simulate.py \
+          tests/test_mcp_script.py tests/test_llm_docs.py
