@@ -1,6 +1,6 @@
 # GLPlot
 
-> GLPlot is a Python plotting library with a matplotlib-like API that renders on the GPU (OpenGL): millions of points stay interactive, and a figure can be saved headless with plt.savefig(). It ships a built-in MCP server so a language model can build plots and see them.
+> GLPlot is a Python plotting library with a matplotlib-like API that renders on the GPU (OpenGL): millions of points stay interactive, and a figure can be saved headless with plt.savefig(). It ships a built-in MCP server so a language model can build plots, see them, analyse data, simulate differential equations, make animations (GIF, MP4, WebM) and get the equivalent Python script.
 
 Install: `pip install glplot` (add `"glplot[mcp]"` for the official MCP SDK). Import: `import glplot.pyplot as plt`. In unattended scripts call `plt.savefig(...)`, never `plt.show()`.
 
@@ -11,7 +11,7 @@ Install: `pip install glplot` (add `"glplot[mcp]"` for the official MCP SDK). Im
 - `python -m glplot.llm example [name]` -- runnable scripts
 - `python -m glplot.llm llms-full` -- this whole reference as one document
 - `python -m glplot.llm agent-instructions` -- a note for CLAUDE.md / AGENTS.md; `skill --write DIR` writes a Claude Code skill
-- `python -m glplot.mcp` -- an MCP server (tools: create_figure, add_plot, render_figure, get_guide, search_api, ...)
+- `python -m glplot.mcp` -- an MCP server (tools: create_figure, add_plot, render_figure, analyze_dataset, simulate, animate, update_artist, add_control, export_script, get_guide, search_api, ...); to make a video or GIF through it read the MCP guide `mcp-animation` (`get_guide('mcp-animation')`)
 
 ## Guides
 
@@ -20,13 +20,13 @@ Install: `pip install glplot` (add `"glplot[mcp]"` for the official MCP SDK). Im
 - `choosing-a-plot`: A cheat sheet from what you want to show to the function that does it, with the full category list.
 - `axes-styling`: Limits, scales, ticks, legends, twin axes, colorbars, colormaps and the 25 style presets.
 - `three-d`: 3-D scatter, surfaces, bars, volumes and vector fields; the camera; what differs from mplot3d.
-- `animation`: FuncAnimation and ArtistAnimation, saving GIF/MP4 headless, live playback, and the rules that keep both consistent.
+- `animation`: FuncAnimation and ArtistAnimation, saving GIF/MP4 headless, live playback, the rules that keep both consistent, and how an MCP client animates (the animate tool).
 - `controls`: Sliders, buttons and interact() that put widgets in a Controls panel beside the plot.
 - `performance`: What stays interactive at millions of points, density and LOD options, and why exports are slower than the window.
 - `export`: savefig options, output size, formats, and the two export paths (window versus headless).
 - `matplotlib-compat`: What carries over from matplotlib unchanged, what differs, and the names that deliberately do not exist.
 - `workstation`: `python -m glplot`, the interactive environment for editing scenes, data, styles and analysis, in case a user asks.
-- `mcp`: Run and register the MCP server (works after a plain `pip install glplot`), what its tools do, and its safety model.
+- `mcp`: Run and register the MCP server (works after a plain `pip install glplot`), what its tools do -- including animations (GIF/MP4), simulation, sliders and script export -- and its safety model.
 - `troubleshooting`: Symptom-to-cause list for the failures people (and agents) actually hit.
 
 ## Examples

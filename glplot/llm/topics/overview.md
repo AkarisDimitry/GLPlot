@@ -48,7 +48,9 @@ person to close a window. Save, then look at the image, then fix what is wrong.
 * `glplot.animation` -- `FuncAnimation`, `ArtistAnimation`, GIF/MP4/HTML writers.
 * Native controls -- `plt.slider`, `plt.interact`, `plt.button` ... (topic `controls`).
 * `python -m glplot` -- the workstation GUI (topic `workstation`).
-* `python -m glplot.mcp` -- an MCP server so an LLM can build plots and *see* them (topic `mcp`).
+* `python -m glplot.mcp` -- an MCP server so an LLM can build plots and *see* them, analyse data, simulate
+  differential equations, **make animations (GIF, MP4, WebM)**, edit and parameterise figures and export the
+  Python script (topic `mcp`; once connected, `get_guide('mcp-animation')`).
 * `python -m glplot.llm` -- this documentation, from the command line.
 
 ## Where to read next

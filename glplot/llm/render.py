@@ -16,8 +16,9 @@ __all__ = ["agent_instructions", "api_reference", "llms_full_txt", "llms_txt", "
 _TAGLINE = (
     "GLPlot is a Python plotting library with a matplotlib-like API that renders on the GPU "
     "(OpenGL): millions of points stay interactive, and a figure can be saved headless with "
-    "plt.savefig(). It ships a built-in MCP server so a language model can build plots and "
-    "see them."
+    "plt.savefig(). It ships a built-in MCP server so a language model can build plots, see "
+    "them, analyse data, simulate differential equations, make animations (GIF, MP4, WebM) and "
+    "get the equivalent Python script."
 )
 
 
@@ -41,7 +42,9 @@ def llms_txt(extra: Iterable[guides.Topic] = ()) -> str:
         "- `python -m glplot.llm agent-instructions` -- a note for CLAUDE.md / AGENTS.md; "
         "`skill --write DIR` writes a Claude Code skill",
         "- `python -m glplot.mcp` -- an MCP server (tools: create_figure, add_plot, render_figure, "
-        "get_guide, search_api, ...)",
+        "analyze_dataset, simulate, animate, update_artist, add_control, export_script, "
+        "get_guide, search_api, ...); to make a video or GIF through it read the MCP guide "
+        "`mcp-animation` (`get_guide('mcp-animation')`)",
         "",
         "## Guides",
         "",
@@ -101,7 +104,10 @@ Rules that avoid the common failures:
 - An option GLPlot cannot honour emits a one-time `MatplotlibCompatWarning`: read it, it lists what
   did not take effect.
 - If a `glplot` MCP server is connected, its `get_guide`, `search_api`, `get_api_doc` and
-  `get_example` tools return the same documentation.
+  `get_example` tools return the same documentation. Through MCP you can also *animate*
+  (`animate`: GIF/MP4/WebM, properties driven by time and stages; `simulate` for dynamics),
+  edit what is drawn (`update_artist`), add sliders (`add_control`) and get the Python for a
+  figure or animation (`export_script`): read `get_guide('mcp-animation')` before animating.
 """
 
 _SKILL_DESCRIPTION = (

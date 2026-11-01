@@ -496,3 +496,21 @@ class TestAgentInstructions:
         written.write_text("old")
         assert main(["skill", "--write", str(tmp_path), "--force"]) == 0
         assert written.read_text() == llm.skill_markdown()
+
+
+def test_every_way_of_reading_the_library_says_a_model_can_make_animations():
+    """An LLM that only reads (llms.txt, the overview, the CLAUDE.md note, the skill) must still
+    learn that the MCP server animates, and where the guide for it is."""
+    from glplot import llm
+    from glplot.llm import render
+
+    llms = render.llms_txt()
+    assert "animate" in llms and "simulate" in llms and "mcp-animation" in llms
+    assert "export_script" in llms and "GIF" in llms
+    assert (
+        "animate" in render.agent_instructions() and "mcp-animation" in render.agent_instructions()
+    )
+    overview = llm.guide("overview")
+    assert "animations" in overview and "mcp-animation" in overview
+    assert "animations" in render.skill_markdown() or "animation" in render.skill_markdown()
+    assert "`animate` tool" in llm.guide("animation")

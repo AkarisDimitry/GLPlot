@@ -1,6 +1,6 @@
 # Animation
 
-summary: FuncAnimation and ArtistAnimation, saving GIF/MP4 headless, live playback, and the rules that keep both consistent.
+summary: FuncAnimation and ArtistAnimation, saving GIF/MP4 headless, live playback, the rules that keep both consistent, and how an MCP client animates (the animate tool).
 
 `glplot.animation` is a drop-in replacement for `matplotlib.animation`. It is **not** on `plt`:
 

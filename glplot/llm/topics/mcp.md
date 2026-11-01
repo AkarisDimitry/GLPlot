@@ -1,6 +1,6 @@
 # GLPlot as an MCP server
 
-summary: Run and register the MCP server (works after a plain `pip install glplot`), what its tools do, and its safety model.
+summary: Run and register the MCP server (works after a plain `pip install glplot`), what its tools do -- including animations (GIF/MP4), simulation, sliders and script export -- and its safety model.
 
 GLPlot ships a [Model Context Protocol](https://modelcontextprotocol.io) server: a model creates figures, builds data,
 draws, restyles and **sees every render** (an image plus a text summary of the axes), so it can check and fix its own
