@@ -595,7 +595,7 @@ class TestFitTab:
         assert float(rows["sigma"].split("+/-")[0]) == pytest.approx(_PEAK_TRUTH[2], abs=0.05)
         assert float(rows["R squared"]) > 0.99
         assert result.plot_label == "Gaussian fit"
-        # The source must still be overlaid on the fit: that is the "sobreponer".
+        # The source must still be overlaid on the fit: that is the "overlay" asked for.
         assert result.overlay is not None
 
     def test_polynomial_path_is_unchanged(self, imgui_context, peak_workspace):
@@ -2060,8 +2060,8 @@ class TestFitConfidenceBand:
 class TestFitOutputGrid:
     """The Fit tab's "Evaluate on a smooth grid" checkbox + point-count field.
 
-    Directly answers the user's "permitir seleccionar la cantidad de puntos a agregar
-    cuando se hace una regresion ajuste": off (default), Apply commits one fitted value
+    Directly answers the user's "let me choose how many points to add when fitting a
+    regression": off (default), Apply commits one fitted value
     per original x sample, unchanged from before this feature existed; on, Apply commits
     N evenly spaced points across the x range instead, however sparse or unevenly
     sampled the input was.
@@ -2269,7 +2269,7 @@ class TestStatsShowMore:
 class TestConfidenceIntervalWiring:
     """The "Show confidence interval" checkbox on Statistics, Correlate and Compare.
 
-    Point 2 of the user's request: "dar la opcion de generar intervalos de confianza"
+    Point 2 of the user's request: "give the option to generate confidence intervals"
     -- not just on Fit (which already had one), but wherever a point estimate is
     reported. mathops.confidence_interval_* itself is covered by
     tests/test_gui_mathops.py; this class only checks the tabs actually reach it.
@@ -2464,8 +2464,8 @@ class TestApplyModesRestriction:
 class TestStatsAndCompareOfferNewDataset:
     """Stats and Compare have no (x, y) curve to plot, but always offer New dataset.
 
-    Point 6 of the user's request: "siempre [tener la] opcion de agregar crear
-    reemplazar dataset" -- an analysis that produces only summary numbers must still be
+    Point 6 of the user's request: "always [have the] option to add, create or
+    replace a dataset" -- an analysis that produces only summary numbers must still be
     one click from becoming data, not a dead end the way "Apply disabled" was before.
     """
 

@@ -83,13 +83,13 @@ async def main() -> None:
             # ---- scene 1: the question ---------------------------------------------------
             title = await card(xlim=[0, 1], ylim=[0, 1])
             q = await text(title, x=0.5, y=0.55, coords="axes", align="center", fontsize=46,
-                           text="¿Por qué la derivada de $x^2$ es $2x$?")  # fmt: skip
+                           text="Why is the derivative of $x^2$ equal to $2x$?")  # fmt: skip
             sub = await text(title, x=0.5, y=0.4, coords="axes", align="center", fontsize=30,
-                             color=BLUE, text="una explicación geométrica")  # fmt: skip
+                             color=BLUE, text="a geometric explanation")  # fmt: skip
             await preview(title, "scene1", fps=24, stages=[
-                {"name": "pregunta", "duration": 2.0, "effects": {"write": q}},
-                {"name": "subtitulo", "duration": 1.0, "effects": {"fade_in": sub}},
-                {"name": "pausa", "duration": 1.2},
+                {"name": "question", "duration": 2.0, "effects": {"write": q}},
+                {"name": "subtitle", "duration": 1.0, "effects": {"fade_in": sub}},
+                {"name": "pause", "duration": 1.2},
             ])  # fmt: skip
 
             # ---- scene 2: the square that grows ---------------------------------------------
@@ -117,22 +117,22 @@ async def main() -> None:
             result = await text(sq, x=3.3, y=2.0, fontsize=34, color=YELLOW,
                                 text=r"$\frac{d(x^2)}{dx} = 2x + dx \;\to\; 2x$")  # fmt: skip
             note = await text(sq, x=3.3, y=1.1, fontsize=24, color=TEAL,
-                              text="$(dx)^2$ es despreciable cuando $dx \\to 0$")  # fmt: skip
+                              text="$(dx)^2$ vanishes as $dx \\to 0$")  # fmt: skip
             await preview(sq, "scene2", fps=24, variables={"dx": 0.6}, stages=[
-                {"name": "cuadrado", "duration": 1.2,
+                {"name": "square", "duration": 1.2,
                  "effects": {"fade_in": body, "write": [side_b, side_l]}},
-                {"name": "crece", "duration": 1.4,
+                {"name": "grow", "duration": 1.4,
                  "effects": {"fade_in": [right, top, corner], "write": [dx_b, dx_l]}},
                 {"name": "area", "duration": 1.6, "effects": {"write": grow}},
-                {"name": "pausa", "duration": 0.6},
-                {"name": "diferencia", "duration": 1.4, "effects": {"write": diff}},
-                {"name": "esquina", "duration": 1.0, "effects": {"indicate": corner}},
-                {"name": "nota", "duration": 1.0, "effects": {"write": note}},
-                {"name": "dx a 0", "duration": 2.4, "ease": "smoother",
+                {"name": "pause", "duration": 0.6},
+                {"name": "difference", "duration": 1.4, "effects": {"write": diff}},
+                {"name": "corner", "duration": 1.0, "effects": {"indicate": corner}},
+                {"name": "note", "duration": 1.0, "effects": {"write": note}},
+                {"name": "dx to 0", "duration": 2.4, "ease": "smoother",
                  "animate": {"dx": [0.6, 0.12]}},
-                {"name": "dividir", "duration": 1.2, "effects": {"transform": {diff: result}}},
-                {"name": "resultado", "duration": 0.9, "effects": {"indicate": result}},
-                {"name": "pausa final", "duration": 1.0},
+                {"name": "divide", "duration": 1.2, "effects": {"transform": {diff: result}}},
+                {"name": "result", "duration": 0.9, "effects": {"indicate": result}},
+                {"name": "final pause", "duration": 1.0},
             ], bindings=[
                 {"target": right, "property": "x", "value": ["2", "2 + dx"]},
                 {"target": top, "property": "y", "value": ["2 + dx", "2 + dx"]},
@@ -151,7 +151,7 @@ async def main() -> None:
                                  x_max=3.2, linewidth=4)  # fmt: skip
             curve = data["artist_id"]
             head = await text(gr, x=0.5, y=1.05, coords="axes", align="center", fontsize=34,
-                              text="La pendiente de $x^2$ en cada punto")  # fmt: skip
+                              text="The slope of $x^2$ at every point")  # fmt: skip
             data, _ = await call("add_plot", figure_id=gr, kind="scatter", x=[0.5], y=[0.25],
                                  size=16, color="#FFFFFF")  # fmt: skip
             dot = data["artist_id"]
@@ -168,24 +168,24 @@ async def main() -> None:
                 text=r"$f(x) = x^2 \quad\Rightarrow\quad f'(x_0) = 2x_0$",
             )
             readout = await text(gr, x=0.17, y=0.69, coords="axes", fontsize=28, color=YELLOW,
-                                 text="pendiente = 1.00")  # fmt: skip
+                                 text="slope = 1.00")  # fmt: skip
             await preview(gr, "scene3", fps=24, variables={"x0": 0.5, "m": "2*x0"}, stages=[
-                {"name": "curva", "duration": 1.4, "effects": {"create": curve}},
-                {"name": "titulo", "duration": 1.2, "effects": {"write": head}},
-                {"name": "punto", "duration": 0.6, "effects": {"fade_in": dot}},
-                {"name": "tangente", "duration": 1.2,
+                {"name": "curve", "duration": 1.4, "effects": {"create": curve}},
+                {"name": "title", "duration": 1.2, "effects": {"write": head}},
+                {"name": "dot", "duration": 0.6, "effects": {"fade_in": dot}},
+                {"name": "tangent", "duration": 1.2,
                  "effects": {"create": tangent, "write": [formula, readout]}},
-                {"name": "deslizar", "duration": 3.0, "ease": "smoother",
+                {"name": "slide", "duration": 3.0, "ease": "smoother",
                  "animate": {"x0": [0.5, 2.6]}},
-                {"name": "senalar", "duration": 0.9, "effects": {"indicate": formula}},
-                {"name": "volver", "duration": 1.6, "ease": "smoother", "animate": {"x0": 1.2}},
-                {"name": "pausa", "duration": 0.8},
+                {"name": "point at it", "duration": 0.9, "effects": {"indicate": formula}},
+                {"name": "back", "duration": 1.6, "ease": "smoother", "animate": {"x0": 1.2}},
+                {"name": "pause", "duration": 0.8},
             ], bindings=[
                 {"target": dot, "property": "x", "value": ["x0"]},
                 {"target": dot, "property": "y", "value": ["x0**2"]},
                 {"target": tangent, "property": "parameters.x0", "value": "x0"},
                 {"target": readout, "property": "text",
-                 "value": {"format": "pendiente = 2 * {x0:.2f} = {m:.2f}"}},
+                 "value": {"format": "slope = 2 * {x0:.2f} = {m:.2f}"}},
             ])  # fmt: skip
 
             # ---- scene 4: recap ------------------------------------------------------------
@@ -194,12 +194,12 @@ async def main() -> None:
                              text=r"$\frac{d}{dx}\,x^2 = 2x$")  # fmt: skip
             why = await text(recap, x=0.5, y=0.36, coords="axes", align="center", fontsize=28,
                              color=BLUE,
-                             text="el área crece en dos franjas de ancho dx: 2x dx")  # fmt: skip
+                             text="the area grows by two strips of width dx: 2x dx")  # fmt: skip
             await preview(recap, "scene4", fps=24, stages=[
-                {"name": "ley", "duration": 1.2, "effects": {"write": law}},
-                {"name": "porque", "duration": 1.4, "effects": {"write": why}},
-                {"name": "senalar", "duration": 0.9, "effects": {"indicate": law}},
-                {"name": "pausa", "duration": 1.0},
+                {"name": "rule", "duration": 1.2, "effects": {"write": law}},
+                {"name": "why", "duration": 1.4, "effects": {"write": why}},
+                {"name": "point at it", "duration": 0.9, "effects": {"indicate": law}},
+                {"name": "pause", "duration": 1.0},
             ])  # fmt: skip
 
             # ---- the video ------------------------------------------------------------------

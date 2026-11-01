@@ -1,4 +1,4 @@
-"""The spreadsheet data editor — "editar agregar datos, copiar y pegar datos".
+"""The spreadsheet data editor — "edit and add data, copy and paste data".
 
 The primary panel of the workstation, and the standalone app's entry point: paste a block
 of numbers from Excel and get a dataset (and a plot) in one click.
@@ -465,7 +465,7 @@ class DataEditorPanel(Panel):
     def _sync_layer_now(self, ds: DataSet) -> None:
         """Push ``ds`` back onto its bound layer. **Inside a queued command only.**
 
-        This is the "edición en vivo" link: it runs from the ``do``/``undo`` closures,
+        This is the "live editing" link: it runs from the ``do``/``undo`` closures,
         which ``Panel.push_command`` executes at the queue drain (on the GL thread), so
         the plot follows the table as the user types. The drain epilogue supplies the
         §1.4 dirty flags; ``update_layer_xy`` / ``write_back`` set ``gpu_dirty``.

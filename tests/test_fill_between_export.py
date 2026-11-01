@@ -54,14 +54,19 @@ def test_an_opaque_fill_has_no_seam_where_its_triangles_meet():
 
     gplt.figure(figsize=(4, 4))
     gplt.plot_style("3b1b")
-    gplt.fill_between([0.0, 2.0], [0.0, 0.0], [2.0, 2.0], color="#236B8E")
+    # a wide, low strip: the shallow diagonal is where a thin covering stroke still leaks
+    gplt.fill_between([0.0, 2.0], [0.0, 0.0], [0.6, 0.6], color="#236B8E")
     gplt.xlim(-0.5, 2.5)
     gplt.ylim(-0.5, 2.5)
     gplt.axis("off")
-    pixels = np.asarray(Image.open(io.BytesIO(render_preview_bytes(gplt.get_engine(), 1.0))))
-    near = np.abs(pixels[..., :3].astype(int) - [35, 107, 142]).sum(axis=-1) <= 40
-    rows, cols = np.nonzero(near)
-    assert rows.size, "the fill was drawn"
-    # the fill's own box, minus its antialiased rim: every pixel inside must be the fill
-    inside = near[rows.min() + 3 : rows.max() - 2, cols.min() + 3 : cols.max() - 2]
-    assert inside.size > 1000 and inside.all(), f"{int((~inside).sum())} pixels show the page"
+    # at a low resolution too: a thin stroke over the seams is not enough at ~72 dpi
+    for dpi in (50, 72, 150):
+        png = render_preview_bytes(gplt.get_engine(), 1.0, dpi=dpi)
+        pixels = np.asarray(Image.open(io.BytesIO(png)))[..., :3].astype(int)
+        near = np.abs(pixels - [35, 107, 142]).sum(axis=-1) <= 40
+        rows, cols = np.nonzero(near)
+        assert rows.size, "the fill was drawn"
+        # the fill's own box, minus its antialiased rim: every pixel inside is the fill colour
+        inside = pixels[rows.min() + 3 : rows.max() - 2, cols.min() + 3 : cols.max() - 2]
+        deviation = np.abs(inside - [35, 107, 142]).sum(axis=-1)
+        assert inside.size > 200 and deviation.max() <= 3, f"a seam at {dpi} dpi"

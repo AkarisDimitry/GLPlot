@@ -135,7 +135,7 @@ class TestPyplotAPI:
 
 
 class TestProgressiveRefinement:
-    """The answer to "cuando hago zoom el plot se comienza a ver laggeado".
+    """The answer to "when I zoom in, the plot starts to lag".
 
     The fractal is the one layer whose cost scales with screen *area*: ~700 iterations
     across ~2.5M fragments at a deep zoom. That is a fine still frame and far too slow to

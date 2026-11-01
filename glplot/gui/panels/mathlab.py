@@ -1,9 +1,9 @@
 """The Math Lab panel: integrate, smooth, overlay and add noise to a signal.
 
-This is the "plotear la integral de una funcion o de datos, suavizar y sobreponer,
-agregar ruido" surface. Every operation tab renders a **live preview** in
+This is the "plot the integral of a function or of data, smooth it and overlay it,
+add noise" surface. Every operation tab renders a **live preview** in
 :func:`widgets.mini_plot` with the source curve and the result drawn on the same axes
-before anything is committed -- that overlay is the "sobreponer".
+before anything is committed -- that overlay is the "overlay" of the request.
 
 Structure
 ---------
@@ -4652,7 +4652,7 @@ class MathLabPanel(Panel):
     def _draw_preview(
         self, source: _Source, result: Optional[_Result], error: Optional[str]
     ) -> None:
-        """The live overlay: source and result on one set of axes ("sobreponer")."""
+        """The live overlay: source and result on one set of axes."""
         if error:
             widgets.error_box(error)
 

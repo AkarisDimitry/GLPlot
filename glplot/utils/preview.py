@@ -263,6 +263,36 @@ def _boundary_segments(vertices: np.ndarray, triangles: np.ndarray) -> np.ndarra
     return np.asarray(vertices, dtype=float)[boundary]
 
 
+def _single_ring(vertices: np.ndarray, triangles: np.ndarray) -> Optional[np.ndarray]:
+    """The outline of a triangulated shape as one closed ring of points, or None.
+
+    None when the boundary is not a single loop (a hole, separate pieces, a vertex where the
+    outline touches itself): such a shape keeps its triangles.
+    """
+    segments = _boundary_segments(vertices, triangles)
+    if len(segments) < 3:
+        return None
+    neighbours: dict = {}
+    for a, b in segments:
+        ka, kb = tuple(np.round(a, 12)), tuple(np.round(b, 12))
+        neighbours.setdefault(ka, []).append(kb)
+        neighbours.setdefault(kb, []).append(ka)
+    if any(len(v) != 2 for v in neighbours.values()):
+        return None
+    start = next(iter(neighbours))
+    ring, previous, current = [start], None, start
+    while True:
+        a, b = neighbours[current]
+        following = b if a == previous else a
+        if following == start:
+            break
+        ring.append(following)
+        previous, current = current, following
+        if len(ring) > len(neighbours):
+            return None
+    return np.asarray(ring, dtype=float) if len(ring) == len(neighbours) else None
+
+
 def _hatch_style(layer: object, face: tuple, edge: tuple) -> dict:
     """matplotlib keywords that draw ``layer``'s hatch pattern, or ``{}`` for an unhatched one.
 
@@ -751,9 +781,22 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                 ):
                     # An opaque fill with no edge of its own: antialiasing leaves a hairline
                     # gap along every shared side, and the page shows through it as a diagonal
-                    # across each quad. Stroking each triangle thinly in its own colour (what
-                    # matplotlib's edgecolor="face" does for meshes) closes the gaps. Not for a
-                    # translucent fill, where the doubled stroke would show as a darker line.
+                    # across each quad. A shape whose outline is one loop (a fill_between, an
+                    # area) is drawn as that one polygon, with no inner sides at all; anything
+                    # else is stroked thinly in its own colour (matplotlib's edgecolor="face").
+                    # Not for a translucent fill, where a doubled stroke would show darker.
+                    ring = _single_ring(layer.vertices, tris)
+                    if ring is not None:
+                        ax.add_patch(
+                            Polygon(
+                                ring,
+                                closed=True,
+                                facecolor=fc,
+                                edgecolor="none",
+                                label=_legend_label(layer),
+                            )
+                        )
+                        continue
                     collection_style = dict(edgecolors=[fc], linewidths=0.6)
                 coll = PolyCollection(
                     polys,

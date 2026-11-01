@@ -86,7 +86,7 @@ class TestStyleRegistry:
         assert len(styles.STYLE_KEYS) == len(set(styles.STYLE_KEYS))
 
     def test_clean_is_the_default(self):
-        """The user asked for 'plots mas limpios' as the default look."""
+        """The user asked for 'cleaner plots' as the default look."""
         assert styles.DEFAULT_STYLE_KEY == "clean"
         assert styles.default_style().background == (1.0, 1.0, 1.0)
 

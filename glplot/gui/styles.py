@@ -1576,7 +1576,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         export_look=ExportLook(
             # LaTeX's own text faces when installed; matplotlib's Computer Modern (cmr10) is
             # left out on purpose: it has no accents, and the text around a $...$ formula is
-            # set in the first face with no fallback, so "función" would lose its accent.
+            # set in the first face with no fallback, so "café" would lose its accent.
             font_family=("Latin Modern Roman", "CMU Serif", "DejaVu Serif"),
             math_fontset="cm",
             axes="cross",
@@ -1590,7 +1590,7 @@ STYLES: Tuple[PlotStyle, ...] = (
     ),
 )
 
-#: The look the workstation opens with, per the user's steer ("plots más limpios").
+#: The look the workstation opens with, per the user's steer ("cleaner plots").
 DEFAULT_STYLE_KEY = "clean"
 
 STYLE_KEYS: Tuple[str, ...] = tuple(s.key for s in STYLES)

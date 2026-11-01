@@ -146,8 +146,8 @@ for public releases.
 ### Fixed
 
 - An opaque `fill_between` / area exported a hairline diagonal across every quad (the antialiasing gap
-  between its two triangles, with the page showing through); its triangles are now stroked in their own
-  colour. `legend().remove()` / `set_visible(False)` now also hide the legend of an exported image, and the
+  between its two triangles, with the page showing through, worst at animation resolutions); a fill whose
+  outline is one loop is now exported as that single polygon, and any other is stroked in its own colour. `legend().remove()` / `set_visible(False)` now also hide the legend of an exported image, and the
   MCP's `set_axes(legend=False)` does it (and stops the review asking for a legend).
 - **Axis limits now behave as in matplotlib.** `ylim(...)` / `xlim(...)` pin only the axis you set: before,
   one limit on an axes with no data yet pinned *both* axes, so the other stayed at its empty default

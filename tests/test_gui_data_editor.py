@@ -5,8 +5,8 @@ panel is driven by calling its action methods directly (the imgui draw callback 
 involved), and every queued command is executed by draining the queue by hand -- which
 is exactly where the engine drains it, at the top of ``_main_loop``.
 
-The bug under test (SPEC_FIX P0-D, "solo se agregan plots en lugar de editar los
-existentes"): pressing Plot on a dataset that was already plotted used to call
+The bug under test (SPEC_FIX P0-D, "plots are only ever added instead of editing the
+existing ones"): pressing Plot on a dataset that was already plotted used to call
 ``add_xy_layer`` unconditionally, leaving two identically-labelled layers stacked on the
 same data with only the first one bound -- so table edits updated one and the other was
 stale forever.

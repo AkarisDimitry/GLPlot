@@ -1,6 +1,6 @@
 """The Selection panel — what is selected, and what you can do with it.
 
-The user's literal ask was "botones en la parte de seleccion para seleccionar todo":
+The user's literal ask was "buttons in the selection area to select everything":
 **Select All / Select None / Invert**, as real buttons, scoped by a layer combo. The rest
 of the panel is what makes a selection worth having — a header that says what is
 selected, per-layer breakdown, statistics, and the actions that turn a selection into
