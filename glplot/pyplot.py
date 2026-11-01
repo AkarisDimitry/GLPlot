@@ -1300,6 +1300,93 @@ def _set_axis_visible(plot: GPULinePlot, visible: bool) -> None:
     _set_dirty(plot)
 
 
+def _axis_scale(plot: GPULinePlot, axis: str) -> Tuple[str, Optional[dict]]:
+    """``(mode, params)`` of the active panel's ``axis`` ("x" or "y") scale."""
+    options = plot.options
+    return (
+        getattr(options, f"axis_scale_{axis}", "linear") or "linear",
+        getattr(options, f"axis_scale_params_{axis}", None),
+    )
+
+
+def _data_view(plot: GPULinePlot, axis: str) -> Tuple[float, float]:
+    """The view of one axis in *data* units, as matplotlib's ``get_xlim`` reports it.
+
+    The engine keeps its camera in the space it draws in -- ``log10`` of the data on a log
+    axis -- so ``plot.get_xlim()`` is only data on a linear axis. Everything a caller reads to
+    place something in data coordinates (a reference line, a limit it will modify) goes through
+    here; the engine's own users (twins, the selection panel) keep the world units they need.
+    """
+    low, high = plot.get_xlim() if axis == "x" else plot.get_ylim()
+    mode, params = _axis_scale(plot, axis)
+    if mode == "linear":
+        return (low, high)
+    from .utils import scale as scale_utils
+
+    converted = scale_utils.inverse(np.array([low, high], dtype=np.float64), mode, params)
+    if not np.all(np.isfinite(converted)):
+        return (low, high)
+    return (float(converted[0]), float(converted[1]))
+
+
+def _world_bounds(plot: GPULinePlot, axis: str, bounds: Sequence[float]) -> Tuple[float, float]:
+    """Data-unit limits for ``axis`` converted to the engine's world units.
+
+    An end a log axis cannot show (zero or negative) is ignored with a warning and the current
+    end kept, which is what matplotlib does -- not a ``nan`` handed to the camera.
+    """
+    low, high = float(bounds[0]), float(bounds[1])
+    mode, params = _axis_scale(plot, axis)
+    if mode == "linear":
+        return (low, high)
+    from .utils import scale as scale_utils
+
+    converted = scale_utils.forward(np.array([low, high], dtype=np.float64), mode, params)
+    current = plot.get_xlim() if axis == "x" else plot.get_ylim()
+    out = []
+    for given, value, keep in zip((low, high), converted, current):
+        if np.isfinite(value):
+            out.append(float(value))
+        else:
+            warnings.warn(
+                f"{axis}lim {given!r} cannot be shown on a {mode} axis and was ignored "
+                "(matplotlib does the same); keeping the current limit.",
+                UserWarning,
+                stacklevel=4,
+            )
+            out.append(keep)
+    return (out[0], out[1])
+
+
+def _set_data_view(
+    plot: GPULinePlot,
+    xlim: Optional[Sequence[float]] = None,
+    ylim: Optional[Sequence[float]] = None,
+) -> None:
+    """``plot.set_view`` taking limits in data units (see :func:`_data_view`)."""
+    plot.set_view(
+        xlim=None if xlim is None else _world_bounds(plot, "x", xlim),
+        ylim=None if ylim is None else _world_bounds(plot, "y", ylim),
+    )
+
+
+def _axes_fraction_to_data(plot: GPULinePlot, axis: str, fraction: float) -> float:
+    """Where ``fraction`` (0 = left/bottom edge, 1 = right/top) of the view is, in data units.
+
+    The fraction is of the *drawn* axis, so on a log axis it is interpolated in log space, as
+    matplotlib's axes transform does.
+    """
+    low, high = plot.get_xlim() if axis == "x" else plot.get_ylim()
+    world = low + (high - low) * float(fraction)
+    mode, params = _axis_scale(plot, axis)
+    if mode == "linear":
+        return world
+    from .utils import scale as scale_utils
+
+    value = float(scale_utils.inverse(np.array([world], dtype=np.float64), mode, params)[0])
+    return value if np.isfinite(value) else world
+
+
 def _set_view_limits(
     plot: GPULinePlot,
     xlim: Optional[Tuple[float, float]] = None,
@@ -2492,6 +2579,9 @@ def _populate_grid(
     """Lay ``fig`` out as an ``nrows`` x ``ncols`` grid and return its axes."""
     specs = _layout.grid(nrows, ncols, **grid_kwargs)
     fig.set_panels(specs)
+    # Remembered so a following `plt.subplot(nrows, ncols, i)` selects the panel it names instead of
+    # taking the shape for a new one and rebuilding the grid -- which emptied every panel drawn.
+    fig._subplot_grid_shape = (nrows, ncols)
     if sharex or sharey:
         _link_shared_axes(fig, sharex=sharex, sharey=sharey)
     # ``subplot_kw={"projection": "3d"}`` is matplotlib's way of saying "every panel in
@@ -5093,15 +5183,13 @@ def figtext(x: float, y: float, s: str, fontdict: Optional[dict] = None, **kwarg
         Layer: The text layer.
     """
     plot = _get_or_create_plot()
-    left, right = plot.get_xlim()
-    bottom, top = plot.get_ylim()
     fontsize, color = _merge_fontdict(
         "figtext", fontdict, kwargs.pop("fontsize", None), kwargs.pop("color", None)
     )
     color = "k" if color is None else color
     return text(
-        left + (right - left) * float(x),
-        bottom + (top - bottom) * float(y),
+        _axes_fraction_to_data(plot, "x", x),
+        _axes_fraction_to_data(plot, "y", y),
         str(s),
         color=color,
         fontsize=fontsize,
@@ -7198,7 +7286,7 @@ def fill_betweenx(
         indices=indices,
         mode="triangles",
         face_color=tuple(rgba),
-        edge_color=tuple(rgba),
+        edge_color=_unstroked_edge(rgba),
         label=label,
     )
     layer = plot_obj.scene.layers[-1]
@@ -7402,13 +7490,26 @@ def fill_between(
         indices=indices,
         mode="triangles",
         face_color=tuple(rgba),
-        edge_color=tuple(rgba),
+        edge_color=_unstroked_edge(rgba),
         label=label,
     )
     layer = plot_obj.scene.layers[-1]
     _apply_patch_edge(layer, rgba, edgecolor, linewidth, alpha)
     _apply_hatch([layer], hatch, "fill_between")
     return layer
+
+
+def _unstroked_edge(face_rgba: Sequence[float]) -> Tuple[float, float, float, float]:
+    """The default edge of a filled band: the face colour, with no opacity of its own.
+
+    The export strokes every triangle of the band, and with a translucent face the strokes of
+    neighbouring triangles overlap along their shared sides, drawing a field of vertical
+    seams through what should be a flat tint. The live renderer never draws ``edge_color``
+    (only ``outline_*``), so this only changes the saved file; an edge the caller asked for
+    goes through :func:`_apply_patch_edge` and replaces it.
+    """
+    r, g, b = (float(c) for c in face_rgba[:3])
+    return (r, g, b, 0.0)
 
 
 def _apply_patch_edge(
@@ -7520,9 +7621,8 @@ def axhspan(
     Examples:
         >>> gplt.axhspan(0.4, 0.6, color='red', alpha=0.2)
     """
-    left, right = _get_or_create_plot().get_xlim()
-    x0 = left + (right - left) * float(xmin)
-    x1 = left + (right - left) * float(xmax)
+    x0 = _axes_fraction_to_data(_get_or_create_plot(), "x", xmin)
+    x1 = _axes_fraction_to_data(_get_or_create_plot(), "x", xmax)
     layer = _rect_patch(x0, x1, float(ymin), float(ymax), color, alpha, label)
     layer.metadata.update({"guide": True, "artist": "axhspan"})
     _set_dirty(_get_or_create_plot())
@@ -7556,9 +7656,8 @@ def axvspan(
     Examples:
         >>> gplt.axvspan(2.0, 3.0, color='green', alpha=0.2)
     """
-    bottom, top = _get_or_create_plot().get_ylim()
-    y0 = bottom + (top - bottom) * float(ymin)
-    y1 = bottom + (top - bottom) * float(ymax)
+    y0 = _axes_fraction_to_data(_get_or_create_plot(), "y", ymin)
+    y1 = _axes_fraction_to_data(_get_or_create_plot(), "y", ymax)
     layer = _rect_patch(float(xmin), float(xmax), y0, y1, color, alpha, label)
     layer.metadata.update({"guide": True, "artist": "axvspan"})
     _set_dirty(_get_or_create_plot())
@@ -7975,7 +8074,14 @@ def grouped_bar(
 
     spacing = 1.5 if group_spacing is None else float(group_spacing)
     gap = 0.0 if bar_spacing is None else float(bar_spacing)
-    bar_width = spacing / (n_series + (n_series - 1) * gap)
+    # Both spacings are measured in bar widths, as in matplotlib: a group is `n` bars plus
+    # `(n - 1) * gap` of space between them, and `spacing` more bar widths separate it from
+    # the next group. The groups sit one unit apart (or as far as the closest two `positions`
+    # are), so one bar is that distance over the whole run. The old formula divided `spacing`
+    # itself by the group's width, so with the defaults a group was 1.5 units wide on a 1.0
+    # pitch and neighbouring groups overlapped.
+    pitch = float(np.min(np.diff(np.sort(centres)))) if len(centres) > 1 else 1.0
+    bar_width = pitch / (n_series + (n_series - 1) * gap + spacing)
     draw = bar if orientation == "vertical" else barh
     # barh()'s *thickness* keyword is confusingly named "height" (its "width" is the bar's
     # length instead, matching matplotlib's own reversal) -- so the keyword this loop
@@ -8856,9 +8962,9 @@ def function(
     plot_obj.scene.layers.append(layer)
 
     if ylim is not None:
-        plot_obj.set_view(xlim=(float(xlim[0]), float(xlim[1])), ylim=ylim)
+        _set_data_view(plot_obj, xlim=(float(xlim[0]), float(xlim[1])), ylim=ylim)
     else:
-        plot_obj.set_view(xlim=(float(xlim[0]), float(xlim[1])))
+        _set_data_view(plot_obj, xlim=(float(xlim[0]), float(xlim[1])))
     _set_dirty(plot_obj)
     return layer
 
@@ -10824,6 +10930,28 @@ def mesh3d(
     azim: Optional[float] = None,
     label: Optional[str] = None,
 ):
+    """Draw a triangle mesh in 3-D.
+
+    Args:
+        vertices (array-like): ``(N, 3)`` corner positions.
+        faces (array-like, optional): ``(M, 3)`` indices into ``vertices``, one row per triangle.
+            Without it the vertices are drawn as points.
+        color (ColorLike, optional): Mesh colour. Defaults to ``'tab:blue'``.
+        c (array-like, optional): One value per vertex, mapped through ``cmap`` to colour the mesh.
+        cmap (str, optional): Colormap for ``c``. Defaults to ``'viridis'``.
+        alpha (float, optional): Opacity, 0-1.
+        elev, azim (float, optional): Camera angles in degrees.
+        label (str, optional): Legend text.
+
+    Returns:
+        Layer3D: The mesh layer.
+
+    Examples:
+        >>> verts = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        >>> faces = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]]
+        >>> gplt.mesh3d(verts, faces, c=[0, 1, 2, 3])
+
+    """
     verts = _as_float_array(vertices, ndim=2, name="vertices")
     if verts.shape[1] != 3:
         raise ValueError("vertices must have shape (N, 3)")
@@ -11480,6 +11608,26 @@ def arrow(
     label: Optional[str] = None,
     **kwargs,
 ):
+    """Draw an arrow from ``(x, y)`` to ``(x + dx, y + dy)`` with a triangular head.
+
+    Sizes are in data units.
+
+    Args:
+        x, y (float): The tail.
+        dx, dy (float): The displacement to the tip.
+        width (float, optional): Shaft line width. Defaults to 1.0.
+        head_width, head_length (float, optional): Head size in data units (0.12 and 0.18).
+        color (ColorLike, optional): Arrow colour. Defaults to black.
+        alpha (float, optional): Opacity, 0-1.
+        label (str, optional): Legend text.
+
+    Returns:
+        list: The shaft and head layers.
+
+    Examples:
+        >>> gplt.arrow(0, 0, 1, 1, color="tab:red")
+
+    """
     rgba = list(_normalize_rgba(color, n=None))
     if alpha is not None:
         rgba[3] *= float(alpha)
@@ -12117,6 +12265,30 @@ def annotate(
     color: ColorLike = "k",
     **kwargs: Any,
 ) -> list[BaseLayer]:
+    """Write text at ``xytext`` and, when ``arrowprops`` is given, draw an arrow from it to ``xy``.
+
+    Coordinates are always **data** coordinates: ``xycoords``, ``textcoords`` and
+    ``annotation_clip`` are accepted for matplotlib parity and warned about. matplotlib's own
+    spelling ``text=`` works as a keyword.
+
+    Args:
+        text_value (str): The text.
+        xy (tuple): The point annotated (arrow tip).
+        xytext (tuple, optional): Where the text goes. Defaults to ``xy`` (no arrow).
+        arrowprops (dict, optional): Arrow style, e.g. ``{"color": "red", "width": 1.5}``;
+            giving it (with ``xytext``) draws the arrow.
+        fontsize (int, optional): Text size. Defaults to 12.
+        color (ColorLike, optional): Text colour. Defaults to black.
+        **kwargs: Other text properties (``bbox``, ``ha``, ``va``, ``rotation``...), as for
+            :func:`text`.
+
+    Returns:
+        list: The text layer, then the arrow's layers if any.
+
+    Examples:
+        >>> gplt.annotate("peak", xy=(2, 1), xytext=(3, 1.5), arrowprops={"color": "k"})
+
+    """
     # matplotlib calls this parameter `text`, which cannot be the parameter name here --
     # the body calls the module-level `text()` to draw. So the matplotlib spelling is
     # accepted as a keyword and folded in; `annotate(text="hi", xy=...)` is a real call.
@@ -12168,6 +12340,23 @@ def hlines(
     linewidth: float = 1.0,
     **kwargs,
 ):
+    """Draw horizontal line segments at each ``y`` from ``xmin`` to ``xmax``.
+
+    Args:
+        y (float or array-like): Heights; one segment each.
+        xmin, xmax (float or array-like): Ends of the segments (a scalar applies to all).
+        colors (ColorLike, optional): Colour. Defaults to black.
+        linestyles (str, optional): ``'-'``, ``'--'``, ``'-.'`` or ``':'``.
+        label (str, optional): Legend text.
+        linewidth (float, optional): Width. Defaults to 1.0.
+
+    Returns:
+        list: One layer per segment.
+
+    Examples:
+        >>> gplt.hlines([1, 2, 3], 0, 10, colors="gray")
+
+    """
     data = kwargs.pop("data", None)
     if data is not None:
         y, xmin, xmax = _resolve_data_args("hlines", data, y, xmin, xmax)
@@ -12200,6 +12389,20 @@ def vlines(
     linewidth: float = 1.0,
     **kwargs,
 ):
+    """Draw vertical line segments at each ``x`` from ``ymin`` to ``ymax``.
+
+    Args:
+        x (float or array-like): Positions; one segment each.
+        ymin, ymax (float or array-like): Ends of the segments (a scalar applies to all).
+        colors, linestyles, label, linewidth: As for :func:`hlines`.
+
+    Returns:
+        list: One layer per segment.
+
+    Examples:
+        >>> gplt.vlines([1, 2, 3], 0, 1, colors="tab:red")
+
+    """
     data = kwargs.pop("data", None)
     if data is not None:
         x, ymin, ymax = _resolve_data_args("vlines", data, x, ymin, ymax)
@@ -12232,9 +12435,28 @@ def axhline(
     label: Optional[str] = None,
     **kwargs,
 ):
-    left, right = _get_or_create_plot().get_xlim()
-    x0 = left + (right - left) * float(xmin)
-    x1 = left + (right - left) * float(xmax)
+    """Draw a horizontal reference line at ``y``.
+
+    The line spans the fraction ``xmin``..``xmax`` of the x range **as it is when you call it**
+    (axes fractions, as in matplotlib), so set the limits first if you want it to reach the edges.
+
+    Args:
+        y (float, optional): Height of the line. Defaults to 0.
+        xmin, xmax (float, optional): Start and end as fractions of the x view (0 and 1).
+        color (ColorLike, optional): Line colour. Defaults to black.
+        linestyle (str, optional): ``'-'``, ``'--'``, ``'-.'`` or ``':'``.
+        linewidth (float, optional): Width. Defaults to 1.0.
+        label (str, optional): Legend text.
+
+    Returns:
+        Layer: The line layer.
+
+    Examples:
+        >>> gplt.axhline(0, color="gray", linestyle="--")
+
+    """
+    x0 = _axes_fraction_to_data(_get_or_create_plot(), "x", xmin)
+    x1 = _axes_fraction_to_data(_get_or_create_plot(), "x", xmax)
     artists = hlines(
         float(y), x0, x1, colors=color, linestyles=linestyle, linewidth=linewidth, label=label
     )
@@ -12253,9 +12475,25 @@ def axvline(
     label: Optional[str] = None,
     **kwargs,
 ):
-    bottom, top = _get_or_create_plot().get_ylim()
-    y0 = bottom + (top - bottom) * float(ymin)
-    y1 = bottom + (top - bottom) * float(ymax)
+    """Draw a vertical reference line at ``x``.
+
+    Spans the fraction ``ymin``..``ymax`` of the y range **as it is when you call it**; set the
+    limits first to make it reach the edges. See :func:`axhline`.
+
+    Args:
+        x (float, optional): Position of the line. Defaults to 0.
+        ymin, ymax (float, optional): Start and end as fractions of the y view (0 and 1).
+        color, linestyle, linewidth, label: As for :func:`axhline`.
+
+    Returns:
+        Layer: The line layer.
+
+    Examples:
+        >>> gplt.axvline(2.5, color="tab:red", label="threshold")
+
+    """
+    y0 = _axes_fraction_to_data(_get_or_create_plot(), "y", ymin)
+    y1 = _axes_fraction_to_data(_get_or_create_plot(), "y", ymax)
     artists = vlines(
         float(x), y0, y1, colors=color, linestyles=linestyle, linewidth=linewidth, label=label
     )
@@ -12275,6 +12513,24 @@ def axline(
     label: Optional[str] = None,
     **kwargs,
 ):
+    """Draw a straight line through ``xy1`` across the current x range.
+
+    Give either a second point or a slope. The line is drawn over the x range **at the time of
+    the call**, not to infinity.
+
+    Args:
+        xy1 (tuple): A point on the line.
+        xy2 (tuple, optional): A second point on it.
+        slope (float, optional): The slope, when ``xy2`` is not given.
+        color, linestyle, linewidth, label: As for :func:`axhline`.
+
+    Returns:
+        Layer: The line layer.
+
+    Examples:
+        >>> gplt.axline((0, 0), slope=1)   # y = x
+
+    """
     x0, y0 = map(float, xy1)
     if xy2 is not None:
         x1, y1 = map(float, xy2)
@@ -12283,7 +12539,7 @@ def axline(
         slope = (y1 - y0) / (x1 - x0)
     if slope is None:
         raise ValueError("axline requires xy2 or slope")
-    left, right = _get_or_create_plot().get_xlim()
+    left, right = _data_view(_get_or_create_plot(), "x")
     y_left = y0 + float(slope) * (left - x0)
     y_right = y0 + float(slope) * (right - x0)
     artists = plot(
@@ -12299,6 +12555,22 @@ def axline(
 
 
 def step(x, y, *args, where: str = "pre", **kwargs):
+    """Draw a step function (a staircase) through ``(x, y)``.
+
+    Args:
+        x, y (array-like): The points, the same length.
+        *args: A format string and anything else :func:`plot` accepts.
+        where (str, optional): Where the value changes between two x positions: ``'pre'``
+            (default, at the left point), ``'post'`` (at the right one) or ``'mid'`` (halfway).
+        **kwargs: ``color``, ``linewidth``, ``linestyle``, ``label``... as for :func:`plot`.
+
+    Returns:
+        list: The layers drawn.
+
+    Examples:
+        >>> gplt.step([0, 1, 2, 3], [1, 3, 2, 4], where="post")
+
+    """
     data = kwargs.pop("data", None)
     if data is not None:
         x, y = _resolve_data_args("step", data, x, y)
@@ -13084,10 +13356,8 @@ def text(
     axes_fraction = None
     if isinstance(transform, _AxesFractionTransform):
         axes_fraction = (float(x), float(y))
-        xlo, xhi = plot_obj.get_xlim()
-        ylo, yhi = plot_obj.get_ylim()
-        x = xlo + axes_fraction[0] * (xhi - xlo)
-        y = ylo + axes_fraction[1] * (yhi - ylo)
+        x = _axes_fraction_to_data(plot_obj, "x", axes_fraction[0])
+        y = _axes_fraction_to_data(plot_obj, "y", axes_fraction[1])
     elif transform is not None and not isinstance(transform, _DataTransform):
         kwargs["transform"] = transform
     _warn_unsupported(
@@ -14324,7 +14594,7 @@ def xlim(
     """
     plot = _get_or_create_plot()
     if left is None and right is None:
-        return plot.get_xlim()
+        return _data_view(plot, "x")
 
     # Handle single tuple argument like matplotlib
     if left is not None and right is None and isinstance(left, (tuple, list, np.ndarray)):
@@ -14333,10 +14603,10 @@ def xlim(
     # An end that is not given stays where it is, as in matplotlib: `set_xlim(left=0)` moves
     # only the left edge. This used to pass the None straight through and fail inside the
     # camera, on one of the most common limit calls there is.
-    current = plot.get_xlim()
+    current = _data_view(plot, "x")
     left = current[0] if left is None else left
     right = current[1] if right is None else right
-    plot.set_view(xlim=(left, right))
+    _set_data_view(plot, xlim=(left, right))
     _set_dirty(plot)
     return (left, right)
 
@@ -14376,17 +14646,17 @@ def ylim(
     """
     plot = _get_or_create_plot()
     if bottom is None and top is None:
-        return plot.get_ylim()
+        return _data_view(plot, "y")
 
     # Handle single tuple argument like matplotlib
     if bottom is not None and top is None and isinstance(bottom, (tuple, list, np.ndarray)):
         bottom, top = bottom[0], bottom[1]
 
     # See xlim(): an end that is not given stays where it is -- `set_ylim(bottom=0)`.
-    current = plot.get_ylim()
+    current = _data_view(plot, "y")
     bottom = current[0] if bottom is None else bottom
     top = current[1] if top is None else top
-    plot.set_view(ylim=(bottom, top))
+    _set_data_view(plot, ylim=(bottom, top))
     _set_dirty(plot)
     return (bottom, top)
 
@@ -14410,7 +14680,7 @@ def axis(
 
     Args:
         arg (str or tuple, optional): Axis mode or limits. Can be:
-            - 'auto': Auto-scale to fit all data (default)
+            - 'auto': Auto-scale to fit all data
             - 'tight': Auto-scale tightly to data without padding
             - 'reset': Reset to default view (-1, 1) on both axes
             - 'on'/'off': Show or hide the grid, frame and tick labels
@@ -14418,7 +14688,7 @@ def axis(
             - 'scaled'/'image': As 'equal'; 'image' fits the data first
             - 'square': Equal world *span* on both axes
             - tuple (xmin, xmax, ymin, ymax): Explicit axis limits
-            Defaults to 'auto'.
+            Defaults to None: return the current limits without changing the view.
         emit (bool, optional): Accepted for matplotlib parity. GLPlot has no
             xlim/ylim observer callbacks to notify, so this is ignored.
         mode (str or tuple, optional): GLPlot's own spelling of ``arg``, kept working for
@@ -14434,9 +14704,8 @@ def axis(
         route and 'scaled' behaves as 'equal'.
 
     Returns:
-        tuple or None: When called with mode (setter), returns limits or None.
-            When called with no arguments, returns current limits (to be
-            implemented in future).
+        tuple or None: With no arguments, the current ``(xmin, xmax, ymin, ymax)`` in data
+            units. With a mode string, None; with limits, the limits set.
 
     Raises:
         ValueError: If mode is unsupported or limits are invalid
@@ -14472,16 +14741,18 @@ def axis(
     mode = arg if arg is not None else mode
     if any(v is not None for v in (xmin, xmax, ymin, ymax)):
         if xmin is not None or xmax is not None:
-            lo, hi = plot.get_xlim()
-            plot.set_view(xlim=(lo if xmin is None else xmin, hi if xmax is None else xmax))
+            lo, hi = _data_view(plot, "x")
+            _set_data_view(plot, xlim=(lo if xmin is None else xmin, hi if xmax is None else xmax))
         if ymin is not None or ymax is not None:
-            lo, hi = plot.get_ylim()
-            plot.set_view(ylim=(lo if ymin is None else ymin, hi if ymax is None else ymax))
+            lo, hi = _data_view(plot, "y")
+            _set_data_view(plot, ylim=(lo if ymin is None else ymin, hi if ymax is None else ymax))
         _set_dirty(plot)
         if mode is None:
-            return (*plot.get_xlim(), *plot.get_ylim())
+            return (*_data_view(plot, "x"), *_data_view(plot, "y"))
     if mode is None:
-        mode = "auto"
+        # As in matplotlib, a bare axis() *reads*: the current (xmin, xmax, ymin, ymax) in data
+        # units, with the view left alone. It used to re-autoscale, silently undoing any limits.
+        return (*_data_view(plot, "x"), *_data_view(plot, "y"))
 
     if isinstance(mode, str):
         m = mode.lower()
@@ -14519,7 +14790,7 @@ def axis(
         raise ValueError("axis tuple must be (xmin, xmax, ymin, ymax)")
 
     xmin, xmax, ymin, ymax = map(float, mode)
-    plot.set_view(xlim=(xmin, xmax), ylim=(ymin, ymax))
+    _set_data_view(plot, xlim=(xmin, xmax), ylim=(ymin, ymax))
     _set_dirty(plot)
     return (xmin, xmax, ymin, ymax)
 
@@ -14637,6 +14908,7 @@ def autoscale(enable: bool = True, axis: str = "both", tight: Optional[bool] = N
 
 
 def reset_view() -> None:
+    """Reset pan and zoom to the default view (the same as ``axis('reset')``)."""
     axis("reset")
 
 
@@ -14646,6 +14918,15 @@ def home() -> None:
 
 
 def set_global_alpha(alpha: float) -> None:
+    """Set the figure's global opacity.
+
+    Args:
+        alpha (float): 0.0 (transparent) to 1.0 (opaque); applied on top of each layer's own alpha.
+
+    Examples:
+        >>> gplt.set_global_alpha(0.6)
+
+    """
     plot = _get_or_create_plot()
     if hasattr(plot, "set_global_alpha"):
         plot.set_global_alpha(float(alpha))
@@ -14656,10 +14937,22 @@ def set_global_alpha(alpha: float) -> None:
 
 
 def alpha(value: float) -> None:
+    """Set the global opacity (0 clear, 1 opaque); an alias of :func:`set_global_alpha`."""
     set_global_alpha(value)
 
 
 def set_lod(enabled: bool = True, max_lines_per_px: int = 8) -> None:
+    """Switch level-of-detail decimation on or off.
+
+    When on, the renderers thin out data that falls into too few pixels (many lines per pixel
+    when zoomed far out), which keeps frame times bounded without visibly changing the picture.
+
+    Args:
+        enabled (bool, optional): Defaults to True.
+        max_lines_per_px (int, optional): Draw at most this many lines per screen pixel.
+            Defaults to 8.
+
+    """
     plot = _get_or_create_plot()
 
     if hasattr(plot, "set_lod"):
@@ -14671,15 +14964,44 @@ def set_lod(enabled: bool = True, max_lines_per_px: int = 8) -> None:
 
 
 def lod(enabled: bool = True, max_lines_per_px: int = 8) -> None:
+    """Switch level-of-detail decimation on or off; an alias of :func:`set_lod`.
+
+    Args:
+        enabled (bool, optional): Defaults to True.
+        max_lines_per_px (int, optional): Draw at most this many lines per screen pixel.
+            Defaults to 8.
+
+    """
     set_lod(enabled=enabled, max_lines_per_px=max_lines_per_px)
 
 
 def blending(mode: BlendMode = "auto") -> None:
+    """Choose how overlapping translucent layers combine.
+
+    Args:
+        mode (str, optional): ``'auto'`` (default), ``'alpha'``, ``'additive'``,
+            ``'subtractive'``, ``'screen'`` or ``'off'``. Additive blending makes dense
+            overlaps glow, which suits point clouds.
+
+    Examples:
+        >>> gplt.blending("additive")
+
+    """
     plot = _get_or_create_plot()
     _set_blending(plot, mode)
 
 
 def density(enabled: bool = True) -> None:
+    """Turn density rendering on or off for 2-D layers.
+
+    With density on, overlapping points and lines accumulate into a map of how many fall on each
+    pixel instead of hiding one another -- the right view for millions of samples. See also
+    ``show(density=True)`` and :func:`hist2d`.
+
+    Args:
+        enabled (bool, optional): Defaults to True.
+
+    """
     plot = _get_or_create_plot()
     _set_density(plot, enabled)
 
@@ -14693,6 +15015,15 @@ def density_gain(value: float) -> None:
 
 
 def hud(enabled: bool = True) -> None:
+    """Show or hide the heads-up display in the live window.
+
+    The HUD is the on-screen panel with the layer list, render controls, a profiler (frame rate
+    and timings) and selection details. It has no effect on saved figures.
+
+    Args:
+        enabled (bool, optional): Defaults to True.
+
+    """
     plot = _get_or_create_plot()
     _set_hud(plot, enabled)
 
@@ -14702,19 +15033,62 @@ def hud(enabled: bool = True) -> None:
 # ------------------------------------------------------------------
 
 
-def stats(scope: str = "visible"):
-    plot = _get_or_create_plot()
-    if not hasattr(plot, "get_summary_stats"):
-        raise AttributeError("Backend does not expose get_summary_stats()")
+def stats(scope: str = "visible") -> dict[str, Any]:
+    """Print and return summary statistics of the plotted 2-D points.
 
-    s = plot.get_summary_stats(scope)
+    Pools the points of every scatter and line layer and reports their count and the minimum,
+    maximum, mean and standard deviation of x and y. Non-finite points are ignored.
+
+    Args:
+        scope (str, optional): ``'visible'`` (default) counts only points inside the current view,
+            ``'all'`` every point. The view filter applies to linear axes; on a log, symlog or
+            other scaled axis that axis is not filtered.
+
+    Returns:
+        dict: ``{"scope", "points", "x_min", "x_max", "x_mean", "x_std", "y_min", ...}``; only
+        ``scope`` and ``points`` (0) when nothing qualifies.
+
+    Examples:
+        >>> gplt.scatter(x, y)
+        >>> gplt.stats("all")["x_mean"]
+    """
+    if scope not in ("visible", "all"):
+        raise ValueError(f"stats(): scope must be 'visible' or 'all', got {scope!r}")
+    plot = _get_or_create_plot()
+    xs: List[np.ndarray] = []
+    ys: List[np.ndarray] = []
+    for layer in plot.scene.layers:
+        pts = getattr(layer, "pts", None)
+        if pts is None or getattr(layer, "layer_type", "") not in ("scatter", "polyline"):
+            continue
+        arr = np.asarray(pts, dtype=np.float64)
+        if arr.ndim == 2 and arr.shape[1] >= 2:
+            xs.append(arr[:, 0])
+            ys.append(arr[:, 1])
+    result: dict[str, Any] = {"scope": scope, "points": 0}
+    if xs:
+        x, y = np.concatenate(xs), np.concatenate(ys)
+        keep = np.isfinite(x) & np.isfinite(y)
+        if scope == "visible":
+            options = plot.options
+            if getattr(options, "axis_scale_x", "linear") == "linear":
+                lo, hi = sorted(plot.get_xlim())
+                keep &= (x >= lo) & (x <= hi)
+            if getattr(options, "axis_scale_y", "linear") == "linear":
+                lo, hi = sorted(plot.get_ylim())
+                keep &= (y >= lo) & (y <= hi)
+        x, y = x[keep], y[keep]
+        if x.size:
+            result["points"] = int(x.size)
+            for name, values in (("x", x), ("y", y)):
+                result[f"{name}_min"] = float(values.min())
+                result[f"{name}_max"] = float(values.max())
+                result[f"{name}_mean"] = float(values.mean())
+                result[f"{name}_std"] = float(values.std())
     print(f"\n--- Statistics ({scope}) ---")
-    for k, v in s.items():
-        if isinstance(v, float):
-            print(f"{k:12}: {v:.6f}")
-        else:
-            print(f"{k:12}: {v}")
-    return s
+    for key, value in result.items():
+        print(f"{key:12}: {value:.6f}" if isinstance(value, float) else f"{key:12}: {value}")
+    return result
 
 
 def profile(name: str) -> None:
@@ -14728,6 +15102,15 @@ def profile(name: str) -> None:
 
 
 def export(filename: Optional[str] = None, scale: float = 2.0):
+    """Save the current figure as a PNG.
+
+    Args:
+        filename (str, optional): Output path. Defaults to ``plot_<unix time>.png``.
+        scale (float, optional): Resolution multiplier. Defaults to 2.0.
+
+    See :func:`savefig` for the matplotlib keywords and the headless export.
+
+    """
     plot = _get_or_create_plot()
     fname = filename or f"plot_{int(time.time())}.png"
     if hasattr(plot, "savefig"):

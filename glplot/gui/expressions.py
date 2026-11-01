@@ -190,6 +190,69 @@ def noise(n_or_x, scale=1.0, seed=None):
 
 #: Every name a user expression may reference. Bare callables and scalars only -- no module
 #: objects. Exposing ``np`` itself would be pointless (Attribute access is banned) and risky.
+# --- easing and interpolation (used by animations; handy in any expression) --------------
+
+
+def _unit(x: Any) -> np.ndarray:
+    return np.clip(np.asarray(x, dtype=np.float64), 0.0, 1.0)
+
+
+def lerp(a: Any, b: Any, x: Any) -> Any:
+    """``a`` at x=0 to ``b`` at x=1 (not clamped)."""
+    return a + (b - a) * np.asarray(x, dtype=np.float64)
+
+
+def smoothstep(x: Any) -> np.ndarray:
+    """0 to 1 with zero slope at both ends (3x^2 - 2x^3)."""
+    u = _unit(x)
+    return u * u * (3.0 - 2.0 * u)
+
+
+def smootherstep(x: Any) -> np.ndarray:
+    """Like ``smoothstep`` with zero acceleration too (6x^5 - 15x^4 + 10x^3)."""
+    u = _unit(x)
+    return u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
+
+
+def ease_in(x: Any) -> np.ndarray:
+    """Starts slowly (cubic)."""
+    return _unit(x) ** 3
+
+
+def ease_out(x: Any) -> np.ndarray:
+    """Ends slowly (cubic)."""
+    return 1.0 - (1.0 - _unit(x)) ** 3
+
+
+def ease_in_out(x: Any) -> np.ndarray:
+    """Slow at both ends (cubic)."""
+    u = _unit(x)
+    return np.where(u < 0.5, 4.0 * u**3, 1.0 - (-2.0 * u + 2.0) ** 3 / 2.0)
+
+
+def ease_sine(x: Any) -> np.ndarray:
+    """Slow at both ends (half cosine)."""
+    return 0.5 - 0.5 * np.cos(np.pi * _unit(x))
+
+
+def pingpong(x: Any) -> np.ndarray:
+    """0 -> 1 -> 0 as x goes 0 -> 0.5 -> 1 (repeats every 1): a loop-friendly triangle."""
+    return 1.0 - np.abs(2.0 * np.mod(np.asarray(x, dtype=np.float64), 1.0) - 1.0)
+
+
+def ramp(x: Any, start: Any = 0.0, stop: Any = 1.0) -> np.ndarray:
+    """0 before ``start``, 1 after ``stop``, linear between: a progress bar for a sub-interval."""
+    span = np.asarray(stop, dtype=np.float64) - np.asarray(start, dtype=np.float64)
+    safe = np.where(span == 0.0, 1.0, span)
+    return _unit((np.asarray(x, dtype=np.float64) - start) / safe)
+
+
+def pulse(x: Any, start: Any, stop: Any) -> np.ndarray:
+    """1 while ``start <= x < stop``, else 0."""
+    values = np.asarray(x, dtype=np.float64)
+    return ((values >= start) & (values < stop)).astype(np.float64)
+
+
 SAFE_NAMES: Dict[str, Any] = {
     # trigonometric / hyperbolic
     "sin": np.sin,
@@ -241,6 +304,8 @@ SAFE_NAMES: Dict[str, Any] = {
     "ptp": np.ptp,
     # construction
     "linspace": np.linspace,
+    "logspace": np.logspace,
+    "geomspace": np.geomspace,
     "arange": np.arange,
     "zeros": np.zeros,
     "ones": np.ones,
@@ -270,6 +335,17 @@ SAFE_NAMES: Dict[str, Any] = {
     "sawtooth": sawtooth,
     "square": square,
     "noise": noise,
+    # easing and interpolation
+    "lerp": lerp,
+    "smoothstep": smoothstep,
+    "smootherstep": smootherstep,
+    "ease_in": ease_in,
+    "ease_out": ease_out,
+    "ease_in_out": ease_in_out,
+    "ease_sine": ease_sine,
+    "pingpong": pingpong,
+    "ramp": ramp,
+    "pulse": pulse,
 }
 
 

@@ -1638,8 +1638,19 @@ class GPULinePlot:
         if not twin_follow:
             self._refit_twins(keep)
 
-        self.active_panel.view_pinned = True
-        self._needs_initial_autoscale = False
+        panel = self.active_panel
+        panel.pinned_x = panel.pinned_x or xlim is not None
+        panel.pinned_y = panel.pinned_y or ylim is not None
+        fit_owed = panel.needs_initial_autoscale and not panel.view_pinned
+        if fit_owed and not (panel.pinned_x and panel.pinned_y):
+            # One axis was set while the other is still waiting for its data. matplotlib turns
+            # autoscale off for the axis you set and leaves the other on, so the panel is *not*
+            # pinned: the initial fit still runs, on the axis nobody set. (Pinning both here
+            # froze the other axis at whatever it held -- (-1, 1) on an empty axes.)
+            pass
+        else:
+            panel.view_pinned = True
+            self._needs_initial_autoscale = False
         # Flush interaction cache on manual view changes
         self.cache.active = False
         self.cache.capture_window = None
@@ -1781,9 +1792,24 @@ class GPULinePlot:
         self._refit_twins(keep)
 
         self.active_panel.view_pinned = True
+        # An explicit autoscale takes the fitted axes back from any single-axis pin; the
+        # internal initial fit only ever asks for the axes nobody pinned, so it changes nothing.
+        if axes in ("both", "x"):
+            self.active_panel.pinned_x = False
+        if axes in ("both", "y"):
+            self.active_panel.pinned_y = False
         self._needs_initial_autoscale = False
         self.cache.active = False
         self.frame.dirty_scene = True
+
+    @staticmethod
+    def _owed_axes(panel: Panel) -> str:
+        """The axes a panel's initial fit may touch: those no ``set_xlim``/``set_ylim`` pinned."""
+        if panel.pinned_x and not panel.pinned_y:
+            return "y"
+        if panel.pinned_y and not panel.pinned_x:
+            return "x"
+        return "both"
 
     def reset_view(self) -> None:
         self.camera_controller.reset_view()
@@ -2054,7 +2080,7 @@ class GPULinePlot:
                     and not panel.view_pinned
                     and not self._is_pure_3d_scene()
                 ):
-                    self.autoscale()
+                    self.autoscale(axes=self._owed_axes(panel))
                     panel.needs_initial_autoscale = False
                     # The first fit is not a deliberate pin (``autoscale`` marks one).
                     panel.view_pinned = False
@@ -3663,7 +3689,7 @@ class GPULinePlot:
         saved_flag = self._needs_initial_autoscale
         self._twin_frozen = True
         try:
-            self.autoscale()
+            self.autoscale(axes=self._owed_axes(panel))
             yield
         finally:
             self._twin_frozen = False

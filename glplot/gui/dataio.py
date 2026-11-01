@@ -54,7 +54,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .clipboard import detect_delimiter, parse_table
+from .clipboard import cells_to_array, detect_delimiter, parse_table_cells
 from .datasets import Column, DataSet
 
 #: Extensions read as delimited text through :func:`glplot.gui.clipboard.parse_table`.
@@ -277,6 +277,19 @@ def load_text_file(path: str, *, name: Optional[str] = None) -> DataSet:
     * **comment lines** -- see :func:`strip_comments`, and
     * a file-scoped error message.
     """
+    headers, data, _ = _read_text_table(path)
+    columns = [Column(headers[i], data[:, i]) for i in range(data.shape[1])]
+    dataset = DataSet(name or file_stem(path), columns)
+    dataset.source = "file"
+    return dataset
+
+
+def _read_text_table(path: str) -> Tuple[List[str], np.ndarray, List[List[str]]]:
+    """Decode, de-comment and split a delimited file: ``(headers, numeric data, raw body cells)``.
+
+    The one reading both :func:`load_text_file` and :func:`text_columns` go through, so the
+    numeric table and the text of its non-numeric columns can never be cut differently.
+    """
     try:
         with open(path, "r", encoding="utf-8-sig", errors="replace") as handle:
             text = handle.read()
@@ -291,19 +304,33 @@ def load_text_file(path: str, *, name: Optional[str] = None) -> DataSet:
         detail = "it holds only comments" if hint is not None else "it is empty"
         raise DataIOError(f"Could not parse {path}: {detail}.")
     try:
-        headers, data = parse_table(body)
+        headers, cells = parse_table_cells(body)
     except ValueError as exc:
         raise DataIOError(f"Could not parse {path}: {exc}") from exc
+    data = cells_to_array(cells, len(headers))
 
     if hint is not None and headers == [f"col{i + 1}" for i in range(data.shape[1])]:
         recovered = _header_from_hint(hint, data.shape[1])
         if recovered is not None:
             headers = recovered
+    return headers, data, cells
 
-    columns = [Column(headers[i], data[:, i]) for i in range(data.shape[1])]
-    dataset = DataSet(name or file_stem(path), columns)
-    dataset.source = "file"
-    return dataset
+
+def text_columns(path: str) -> Dict[str, List[str]]:
+    """The raw text of every column of a delimited file that held no number at all.
+
+    :func:`load_text_file` turns a non-numeric cell into ``nan`` -- the right call for a stray
+    ``n/a`` in a measurement, and a silent loss of every value in a column of names or dates. This
+    returns those columns' cells (stripped; ``""`` where empty) keyed by column name, in file
+    order, so a caller can decide what they mean. A column with at least one number is not here.
+    """
+    headers, data, cells = _read_text_table(path)
+    found: Dict[str, List[str]] = {}
+    for j, header in enumerate(headers):
+        column = [row[j].strip() if j < len(row) else "" for row in cells]
+        if cells and np.all(np.isnan(data[:, j])) and any(column):
+            found[header] = column
+    return found
 
 
 # ----------------------------------------------------------------------------------

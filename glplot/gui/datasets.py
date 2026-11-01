@@ -204,6 +204,12 @@ class DataSet:
         self.layer_id: Optional[int] = None
         self.source: str = "manual"
         self.binding: Optional[LayerBinding] = None
+        #: Columns that stand for text: ``{column: [label0, label1, ...]}``, the stored value of a
+        #: row being the index of its label (as a float, ``nan`` for "no value"). A column of
+        #: city names loads as ``0, 0, 1, 2...`` with ``["Madrid", "Lima", "Oslo"]`` here.
+        self.categories: Dict[str, List[str]] = {}
+        #: Columns holding dates as numbers, ``{column: unit}`` (``"days since 1970-01-01"``).
+        self.date_columns: Dict[str, str] = {}
 
         lengths = {len(column.values) for column in self.columns}
         if len(lengths) > 1:
@@ -277,6 +283,8 @@ class DataSet:
         if column is None:
             return False
         self.columns.remove(column)
+        self.categories.pop(name, None)
+        self.date_columns.pop(name, None)
         if self.binding is not None and name in self.binding.columns:
             # The geometry can no longer be reassembled; drop the live link rather than
             # write back a wrong-shaped array.
@@ -315,6 +323,10 @@ class DataSet:
         others = [name for name in self.column_names() if name != old]
         resolved = _next_available(new, others)
         column.name = resolved
+        if old in self.categories:
+            self.categories[resolved] = self.categories.pop(old)
+        if old in self.date_columns:
+            self.date_columns[resolved] = self.date_columns.pop(old)
         if self.binding is not None:
             self.binding.columns = [
                 resolved if name == old else name for name in self.binding.columns
@@ -624,6 +636,8 @@ class DataSet:
         columns = [Column(column.name, column.values.copy()) for column in self.columns]
         clone = DataSet(new_name if new_name is not None else f"{self.name} copy", columns)
         clone.source = "derived" if self.source == "layer" else self.source
+        clone.categories = {name: list(labels) for name, labels in self.categories.items()}
+        clone.date_columns = dict(self.date_columns)
         return clone
 
     # -- layer link ------------------------------------------------------------

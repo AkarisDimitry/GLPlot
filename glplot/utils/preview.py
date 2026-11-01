@@ -928,36 +928,75 @@ def _panel_active(engine: object, panel: object):
         engine.active_panel_index = previous
 
 
+def _data_limits(engine: object, axis: str, limits: Tuple[float, float]) -> Tuple[float, float]:
+    """``limits`` from the camera, expressed in data units for a matplotlib axis.
+
+    The engine reports its view in the space it draws in -- ``log10`` of the data on a log axis,
+    ``arcsinh`` on an asinh one -- while the export hands the numbers to a matplotlib axis that
+    already carries the scale and wants data. Left alone, ``plot(); xscale("log")`` (the usual
+    order, and the one that pins the view) exported with limits like ``(-0.2, 4.2)``: matplotlib
+    drops the non-positive end and the data is nowhere in frame. Linear axes pass through
+    untouched. Reads the options of whichever panel is active on ``engine``.
+    """
+    opts = getattr(engine, "options", None)
+    mode = getattr(opts, f"axis_scale_{axis}", "linear")
+    if not mode or mode == "linear":
+        return limits
+    from . import scale
+
+    params = getattr(opts, f"axis_scale_params_{axis}", None)
+    converted = scale.inverse(np.asarray(limits, dtype=np.float64), mode, params)
+    if not np.all(np.isfinite(converted)):
+        return limits
+    return (float(converted[0]), float(converted[1]))
+
+
+def _view_pins(engine: object, panel: object) -> Tuple[bool, bool]:
+    """Which axes of ``panel`` were set on purpose: ``(x_pinned, y_pinned)``.
+
+    Both when the whole view is pinned (:func:`_view_is_pinned`); otherwise whichever single
+    axis ``set_xlim``/``set_ylim`` pinned while the other one was still waiting for its data.
+    """
+    if _view_is_pinned(engine, panel):
+        return True, True
+    return bool(getattr(panel, "pinned_x", False)), bool(getattr(panel, "pinned_y", False))
+
+
 def _apply_view(ax: object, engine: object, panel: object = None) -> bool:
     """Give ``ax`` the view ``panel`` has: its pinned limits, else matplotlib's autoscale.
 
-    Returns whether the view was pinned. Direction comes along either way: pinned limits
-    arrive as ``(hi, lo)`` when the axis is inverted, which matplotlib reads as an inverted
-    axis by itself; an autoscaled axis is inverted explicitly from the camera's flip flags.
+    Returns whether the *whole* view was pinned. Each axis is handled on its own, as in
+    matplotlib: ``ylim(...)`` pins y and leaves x following the data. Direction comes along
+    either way: pinned limits arrive as ``(hi, lo)`` when the axis is inverted, which matplotlib
+    reads as an inverted axis by itself; an autoscaled axis is inverted explicitly from the
+    camera's flip flags.
     """
-    pinned = False
-    if _view_is_pinned(engine, panel):
-        get_xlim = getattr(engine, "get_xlim", None)
-        get_ylim = getattr(engine, "get_ylim", None)
-        if callable(get_xlim) and callable(get_ylim):
-            with _panel_active(engine, panel):
-                xlim, ylim = get_xlim(), get_ylim()
-            ax.set_xlim(*xlim)
-            ax.set_ylim(*ylim)
-            pinned = True
-    if not pinned:
+    pinned_x, pinned_y = _view_pins(engine, panel)
+    get_xlim = getattr(engine, "get_xlim", None)
+    get_ylim = getattr(engine, "get_ylim", None)
+    if not (callable(get_xlim) and callable(get_ylim)):
+        pinned_x = pinned_y = False
+    if not (pinned_x and pinned_y):
         ax.autoscale(enable=True)
         camera = getattr(panel, "camera", None)
         if getattr(camera, "flip_x", False) and not ax.xaxis_inverted():
             ax.invert_xaxis()
         if getattr(camera, "flip_y", False) and not ax.yaxis_inverted():
             ax.invert_yaxis()
+    if pinned_x or pinned_y:
+        with _panel_active(engine, panel):
+            xlim = _data_limits(engine, "x", get_xlim()) if pinned_x else None
+            ylim = _data_limits(engine, "y", get_ylim()) if pinned_y else None
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
     if getattr(panel, "aspect_equal", False):
         # `datalim` widens whichever axis is short -- the same thing GLPlot's own equal
         # aspect does to the camera -- so nothing the caller had in view is cropped. The
         # live view equalised for the window's pixel shape; this saved figure has its own.
         ax.set_aspect("equal", adjustable="datalim")
-    return pinned
+    return pinned_x and pinned_y
 
 
 def _spaced_rect(panel: object, panels: Sequence[object], wspace: float, hspace: float):
@@ -1372,8 +1411,8 @@ def _reapply_pinned_limits(ax: object, has_3d: bool, engine: object) -> None:
         get_xlim = getattr(engine, "get_xlim", None)
         get_ylim = getattr(engine, "get_ylim", None)
         if callable(get_xlim) and callable(get_ylim):
-            ax.set_xlim(*get_xlim())
-            ax.set_ylim(*get_ylim())
+            ax.set_xlim(*_data_limits(engine, "x", get_xlim()))
+            ax.set_ylim(*_data_limits(engine, "y", get_ylim()))
 
 
 def _build_preview_figure(engine: object, scale: float = 1.0):

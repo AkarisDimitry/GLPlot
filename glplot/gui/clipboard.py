@@ -138,6 +138,21 @@ def parse_table(text: str) -> Tuple[List[str], np.ndarray]:
     ValueError
         With a human-readable message when the input is empty or unparseable.
     """
+    headers, body = parse_table_cells(text)
+    return headers, cells_to_array(body, len(headers))
+
+
+def parse_table_cells(text: str) -> Tuple[List[str], List[List[str]]]:
+    """Split clipboard/file text into ``(headers, body_rows)`` of raw, unparsed cells.
+
+    The first half of :func:`parse_table` -- delimiter detection, quoting, the header decision --
+    with the cells left as the strings they were. It exists so a caller that needs the text of a
+    column :func:`parse_table` turned into ``nan`` (a city name, a date) reads the *same* rows
+    under the *same* header rule, rather than a second parser that could disagree about which
+    row is the header. Body rows may be ragged; :func:`cells_to_array` pads them.
+
+    Raises ``ValueError`` exactly as :func:`parse_table` does.
+    """
     if not text or not text.strip():
         raise ValueError("Nothing to paste: the input is empty.")
 
@@ -152,19 +167,19 @@ def parse_table(text: str) -> Tuple[List[str], np.ndarray]:
         raise ValueError("Nothing to paste: no columns were found.")
 
     if _looks_like_header(rows[0]):
-        headers = _make_headers(rows[0], n_cols)
-        body = rows[1:]
-    else:
-        headers = _make_headers([], n_cols)
-        body = rows
+        return _make_headers(rows[0], n_cols), rows[1:]
+    return _make_headers([], n_cols), rows
 
+
+def cells_to_array(body: Sequence[Sequence[str]], n_cols: int) -> np.ndarray:
+    """Body cells as a float64 ``(rows, n_cols)`` array: ``nan`` for empty or non-numeric cells."""
     data = np.full((len(body), n_cols), np.nan, dtype=np.float64)
     for i, row in enumerate(body):
         for j in range(min(len(row), n_cols)):
             value = _parse_float(row[j])
             if value is not None:
                 data[i, j] = value
-    return headers, data
+    return data
 
 
 def format_table(

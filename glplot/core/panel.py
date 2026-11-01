@@ -167,6 +167,13 @@ class Panel:
         #: honour the limits of one panel and silently autoscale the rest.
         self.view_pinned: bool = False
 
+        #: Which single axes were set on purpose while the other still owed its fit-to-data. As
+        #: in matplotlib, ``ylim(...)`` turns autoscale off for y *only*: x keeps following the
+        #: data that arrives later. ``view_pinned`` means "both"; these say which one, so the
+        #: initial fit (and the headless export) can leave the pinned axis alone and fit the other.
+        self.pinned_x: bool = False
+        self.pinned_y: bool = False
+
         #: True once the caller asked for equal x/y units (``set_aspect('equal')``,
         #: ``axis('equal')``, or any plot that implies it -- ``imshow``, ``hexbin``...). The
         #: live view bakes that into the camera, but a saved file is laid out by matplotlib
