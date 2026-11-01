@@ -102,6 +102,42 @@ clock there (`animate` says when this happens).
 * Real dynamics (pendulum, orbit, predator-prey, Lorenz): `simulate` solves the equations into a dataset;
   plot it with `reveal` + `head`.
 
+## Step by step, like a 3Blue1Brown video: stage `effects`
+
+An explainer is a sequence of plays: draw the curve, write the formula, bring a dot in, point at the
+term that matters, clear the stage. A stage's `effects` does that, all of its effects together:
+
+`{{"name": "tangent", "duration": 1, "effects": {{"create": "a4", "write": ["a5", "a6"]}}}}`
+
+| effect | what it does |
+|---|---|
+| `create` / `uncreate` | draws a curve in from its start / takes it back (line, scatter, step, area, `add_function`); an arrow grows; text is written. A kind that cannot be drawn in part (a field, bars) fades instead |
+| `write` / `unwrite` | text letter by letter (a `$...$` formula appears whole) |
+| `grow` | an arrow from its tail |
+| `fade_in` / `fade_out` | opacity |
+| `indicate` | turns yellow and grows, then comes back (manim's `Indicate`) |
+
+* An artist brought in by an effect is **hidden until its stage**; one taken out stays hidden.
+  Artists no effect names are on screen from the first frame (the axes, say).
+* Effects ease with manim's `smooth` (here `smoother`) unless the stage gives `ease`. A stage can also
+  `animate` variables, and other stages can move things while nothing appears (a point sliding
+  along a curve, with `"text": {{"format": "slope = {{m:.2f}}"}}` updating beside it).
+* Effects drive `alpha`, `reveal`, `color` and the size of the artists they name: do not bind those
+  yourself as well (the call is refused). The reply's `effects` lists what each stage did.
+* Pacing like the videos: 1-2 s per play, a short stage with nothing in it after each idea, and
+  `hold_end=1` so the last picture stays.
+
+**The look**: `create_figure(style="3b1b")` (or `set_style`) is manim's: a black page, BLUE_C for the
+thing being explained and YELLOW_C to point at things, white serif text, `$...$` maths in Computer
+Modern, axes that cross at the origin with arrow tips. `set_axes(grid=true)` gives a NumberPlane grid,
+`legend=false` drops the legend (an explainer labels things in place).
+
+**The pieces**: a title or caption that stays put, `add_annotation(kind="text", coords="axes", x=0.5,
+y=1.05, align="center", fontsize=34)`; a formula, `text="$f'(x) = 2x$"`; a number that changes, bind
+`text` to a `format`; a vector, `add_annotation(kind="arrow", x=0, y=0, dx=2, dy=1)` and bind `dx`,
+`dy`; a dot, `add_plot(kind="scatter", x=[1], y=[1], size=16)` and bind `x`, `y`. The recipe
+`explainer_3b1b` below is a complete one.
+
 ## Reading the reply
 
 `frames`, `fps`, `duration_s`, `size_px`, `stages` (name, start, end), `variables` (first, last, min, max
@@ -189,4 +225,54 @@ Datasets are rebuilt in the script from how they were made (expressions become n
 `solve_ivp`, a loaded file becomes `np.genfromtxt`); results of `analyze_dataset` are embedded as numbers
 when small, and `notes` says when they are too big. The script needs only `glplot` (and `scipy` for
 `simulate`). Give it to the user to keep and edit; unattended runs end with `savefig`, never `show`.
+"""
+
+VIDEO_BODY = """A whole explainer -- a title card, a few scenes that build an idea step by step, a recap -- is
+**one figure per scene**, each animated and checked on its own, then **cut together** with
+`compose_video`. This is how to make a complete video in the 3Blue1Brown style.
+
+## 1. Plan
+
+Write the script first: 3-6 scenes of 5-20 s, **one idea each**, in the order a viewer needs them.
+For each scene list its plays (what appears, what moves, what is pointed at). Typical shape:
+
+1. **Title card**: the question, written (`write`), maybe one formula fading in.
+2. **Scenes**: build the picture (`create` the curve, `write` the formula, `fade_in` the dot), make
+   it move (a stage that `animate`s a variable), point at the key term (`indicate`), turn one
+   equation into the next (`transform`), clear what is done (`fade_out`).
+3. **Recap**: the result on its own, held for a moment.
+
+## 2. Build every scene the same way
+
+* `create_figure(width=1280, height=720, style="3b1b")` -- the **same size for every scene**, so
+  nothing is letterboxed. A text-only card: `set_axes(hide_axes=true, xlim=[0, 1], ylim=[0, 1])`
+  and place text with `coords="axes"`.
+* Pin the axes (`xlim`, `ylim`), `legend=false`, and label things in place with text.
+* `animate(figure_id, stages=[...effects...])` **without output**: look at the contact sheet and
+  `issues`, fix, repeat. The frames of that render are kept for the next step.
+
+## 3. Compose
+
+`compose_video(segments=["fig1", "fig2", {{"figure_id": "fig3", "hold_end": 1}}],
+output="explainer.mp4", transition="fade")`
+
+* A segment is a figure id (its last `animate`) or `{{"figure_id", "hold_end"}}`; a figure never
+  animated is a still: `{{"figure_id": "fig4", "duration": 3}}`.
+* `transition`: `fade` (to the page colour and back), `crossfade` (overlap), `cut`;
+  `transition_s` its length. `fps` defaults to the fastest scene's.
+* Scenes already rendered by `animate` are reused (`source: "cached"`); a scene changed since is
+  rendered again (`"rendered"`), which takes as long as its `animate` did.
+* Omit `output` to preview: the contact sheet shows the start, middle and end of every scene.
+* `.mp4` for anything long (needs `ffmpeg`); a GIF is limited to {max_gif} frames. At most
+  {max_frames} frames in all. `audio="voice.mp3"` adds a soundtrack to an .mp4/.webm.
+
+## 4. Hand it over
+
+Give the user the file, and offer `export_script(figure_id, kind="animation")` per scene for the
+Python behind it.
+
+## Pacing
+
+1-2 s per play, a 0.5-1 s stage with nothing in it after each idea, `hold_end` on the last scene.
+Keep each frame uncluttered: what is not being talked about any more fades out.
 """

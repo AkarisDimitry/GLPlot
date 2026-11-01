@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
+from matplotlib import colors as mcolors
 
 from .. import pyplot as gplt
 from ..core.camera3d import SYSTEM_3D_ARTISTS
@@ -46,7 +47,7 @@ from ..gui.datasets import Column, DataSet
 from ..gui.expressions import ExpressionError, evaluate_2d
 from ..pyplot import MatplotlibCompatWarning
 from ..utils.preview import render_preview_bytes
-from . import animator, dynamics, motion
+from . import animator, choreography, dynamics, motion, video
 from . import script as scripting
 from . import simulate as simulation
 from . import textdata
@@ -100,7 +101,7 @@ FIELD_KINDS: Tuple[str, ...] = (
     "surface",
     "wireframe",
 )
-ANNOTATION_KINDS: Tuple[str, ...] = ("text", "hline", "vline")
+ANNOTATION_KINDS: Tuple[str, ...] = ("text", "hline", "vline", "arrow")
 
 #: What pyplot raises for a mistake in the arguments or the state it was handed (a bad colour,
 #: mismatched lengths, ``colorbar()`` with nothing to attach to). Each message already says what
@@ -240,6 +241,8 @@ class _Figure:
     #: not honour ``axis("equal")`` (the pie below would come out an ellipse), so the export
     #: applies it to the matplotlib axes itself; this is what it consults.
     equal_panels: set = field(default_factory=set)
+    #: Panels whose legend was switched off on purpose (set_axes(legend=False)).
+    legend_off: set = field(default_factory=set)
     #: What the last reviewed render found (see :mod:`glplot.mcp.review`).
     issues: List[Dict[str, Any]] = field(default_factory=list)
     #: The arguments ``create_figure`` was called with (title, style, grid, size...).
@@ -253,6 +256,9 @@ class _Figure:
     bindings: List[dynamics.Binding] = field(default_factory=list)
     #: The last ``animate`` specification (what ``export_script`` turns into an animation).
     animation: Optional[Dict[str, Any]] = None
+    #: What that animation rendered, for ``compose_video``: ``{signature, frames, fps, bytes}``.
+    #: Only reused while :meth:`Toolbox._signature` of the figure is unchanged.
+    rendered: Optional[Dict[str, Any]] = None
 
     @property
     def panels(self) -> int:
@@ -355,6 +361,8 @@ class Toolbox:
         self._replaying = False
         self._resolved: Dict[str, Any] = {}
         self._next_scratch = 1
+        #: Figure ids whose rendered frames are kept, oldest first (see _remember_frames).
+        self._frame_order: List[str] = []
 
     # ------------------------------------------------------------------
     # Figures
@@ -602,6 +610,7 @@ class Toolbox:
         entry.plot, entry.num = built.plot, built.num
         entry.artists, entry.next_artist = built.artists, built.next_artist
         entry.equal_panels, entry.twins = built.equal_panels, built.twins
+        entry.legend_off = built.legend_off
         gplt.close(old_plot)
 
     def _context_values(self, entry: _Figure) -> Dict[str, float]:
@@ -1543,6 +1552,8 @@ class Toolbox:
         linewidth: Optional[float] = None,
         linestyle: Optional[str] = None,
         panel: int = 1,
+        reveal: Optional[float] = None,
+        head: bool = False,
     ) -> ToolResult:
         """Plot ``y = expression(x)`` over ``[x_min, x_max]`` without building a dataset."""
         if kind not in ("line", "area", "scatter", "step"):
@@ -1577,6 +1588,8 @@ class Toolbox:
             linewidth=linewidth,
             linestyle=linestyle,
             panel=panel,
+            reveal=reveal,
+            head=head,
         )
         outcome.message = (
             f"Plotted y = {expression} on [{x_min:g}, {x_max:g}] as {outcome.data['artist_id']}."
@@ -1927,18 +1940,61 @@ class Toolbox:
         fontsize: Optional[float] = None,
         label: Optional[str] = None,
         panel: int = 1,
+        dx: Optional[float] = None,
+        dy: Optional[float] = None,
+        alpha: Optional[float] = None,
+        reveal: Optional[float] = None,
+        coords: str = "data",
+        align: str = "left",
+        background: bool = False,
     ) -> ToolResult:
-        """Add a text note, a horizontal line (at ``y``) or a vertical line (at ``x``)."""
+        """Add a text note, a horizontal or vertical line, or an arrow (a vector)."""
         entry = self._figure(figure_id)
         if kind not in ANNOTATION_KINDS:
             raise McpError(f"Unknown kind {kind!r}. Use one of: {', '.join(ANNOTATION_KINDS)}.")
         if entry.is_3d:
             raise McpError("Annotations are 2-D only; this is a 3-D figure.")
+        if coords not in ("data", "axes"):
+            raise McpError("coords is 'data' (x, y in data units) or 'axes' (0..1 of the box).")
+        if coords == "axes" and kind != "text":
+            raise McpError("coords='axes' places text; lines and arrows are in data units.")
+        if align not in ("left", "center", "right"):
+            raise McpError("align is 'left', 'center' or 'right'.")
+        for name, value in (("alpha", alpha), ("reveal", reveal)):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not 0.0 <= value <= 1.0
+            ):
+                raise McpError(f"{name} is a number between 0 and 1.")
+        if background and kind != "text":
+            raise McpError("background puts a box behind text; it applies to kind='text'.")
+        if reveal is not None and kind not in ("text", "arrow"):
+            raise McpError("reveal applies to text (letters written so far) and arrows (grown).")
         self._activate(entry, panel)
+        # Every annotation gets an explicit colour: the preset's ink when none is given (a black
+        # default vanishes on a dark page), an arrow the next colour of the cycle like a curve.
+        # Recorded so an exported script draws the same thing.
+        if color is None:
+            if kind == "arrow":
+                base = gplt._next_cycle_color(entry.plot)
+            else:
+                ink = gplt._style_ink(entry.plot)
+                base = mcolors.to_hex(ink[:3]) if ink is not None else "#000000"
+            self._resolved["color"] = base
+        else:
+            base = color
+        try:
+            rgba = list(mcolors.to_rgba(base))
+        except ValueError as exc:
+            raise McpError(f"color {base!r} is not a colour: {exc}") from exc
+        if alpha is not None:
+            rgba[3] *= float(alpha)
+        shade = tuple(rgba)
         style = {
             k: v
             for k, v in (
-                ("color", color),
+                ("color", shade),
                 ("linestyle", linestyle),
                 ("linewidth", linewidth),
                 ("label", label),
@@ -1949,18 +2005,54 @@ class Toolbox:
         if kind == "text":
             if x is None or y is None or not text:
                 raise McpError("kind='text' needs x, y and text.")
-            text_style = {
-                k: v for k, v in (("color", color), ("fontsize", fontsize)) if v is not None
-            }
-            draw = lambda: gplt.text(float(x), float(y), str(text), **text_style)  # noqa: E731
+            shown = dynamics.reveal_text(str(text), 1.0 if reveal is None else float(reveal))
+            text_style: Dict[str, Any] = {"color": shade}
+            if align != "left":  # left is what text() does anyway
+                text_style["ha"] = align
+            if reveal is not None:  # written so far: placed where it sits in the whole text
+                text_style["layout_text"] = str(text)
+            if background:
+                # a box in the page colour hides the grid and axis lines behind the text
+                page = mcolors.to_hex(tuple(entry.plot.options.visual.background_color)[:3])
+                self._resolved["page"] = page
+                text_style["bbox"] = {"facecolor": page, "edgecolor": "none", "pad": 4}
+            if fontsize is not None:
+                text_style["fontsize"] = fontsize
+            if coords == "axes":
+                text_style["transform"] = gplt.gca().transAxes
+            draw = lambda: gplt.text(float(x), float(y), shown, **text_style)  # noqa: E731
         elif kind == "hline":
             if y is None:
                 raise McpError("kind='hline' needs y.")
             draw = lambda: gplt.axhline(float(y), **style)  # noqa: E731
-        else:
+        elif kind == "vline":
             if x is None:
                 raise McpError("kind='vline' needs x.")
             draw = lambda: gplt.axvline(float(x), **style)  # noqa: E731
+        else:
+            if x is None or y is None or dx is None or dy is None:
+                raise McpError("kind='arrow' needs x, y (the tail) and dx, dy (tail to tip).")
+            grow = 1.0 if reveal is None else float(reveal)
+            ux, uy = float(dx) * grow, float(dy) * grow
+            length = math.hypot(ux, uy)
+            # a head in proportion to the arrow, like manim's (at most a quarter of its length)
+            head = 0.22 * length
+            arrow_style = {"color": shade, "width": linewidth if linewidth is not None else 3.0}
+            if label is not None:
+                arrow_style["label"] = label
+
+            def draw() -> Any:
+                if length <= 1e-12:  # fully shrunk: nothing to draw, but keep the artist
+                    return gplt.plot([float(x)], [float(y)], color=(0, 0, 0, 0))
+                return gplt.arrow(
+                    float(x),
+                    float(y),
+                    ux,
+                    uy,
+                    head_length=head,
+                    head_width=0.6 * head,
+                    **arrow_style,
+                )
 
         artist = self._record(entry, panel, kind, label or (text or ""), draw, None)
         return ToolResult(
@@ -2255,6 +2347,10 @@ class Toolbox:
             do("grid", gplt.grid, bool(grid))
         if legend:
             do("legend", gplt.legend)
+            entry.legend_off.discard(panel)
+        elif legend is False:
+            do("legend", lambda: setattr(gplt.gcf(), "legend_show", False))
+            entry.legend_off.add(panel)
         if equal_aspect is not None:
             do("equal_aspect", gplt.axis, "equal" if equal_aspect else "auto")
             (entry.equal_panels.add if equal_aspect else entry.equal_panels.discard)(panel)
@@ -2389,6 +2485,11 @@ class Toolbox:
     ) -> ToolResult:
         """Animate a figure: properties follow expressions of time, across stages. See the guide."""
         entry = self._figure(figure_id)
+        # stage effects (create, write, fade_in, indicate...) become stage variables + bindings
+        stages, variables, bindings, plan = choreography.compile_effects(
+            self, entry, stages, variables, bindings
+        )
+        keep: Dict[str, Any] = {}
         data, image, headline = animator.run_animation(
             self,
             entry,
@@ -2408,6 +2509,7 @@ class Toolbox:
             overwrite=overwrite,
             repeat=repeat,
             quality=quality,
+            keep=keep if frame is None else None,
         )
         if frame is None:
             entry.animation = {
@@ -2421,7 +2523,164 @@ class Toolbox:
                 "hold_start": hold_start,
                 "hold_end": hold_end,
             }
+            if plan:
+                entry.animation["effects"] = copy.deepcopy(plan["stages"])
+            self._remember_frames(entry, keep)
+        if plan:
+            data["effects"] = plan["stages"]
+            if plan["notes"]:
+                data.setdefault("notes", []).extend(plan["notes"])
         return ToolResult(headline, data, image=image)
+
+    @_tool
+    def compose_video(
+        self,
+        segments: Sequence[Any],
+        output: Optional[str] = None,
+        fps: Optional[float] = None,
+        transition: str = "fade",
+        transition_s: float = 0.6,
+        size: Optional[Sequence[int]] = None,
+        audio: Optional[str] = None,
+        quality: str = "good",
+        repeat: int = 0,
+        overwrite: bool = False,
+        sheet_frames: int = 12,
+    ) -> ToolResult:
+        """Cut several animated figures (the scenes) together into one video."""
+        data, image, headline = video.compose(
+            self,
+            segments,
+            output=output,
+            fps=fps,
+            transition=transition,
+            transition_s=transition_s,
+            size=size,
+            audio=audio,
+            quality=quality,
+            repeat=repeat,
+            overwrite=overwrite,
+            sheet_frames=sheet_frames,
+        )
+        return ToolResult(headline, data, image=image)
+
+    # -- rendered frames, kept between animate and compose_video ---------------------------
+
+    def _signature(self, entry: _Figure) -> str:
+        """A digest of everything a figure's animation frames depend on.
+
+        The calls that drew it, its animation, its controls and bindings, and the contents of
+        every dataset (a replaced dataset changes what the same calls draw).
+        """
+        import hashlib
+
+        digest = hashlib.sha256()
+
+        def feed(value: Any) -> None:
+            if isinstance(value, np.ndarray):
+                digest.update(str(value.dtype).encode() + str(value.shape).encode())
+                digest.update(np.ascontiguousarray(value).tobytes())
+            elif isinstance(value, Mapping):
+                for key in sorted(value, key=str):
+                    digest.update(repr(key).encode())
+                    feed(value[key])
+            elif isinstance(value, (list, tuple)):
+                digest.update(b"[")
+                for item in value:
+                    feed(item)
+                digest.update(b"]")
+            else:
+                digest.update(repr(value).encode())
+
+        feed([(op.tool, op.args, op.artist_id, op.resolved) for op in entry.log])
+        feed(entry.spec)
+        feed(entry.animation)
+        feed({name: control.value for name, control in entry.controls.items()})
+        feed([binding.describe() for binding in entry.bindings])
+        for name in sorted(self.datasets.names()):
+            table = self.datasets.get(name)
+            for column in table.columns:
+                feed([name, column.name, np.asarray(column.values)])
+        return digest.hexdigest()
+
+    def _remember_frames(self, entry: _Figure, keep: Mapping[str, Any]) -> None:
+        """Keep what ``animate`` rendered, within the server's frame-cache budget (LRU)."""
+        frames = list(keep.get("frames") or [])
+        if not frames:
+            return
+        size = sum(len(f) for f in frames)
+        budget = self.limits.animation.max_frame_cache_bytes
+        entry.rendered = None
+        if entry.figure_id in self._frame_order:
+            self._frame_order.remove(entry.figure_id)
+        if size > budget:
+            return
+        used = size + sum(
+            f.rendered["bytes"] for f in self._figures.values() if f.rendered is not None
+        )
+        while used > budget and self._frame_order:
+            oldest = self._figures.get(self._frame_order.pop(0))
+            if oldest is not None and oldest.rendered is not None:
+                used -= oldest.rendered["bytes"]
+                oldest.rendered = None
+        entry.rendered = {
+            "signature": self._signature(entry),
+            "frames": frames,
+            "fps": float(keep["fps"]),
+            "bytes": size,
+        }
+        self._frame_order.append(entry.figure_id)
+
+    def _cached_frames(self, entry: _Figure) -> Optional[Tuple[List[bytes], float]]:
+        """The frames ``animate`` kept for ``entry``, if the figure has not changed since."""
+        kept = entry.rendered
+        if kept is not None and kept["signature"] == self._signature(entry):
+            return kept["frames"], kept["fps"]
+        return None
+
+    def _frames_for(
+        self, entry: _Figure, started: float, budget_s: float
+    ) -> Tuple[List[bytes], float, str]:
+        """The frames of ``entry``'s last animation: kept ones if still valid, else rendered."""
+        kept = self._cached_frames(entry)
+        if kept is not None:
+            return kept[0], kept[1], "cached"
+        import time as clock
+
+        if clock.monotonic() - started > budget_s:
+            raise McpError(
+                f"compose_video has used its {budget_s:.0f} s rendering budget before "
+                f"{entry.figure_id}. animate each scene first (its frames are kept), then compose."
+            )
+        spec = {k: v for k, v in entry.animation.items() if k != "effects"}
+        keep: Dict[str, Any] = {}
+        animator.run_animation(
+            self,
+            entry,
+            output=None,
+            frames=spec.get("frames"),
+            duration=spec.get("duration"),
+            fps=spec.get("fps", 30.0),
+            loop=bool(spec.get("loop")),
+            stages=spec.get("stages"),
+            variables=spec.get("variables"),
+            bindings=spec.get("bindings"),
+            scale=None,
+            hold_start=spec.get("hold_start", 0.0),
+            hold_end=spec.get("hold_end", 0.0),
+            sheet_frames=1,
+            frame=None,
+            overwrite=False,
+            repeat=0,
+            quality="good",
+            keep=keep,
+        )
+        self._remember_frames(entry, keep)
+        return list(keep["frames"]), float(keep["fps"]), "rendered"
+
+    def _still_frame(self, entry: _Figure) -> bytes:
+        """One picture of a figure with no animation, at about an animation frame's size."""
+        return animator.still_frame(self, entry)
 
     @_tool
     def export_script(self, figure_id: str, kind: str = "figure") -> ToolResult:
@@ -2856,9 +3115,13 @@ class Toolbox:
             if review:
                 labelled: Dict[int, List[str]] = {}
                 for artist in entry.artists:
-                    if artist.label:
-                        labelled.setdefault(artist.panel, []).append(artist.label)
-                entry.issues = review_figure(fig, labelled=labelled)
+                    # a note or an arrow is not a series a legend would list
+                    if artist.label and artist.kind not in ("text", "arrow"):
+                        if artist.panel not in entry.legend_off:
+                            labelled.setdefault(artist.panel, []).append(artist.label)
+                entry.issues = review_figure(
+                    fig, labelled=labelled, no_legend=sorted(entry.legend_off)
+                )
             if fmt in ("png", "jpeg") and crop is None and dpi is None:
                 edge = max(fig.get_size_inches()) * fig.dpi
                 if edge > max_edge:
@@ -3033,11 +3296,24 @@ def _head_marker(r: _PlotRequest, layers: Any) -> None:
         except (AttributeError, TypeError, ValueError):
             colour = None
     size = r.options.get("size")
-    dot: Dict[str, Any] = {"size": float(size) * 1.6 if size else 10.0, "marker": "o"}
+    diameter = float(size) * 1.6 if size else 10.0
+    dot: Dict[str, Any] = {
+        "size": diameter if r.z is not None else _px_area(diameter),
+        "marker": "o",
+    }
     if colour is not None:
         dot["color"] = colour
     args = (r.x[-1:], r.y[-1:]) + ((r.z[-1:],) if r.z is not None else ())
     _api(r).scatter(*args, **dot)
+
+
+def _px_area(diameter: Any) -> Any:
+    """A 2-D marker's ``size`` (a diameter in px, as the tools document it) as the area in pt^2
+    the exported picture's ``scatter`` takes -- the conversion 3-D markers already get, so a
+    size means the same thing in both."""
+    from ..utils.preview import _point_diameter_px_to_area_pt2
+
+    return _point_diameter_px_to_area_pt2(diameter, gplt.gcf())
 
 
 def _draw_line(r: _PlotRequest) -> Any:
@@ -3078,6 +3354,8 @@ def _draw_scatter(r: _PlotRequest) -> Any:
         span = float(np.nanmax(r.size_by) - np.nanmin(r.size_by))
         unit = (r.size_by - np.nanmin(r.size_by)) / span if span > 0 else np.full(r.n, 0.5)
         kw["size"] = 4.0 + 24.0 * unit
+    if r.z is None and kw.get("size") is not None:
+        kw["size"] = _px_area(kw["size"])
     if r.z is not None:
         layer = _api(r).scatter(r.x, r.y, r.z, **kw)
     else:

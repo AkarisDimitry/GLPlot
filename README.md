@@ -457,7 +457,7 @@ plt.show()
 ```
 </details>
 
-**All of the above render at 60+ FPS** with interactive panning, zooming, and rotation, regardless of point count. Discover more in the [example gallery](examples/gallery/README.md) (28 static scripts) and the [animated gallery](examples/gallery/animations/README.md) (16 animated scripts).
+**All of the above render at 60+ FPS** with interactive panning, zooming, and rotation, regardless of point count. Discover more in the [example gallery](examples/gallery/README.md) (28 static scripts) and the [animated gallery](examples/gallery/animations/README.md) (18 animated scripts).
 
 ## Features
 
@@ -529,11 +529,18 @@ look it was designed in, from your data or its own sample), `add_annotation`, `s
 missing labels, overlapping ticks, points a log axis drops -- with the call that fixes each),
 `save_figure`, and more: `update_artist` (edit what is drawn), `simulate` (ODEs into a dataset),
 `add_control` / `bind_property` (sliders and buttons that drive properties), **`animate`** (properties follow
-time, in stages: GIF, MP4, WebM or PNG frames, with a contact sheet and measured problems) and
+time, in stages: GIF, MP4, WebM or PNG frames, with a contact sheet and measured problems; stage `effects`
+such as `create`, `write`, `fade_in`, `indicate` and `transform` build a scene step by step),
+**`compose_video`** (several animated scenes cut into one video, with fades and an optional soundtrack) and
 `export_script` (the Python for a figure, with real widgets, or as a `FuncAnimation`).
 
+With `create_figure(style="3b1b")` the figures take the look of 3Blue1Brown's manim videos (black page,
+manim's palette, serif maths in Computer Modern, axes through the origin), so a model can make a complete
+explainer video in that style: [examples/mcp/derivative_explainer_video.py](examples/mcp/derivative_explainer_video.py)
+does it through the official MCP client, four scenes, start to finish.
+
 The server also teaches the model the library, so it does not have to guess: read-only tools
-`get_guide` (13 topics: the MCP workflow plus the Python API, 3-D, animation, controls, differences from
+`get_guide` (23 topics: the MCP workflow and tools plus the Python API, 3-D, animation, controls, differences from
 matplotlib, troubleshooting), `search_api("second y axis")` (about 250 functions, by name or by what they
 do), `get_api_doc`, `get_example` (runnable scripts) and `server_info`; `glplot://` resources; and prompts such
 as `quick_look`, `fix_my_figure` and `python_script_for`. The same material is available without MCP:

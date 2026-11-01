@@ -235,6 +235,24 @@ def ease_sine(x: Any) -> np.ndarray:
     return 0.5 - 0.5 * np.cos(np.pi * _unit(x))
 
 
+def there_and_back(x: Any) -> np.ndarray:
+    """0 -> 1 -> 0 with smooth ends (manim's ``there_and_back``): a pulse that returns."""
+    u = 1.0 - np.abs(2.0 * _unit(x) - 1.0)
+    return u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
+
+
+def rush_into(x: Any) -> np.ndarray:
+    """Starts slowly, arrives at full speed (the first half of manim's ``smooth``)."""
+    u = 0.5 * _unit(x)
+    return 2.0 * u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
+
+
+def rush_from(x: Any) -> np.ndarray:
+    """Starts at full speed, arrives gently (the second half of manim's ``smooth``)."""
+    u = 0.5 * (_unit(x) + 1.0)
+    return 2.0 * u * u * u * (u * (u * 6.0 - 15.0) + 10.0) - 1.0
+
+
 def pingpong(x: Any) -> np.ndarray:
     """0 -> 1 -> 0 as x goes 0 -> 0.5 -> 1 (repeats every 1): a loop-friendly triangle."""
     return 1.0 - np.abs(2.0 * np.mod(np.asarray(x, dtype=np.float64), 1.0) - 1.0)
@@ -343,6 +361,9 @@ SAFE_NAMES: Dict[str, Any] = {
     "ease_out": ease_out,
     "ease_in_out": ease_in_out,
     "ease_sine": ease_sine,
+    "there_and_back": there_and_back,
+    "rush_into": rush_into,
+    "rush_from": rush_from,
     "pingpong": pingpong,
     "ramp": ramp,
     "pulse": pulse,

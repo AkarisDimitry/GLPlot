@@ -102,7 +102,11 @@ def _span_text(low: float, high: float) -> str:
 
 
 def _check_axes(
-    ax: Any, panel: int, fig_title: bool, known_labels: Sequence[str] = ()
+    ax: Any,
+    panel: int,
+    fig_title: bool,
+    known_labels: Sequence[str] = (),
+    legend_wanted: bool = True,
 ) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     where = f"panel {panel}"
@@ -122,7 +126,7 @@ def _check_axes(
     _, labels = ax.get_legend_handles_labels()
     named = list(dict.fromkeys([*known_labels, *[l for l in labels if _is_public(l)]]))
     legend = ax.get_legend()
-    if len(named) >= 2 and legend is None:
+    if legend_wanted and len(named) >= 2 and legend is None:
         issues.append(
             _issue(
                 panel,
@@ -296,19 +300,29 @@ def review_figure(
     *,
     labelled: Optional[Mapping[int, Sequence[str]]] = None,
     measure_text: Optional[bool] = None,
+    no_legend: Sequence[int] = (),
 ) -> List[Dict[str, Any]]:
     """The provable problems of ``fig``, worst first, at most :data:`MAX_ISSUES`.
 
     ``labelled`` maps a 1-based panel number to the series labels the caller attached there (the
     figure itself only carries a label once a legend is requested). ``measure_text`` forces (or
     forbids) the tick-label overlap check, which needs a full draw; by default it runs unless the
-    figure holds so many points that a second draw would be slow.
+    figure holds so many points that a second draw would be slow. ``no_legend`` lists the panels
+    whose legend was switched off on purpose, which are not told to add one.
     """
     axes = _data_axes(fig)
     has_suptitle = getattr(fig, "_suptitle", None) is not None and bool(fig._suptitle.get_text())
     issues: List[Dict[str, Any]] = []
     for panel, ax in enumerate(axes, start=1):
-        issues.extend(_check_axes(ax, panel, has_suptitle, (labelled or {}).get(panel, ())))
+        issues.extend(
+            _check_axes(
+                ax,
+                panel,
+                has_suptitle,
+                (labelled or {}).get(panel, ()),
+                legend_wanted=panel not in set(no_legend),
+            )
+        )
     if measure_text is None:
         measure_text = _total_points(axes) <= _DRAW_BUDGET_POINTS
     if measure_text:

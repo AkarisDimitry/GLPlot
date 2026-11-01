@@ -30,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 EXPECTED_TOOLS = {
     "create_figure",
+    "compose_video",
     "describe_figure",
     "close_figure",
     "create_dataset",

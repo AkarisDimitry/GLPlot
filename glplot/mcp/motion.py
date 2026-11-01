@@ -106,15 +106,18 @@ def available_formats() -> Dict[str, Optional[str]]:
 # ----------------------------------------------------------------------------------
 
 
-def _image(png: bytes) -> Any:
+def _image(png: Any) -> Any:
+    """A frame as an RGB PIL image: PNG bytes, or an image already decoded (a composed video)."""
     from PIL import Image
 
+    if isinstance(png, Image.Image):
+        return png if png.mode == "RGB" else png.convert("RGB")
     image = Image.open(io.BytesIO(png))
     image.load()
     return image.convert("RGB")
 
 
-def _fitted(png: bytes, size: Tuple[int, int], background: Tuple[int, int, int]) -> Any:
+def _fitted(png: Any, size: Tuple[int, int], background: Tuple[int, int, int]) -> Any:
     """The frame as RGB exactly ``size`` (a frame a pixel off is padded or cropped, not refused)."""
     from PIL import Image
 
@@ -155,12 +158,16 @@ def encode(
     repeat: int = 0,
     background: Tuple[int, int, int] = (255, 255, 255),
     quality: str = "good",
+    audio: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Encode ``frames`` (PNG bytes) to ``path`` as ``fmt`` and describe what was written.
+    """Encode ``frames`` (PNG bytes or RGB images) to ``path`` as ``fmt``; describe the file.
 
     ``repeat`` is how many extra times a GIF/APNG plays after the first (0: forever).
-    ``quality`` ("draft", "good", "high") trades size for fidelity in MP4/WebM.
+    ``quality`` ("draft", "good", "high") trades size for fidelity in MP4/WebM. ``audio`` is a
+    sound file muxed into an MP4/WebM (cut to the video's length).
     """
+    if audio is not None and fmt not in ("mp4", "webm"):
+        raise McpError("A soundtrack needs a video file: write .mp4 or .webm.")
     if not frames:
         raise McpError("There are no frames to encode.")
     first = _image(frames[0])
@@ -218,13 +225,22 @@ def encode(
             )
         width, height = _mp4_dimensions(size)
         crf = {"draft": "30", "good": "23", "high": "17"}.get(quality, "23")
+        pad = "0x%02x%02x%02x" % tuple(int(c) for c in background)
         args = [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{size[0]}x{size[1]}",
             "-r", f"{fps:g}", "-i", "-",
-            "-vf", f"pad={width}:{height}:0:0:color=white",
-            "-an", "-c:v", codec, "-pix_fmt", "yuv420p",
         ]  # fmt: skip
+        if audio is not None:
+            args += ["-i", str(audio)]
+        args += ["-vf", f"pad={width}:{height}:0:0:color={pad}"]
+        if audio is not None:
+            # the video sets the length: a longer soundtrack is cut, a shorter one ends early
+            args += ["-map", "0:v:0", "-map", "1:a:0", "-t", f"{len(frames) / fps:.3f}"]
+            args += ["-c:a", "aac", "-b:a", "160k"] if fmt == "mp4" else ["-c:a", "libopus"]
+        else:
+            args += ["-an"]
+        args += ["-c:v", codec, "-pix_fmt", "yuv420p"]
         if codec == "libx264":
             args += ["-crf", crf, "-preset", "medium"]
         elif codec in ("libvpx-vp9", "libvpx"):
@@ -256,6 +272,8 @@ def encode(
                 raise McpError(f"ffmpeg failed ({code}) while encoding {fmt}: {detail}")
         info["fps_effective"] = float(fps)
         info["codec"] = codec
+        if audio is not None:
+            info["audio"] = audio.name
         return info
 
     raise McpError(f"Cannot encode {fmt!r}.")  # pragma: no cover - the caller validates it

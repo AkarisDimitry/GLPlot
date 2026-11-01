@@ -39,6 +39,21 @@ def _dpi(crop: Any, scale: Optional[float], *, fit: bool) -> float:
     return min(_BASE_DPI, _AUTO_EDGE / max(crop.width, crop.height))
 
 
+def still_frame(box: Any, entry: Any) -> bytes:
+    """A figure's picture framed and sized like one frame of its animation would be."""
+    from matplotlib.transforms import Bbox
+
+    boxes: List[Any] = []
+    box._render(entry, 1.0, "png", 6000, bounds=boxes)
+    merged = Bbox.union(boxes)
+    margin = 0.12 + 0.02 * max(merged.width, merged.height)
+    crop = Bbox.from_extents(
+        merged.x0 - margin, merged.y0 - margin, merged.x1 + margin, merged.y1 + margin
+    )
+    png, _ = box._render(entry, 1.0, "png", 6000, crop=crop, dpi=_dpi(crop, None, fit=True))
+    return png
+
+
 def parse_bindings(items: Optional[Sequence[Mapping[str, Any]]]) -> List[dynamics.Binding]:
     """A list of ``{target, property, value}`` objects as :class:`Binding` objects."""
     out: List[dynamics.Binding] = []
@@ -138,8 +153,13 @@ def run_animation(
     overwrite: bool,
     repeat: int,
     quality: str,
+    keep: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, Any], bytes, str]:
-    """Run an animation for ``entry`` (a toolbox figure). Returns ``(data, image, headline)``."""
+    """Run an animation for ``entry`` (a toolbox figure). Returns ``(data, image, headline)``.
+
+    ``keep``, when given and the whole animation is rendered, receives the frames (PNG bytes,
+    holds included) with their ``fps`` and ``size``: what ``compose_video`` reuses.
+    """
     caps = box.limits.animation
     started = clock.monotonic()
     notes: List[str] = []
@@ -311,6 +331,8 @@ def run_animation(
         if (n_hold_start or n_hold_end)
         else pngs
     )
+    if keep is not None:
+        keep.update(frames=list(sequence), fps=float(timeline.fps), size=(width, height))
     written: Dict[str, Any] = {}
     if target is not None and fmt is not None:
         started_write = clock.monotonic()

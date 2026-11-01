@@ -6,7 +6,7 @@ recipe that stops working fails a test instead of misleading a model.
 
 The recipes are chosen to cover the ways something can move: a parameter swept in stages, a curve
 drawing itself, a simulated trajectory, a camera orbit, data recomputed every frame, colour and
-size changing, a 3-D surface, a loop.
+size changing, a 3-D surface, a loop, and a step-by-step explainer in the 3Blue1Brown style.
 """
 
 from __future__ import annotations
@@ -487,6 +487,129 @@ COOKBOOK: Tuple[Recipe, ...] = (
                         "property": "color",
                         "value": {"colormap": "plasma", "at": "m"},
                     },
+                ],
+            ),
+        ),
+    ),
+    Recipe(
+        "explainer_3b1b",
+        "A 3Blue1Brown-style explainer: the derivative is a slope, built up step by step",
+        "Stage `effects` play like a manim scene: the curve is drawn (`create`), the title is "
+        "written letter by letter (`write`), a dot fades in, the tangent and the formula appear, "
+        "the point slides along the curve with the slope updating live (a `format` binding), the "
+        "formula is pointed at (`indicate`) and everything but the curve fades out. Artists an "
+        "effect brings in are hidden until their stage. `style='3b1b'` gives manim's look.",
+        (
+            ("create_figure", {"width": 1280, "height": 720, "style": "3b1b"}),
+            (
+                "set_axes",
+                {
+                    "figure_id": "fig1",
+                    "xlim": [-0.4, 4.6],
+                    "ylim": [-1, 9.5],
+                    "xlabel": "x",
+                    "ylabel": "y",
+                    "grid": True,
+                    "legend": False,
+                },
+            ),
+            (
+                "add_function",
+                {"figure_id": "fig1", "expression": "0.5*x**2", "x_min": -0.8, "x_max": 4.2},
+            ),
+            (
+                "add_annotation",
+                {
+                    "figure_id": "fig1",
+                    "kind": "text",
+                    "text": "The derivative is a slope",
+                    "x": 0.5,
+                    "y": 1.05,
+                    "coords": "axes",
+                    "align": "center",
+                    "fontsize": 34,
+                },
+            ),
+            (
+                "add_plot",
+                {
+                    "figure_id": "fig1",
+                    "kind": "scatter",
+                    "x": [1.0],
+                    "y": [0.5],
+                    "size": 16,
+                    "color": "#FFFFFF",
+                },
+            ),
+            (
+                "add_function",
+                {
+                    "figure_id": "fig1",
+                    "expression": "m*(x - x0) + 0.5*x0**2",
+                    "x_min": -0.4,
+                    "x_max": 4.6,
+                    "parameters": {"m": 1.0, "x0": 1.0},
+                    "color": "#F7D96F",
+                },
+            ),
+            (
+                "add_annotation",
+                {
+                    "figure_id": "fig1",
+                    "kind": "text",
+                    "text": r"$f(x)=\frac{x^2}{2}\quad\Rightarrow\quad f'(x_0)=x_0$",
+                    "x": 0.13,
+                    "y": 0.72,
+                    "coords": "axes",
+                    "fontsize": 28,
+                },
+            ),
+            (
+                "add_annotation",
+                {
+                    "figure_id": "fig1",
+                    "kind": "text",
+                    "text": "slope = 1.00",
+                    "x": 0.13,
+                    "y": 0.6,
+                    "coords": "axes",
+                    "fontsize": 26,
+                    "color": "#F7D96F",
+                },
+            ),
+            _animate(
+                output="derivative.gif",
+                fps=12,
+                hold_end=1,
+                variables={"x0": 0.5},
+                stages=[
+                    {"name": "curve", "duration": 1.2, "effects": {"create": "a1"}},
+                    {"name": "title", "duration": 1.0, "effects": {"write": "a2"}},
+                    {"name": "dot", "duration": 0.5, "effects": {"fade_in": "a3"}},
+                    {
+                        "name": "tangent",
+                        "duration": 1.0,
+                        "effects": {"create": "a4", "write": ["a5", "a6"]},
+                    },
+                    {
+                        "name": "slide",
+                        "duration": 2.0,
+                        "ease": "smoother",
+                        "animate": {"x0": [0.5, 3.5]},
+                    },
+                    {"name": "point at it", "duration": 0.8, "effects": {"indicate": "a5"}},
+                    {
+                        "name": "out",
+                        "duration": 0.8,
+                        "effects": {"fade_out": ["a3", "a4", "a5", "a6"]},
+                    },
+                ],
+                bindings=[
+                    {"target": "a3", "property": "x", "value": ["x0"]},
+                    {"target": "a3", "property": "y", "value": ["0.5*x0**2"]},
+                    {"target": "a4", "property": "parameters.x0", "value": "x0"},
+                    {"target": "a4", "property": "parameters.m", "value": "x0"},
+                    {"target": "a6", "property": "text", "value": {"format": "slope = {x0:.2f}"}},
                 ],
             ),
         ),

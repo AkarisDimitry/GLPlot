@@ -691,6 +691,90 @@ def test_a_contour_with_a_bound_number_of_levels_matches_the_server(box, monkeyp
     frames_match(box, monkeypatch, [(i, {"L": v}) for i, v in enumerate((3.0, 11.5, 20.0))])
 
 
+def server_frame(box, index):
+    """The server's picture of frame ``index`` of the figure's last animation."""
+    from glplot.mcp import animator
+
+    entry = box._figures["fig1"]
+    spec = entry.animation
+    timeline = timeline_of(
+        {k: v for k, v in spec.items() if v is not None}, controls=box._context_values(entry)
+    )
+    combined = animator._merge(entry.bindings, animator.parse_bindings(spec["bindings"]))
+    per_artist, per_axes, _ = box._bound_arguments(entry, combined, timeline.arrays(), timeline.n)
+    built = box._build(entry, artist_args=per_artist[index], axes_args=per_axes[index])
+    try:
+        return picture(built.plot)
+    finally:
+        box._release(built)
+
+
+def test_a_step_by_step_explainer_script_matches_the_server_frame_by_frame(box, monkeypatch):
+    # the cookbook's 3Blue1Brown-style recipe: effects hide, draw, write, pulse and fade, and the
+    # 3b1b preset changes the export (fonts, axes through the origin, tips, grid)
+    from glplot.mcp import cookbook
+
+    recipe = next(r for r in cookbook.COOKBOOK if r.key == "explainer_3b1b")
+    for tool, args in recipe.calls:
+        args = dict(args)
+        if tool == "animate":
+            args.pop("output", None)
+            args["fps"] = 6
+        getattr(box, tool)(**args)
+    text = source(box.export_script("fig1", "animation"))
+    assert "fx_a1_draw" in text and "plt.plot_style('3b1b')" in text
+    namespace = run(text, monkeypatch)
+    try:
+        n = namespace["N"]
+        shots = []
+        for index in (0, 2, 5, 9, n // 2, n - 6, n - 1):
+            activate(namespace)
+            namespace["update"](index)
+            shots.append(picture(namespace["fig"]))
+            assert_same_picture(shots[-1], server_frame(box, index))
+        changed = [not np.array_equal(a, b) for a, b in zip(shots, shots[1:])]
+        assert all(changed), "every compared frame shows a different step of the scene"
+    finally:
+        gplt.close(namespace["fig"])
+
+
+def test_a_pulse_returns_in_the_script_as_it_does_on_the_server(box, monkeypatch):
+    box.create_figure(width=500, height=300)
+    box.add_function("fig1", "k*x", 0, 1, parameters={"k": 1})
+    box.animate(
+        "fig1",
+        variables={"k": 1},
+        stages=[
+            {"frames": 5, "animate": {"k": {"from": 1, "to": 3, "ease": "there_and_back"}}},
+            {"frames": 3, "ease": "rush_into", "animate": {"k": 2}},
+        ],
+        bindings=[{"target": "a1", "property": "parameters.k", "value": "k"}],
+    )
+    namespace = run(source(box.export_script("fig1", "animation")), monkeypatch)
+    try:
+        expected = timeline_of(box._figures["fig1"].animation).variables["k"]
+        assert np.allclose(namespace["_tl_k"], expected) and expected[4] == pytest.approx(1)
+    finally:
+        gplt.close(namespace["fig"])
+
+
+def test_annotations_of_every_new_kind_in_a_script(box, monkeypatch):
+    box.create_figure(width=500, height=400, style="3b1b")
+    box.set_axes("fig1", xlim=[-1, 3], ylim=[-1, 3], legend=False)
+    box.add_annotation("fig1", "arrow", x=0, y=0, dx=2, dy=1, reveal=0.5)
+    box.add_annotation(
+        "fig1", "text", x=0.5, y=0.9, coords="axes", align="center", text="$v$ grows", alpha=0.6
+    )
+    box.add_annotation("fig1", "text", x=0, y=2, text="half written", reveal=0.5)
+    box.add_annotation(
+        "fig1", "text", x=1, y=0.5, align="center", text="centred, half", reveal=0.5,
+        background=True,
+    )  # fmt: skip
+    box.add_plot("fig1", "scatter", x=[1], y=[1], size=20)
+    reply, _ = check_figure(box, monkeypatch)
+    assert "layout_text='centred, half'" in source(reply) and "bbox=" in source(reply)
+
+
 def test_choose_binding_in_a_script(box, monkeypatch):
     box.create_figure(width=500, height=300)
     box.add_plot("fig1", "line", x=[0, 1, 2], y=[0, 1, 0])

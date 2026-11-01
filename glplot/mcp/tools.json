@@ -1001,6 +1001,25 @@
      "description": "Panel number in a multi-panel figure, 1-based, row-major. Leave at 1 for a single-panel figure.",
      "maximum": 36,
      "minimum": 1
+    },
+    "reveal": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 1,
+       "minimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Draw only the first share of the curve (0..1); bind it, or use the create effect, and the graph draws itself."
+    },
+    "head": {
+     "type": "boolean",
+     "default": false,
+     "description": "A dot on the last point drawn."
     }
    },
    "required": [
@@ -1368,7 +1387,7 @@
  },
  {
   "name": "add_annotation",
-  "description": "Add a text note, a horizontal reference line (at y) or a vertical one (at x). 2-D only.",
+  "description": "Add text (with $...$ maths), a horizontal/vertical line, or an arrow (a vector from x, y to x+dx, y+dy). 2-D only. Example: add_annotation('fig1', 'text', x=0.5, y=0.9, coords='axes', align='center', text='$f(x) = x^2$', fontsize=30).",
   "inputSchema": {
    "type": "object",
    "properties": {
@@ -1378,7 +1397,7 @@
     },
     "kind": {
      "type": "string",
-     "description": "One of: text, hline, vline."
+     "description": "One of: text, hline, vline, arrow."
     },
     "x": {
      "anyOf": [
@@ -1486,6 +1505,73 @@
      "description": "Panel number in a multi-panel figure, 1-based, row-major. Leave at 1 for a single-panel figure.",
      "maximum": 36,
      "minimum": 1
+    },
+    "dx": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "kind='arrow': tip minus tail along x (data units)."
+    },
+    "dy": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "kind='arrow': tip minus tail along y (data units)."
+    },
+    "alpha": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 1,
+       "minimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Opacity 0..1 (fade it by binding this)."
+    },
+    "reveal": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 1,
+       "minimum": 0
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Text: the share of it written so far (a $...$ formula appears whole); arrow: the share of its length grown. Bind it, or use the write/grow effects."
+    },
+    "coords": {
+     "type": "string",
+     "default": "data",
+     "description": "Text position in 'data' units or in 'axes' fractions (0..1 of the box: x=0.5, y=0.92 is a centred caption that stays put)."
+    },
+    "align": {
+     "type": "string",
+     "default": "left",
+     "description": "Text alignment at x: 'left', 'center' or 'right'."
+    },
+    "background": {
+     "type": "boolean",
+     "default": false,
+     "description": "A box in the page colour behind the text, hiding grid and axis lines under it (manim's BackgroundRectangle)."
     }
    },
    "required": [
@@ -2227,7 +2313,7 @@
       }
      ],
      "default": null,
-     "description": "Consecutive stages, each {'name', 'duration' (s) or 'frames', 'ease', 'animate': {...}}. `animate` moves variables: {'amp': [1, 3]} (from, to), {'amp': 3} (to, from wherever it is), {'amp': {'from': 1, 'to': 3, 'ease': 'in_out'}} or {'k': '2 + 3*s'} (expression of s, 0..1 across the stage). A stage starts where the last ended and ends exactly on its target; afterwards the value holds. Easings: linear, in, out, in_out, smooth, smoother, sine."
+     "description": "Consecutive stages, each {'name', 'duration' (s) or 'frames', 'ease', 'animate': {...}}. `animate` moves variables: {'amp': [1, 3]} (from, to), {'amp': 3} (to, from wherever it is), {'amp': {'from': 1, 'to': 3, 'ease': 'in_out'}} or {'k': '2 + 3*s'} (expression of s, 0..1 across the stage). A stage starts where the last ended and ends exactly on its target; afterwards the value holds. Easings: linear, in, out, in_out, smooth, smoother (manim's smooth), sine, rush_into, rush_from, there_and_back. Step by step like a manim scene: 'effects': {'create': 'a1', 'write': ['a2'], 'fade_in': 'a3', 'indicate': 'a2', 'fade_out': 'a4'} (also uncreate, unwrite, grow) -- an artist brought in by an effect is hidden until its stage; see get_guide('mcp-animation')."
     },
     "variables": {
      "anyOf": [
@@ -2326,6 +2412,120 @@
    },
    "required": [
     "figure_id"
+   ]
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": false
+  }
+ },
+ {
+  "name": "compose_video",
+  "description": "Cut several scenes (animated figures) together into ONE video: a complete explainer.\n\nBuild each scene as its own figure (same width x height for all), animate and preview it\nuntil it is right, then compose. Frames animate rendered are reused, so composing is\nmostly encoding; a scene changed since is re-rendered. The reply lists each scene's start\nand end time. Workflow: get_guide('mcp-video').\n\nExample: compose_video([\"fig1\", {\"figure_id\": \"fig2\", \"hold_end\": 1}, \"fig3\"],\noutput=\"explainer.mp4\", transition=\"fade\").",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "segments": {
+     "type": "array",
+     "description": "The scenes in order. Each is a figure id ('fig1': its last animate) or an object {'figure_id': 'fig1', 'hold_end': 1} (extra seconds on its last frame). A figure that was never animated is a still: {'figure_id': 'fig4', 'duration': 3}.",
+     "items": {}
+    },
+    "output": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "The video file: .mp4 (best for anything long; needs ffmpeg), .webm, .gif or .apng. Omit to preview: a contact sheet of every scene is returned."
+    },
+    "fps": {
+     "anyOf": [
+      {
+       "type": "number",
+       "maximum": 60,
+       "minimum": 1
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Frame rate; default the fastest scene's."
+    },
+    "transition": {
+     "type": "string",
+     "default": "fade",
+     "description": "Between scenes: 'fade' (out to the page colour and back in), 'crossfade' (the scenes overlap and blend) or 'cut'."
+    },
+    "transition_s": {
+     "type": "number",
+     "default": 0.6,
+     "description": "Length of each transition in seconds.",
+     "maximum": 5,
+     "minimum": 0
+    },
+    "size": {
+     "anyOf": [
+      {
+       "type": "array",
+       "items": {
+        "type": "integer"
+       },
+       "maxItems": 2,
+       "minItems": 2
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "[width, height] of the video; default the first scene's. Scenes of another shape are letterboxed (give all the same create_figure size)."
+    },
+    "audio": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "A soundtrack (.mp3, .wav, .m4a, .ogg...) inside the allowed directory, muxed into an .mp4/.webm and cut to the video's length."
+    },
+    "quality": {
+     "type": "string",
+     "default": "good",
+     "description": "'draft', 'good' or 'high'."
+    },
+    "repeat": {
+     "type": "integer",
+     "default": 0,
+     "description": "GIF/APNG: extra plays (0: forever).",
+     "maximum": 1000,
+     "minimum": 0
+    },
+    "overwrite": {
+     "type": "boolean",
+     "default": false,
+     "description": "Replace an existing file."
+    },
+    "sheet_frames": {
+     "type": "integer",
+     "default": 12,
+     "description": "Frames in the contact sheet.",
+     "maximum": 16,
+     "minimum": 1
+    }
+   },
+   "required": [
+    "segments"
    ]
   },
   "annotations": {

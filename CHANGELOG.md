@@ -103,8 +103,40 @@ for public releases.
   as `linspace`), so a log-spaced x axis does not need `10**linspace(...)`.
 - `plt.stats()` is implemented (it always raised before): count and min/max/mean/std of the plotted
   points, in the view or in total.
+- **The `3b1b` style preset**: the look of 3Blue1Brown's manim videos -- a black page, manim's BLUE_C /
+  YELLOW_C / TEAL palette and a matching `manim` colormap, white serif text, `$...$` maths in Computer
+  Modern, and in saved images and animations two axis lines crossing at the origin with arrow tips (the
+  number at the crossing left out); `grid(True)` is a NumberPlane grid with faded lines between the major
+  ones. A preset's new optional `export_look` (`ExportLook`: text faces, maths font, axis lines, grid) is
+  what draws that in the export; presets without one export exactly as before.
+- **Step-by-step animation through MCP: stage `effects`.** `create` / `uncreate`, `write` / `unwrite`,
+  `grow`, `fade_in` / `fade_out`, `indicate` (yellow and bigger, then back) and `transform` (one artist fades
+  out as the next comes in), with manim's names accepted too. An artist an effect brings in is hidden until
+  its stage. Effects compile into stage variables and bindings, so previews, the review, limits and
+  `export_script` handle them unchanged. Easings `rush_into`, `rush_from` and `there_and_back` (manim's),
+  also as expression functions.
+- **`compose_video` (MCP)**: several animated figures cut into one MP4/WebM/GIF/APNG -- the scenes of a
+  complete explainer -- with `fade`, `crossfade` or `cut` transitions, one size and frame rate, stills for
+  title cards and an optional soundtrack. Frames `animate` rendered are kept (within a memory budget) and
+  reused; a scene changed since is rendered again. The `mcp-video` guide topic and the `explainer_video`
+  prompt give a model the whole workflow; `examples/mcp/derivative_explainer_video.py` makes a four-scene
+  video through the official MCP client.
+- MCP annotations: `kind="arrow"` (a vector, `dx`/`dy`, can grow with `reveal`), and for text `alpha`,
+  `reveal` (written so far; a `$...$` formula appears whole), `coords="axes"`, `align` and `background` (a
+  box in the page colour). `add_function` takes `reveal` and `head`.
+- `plt.text(layout_text=...)`: a text being written letter by letter stays where its letters sit in the
+  whole text instead of re-centring every frame.
+- Gallery animation 18: the unit circle drawing a sine wave, in the 3Blue1Brown style, built play by play.
 
 ### Changed
+
+- `plt.plot_style()` now also sets the palette and line width of what is drawn *after* it (it only
+  restyled what was already there, so `plot_style()` then `plot()` drew matplotlib's default cycle), and
+  unset `plt.text` colour is the preset's ink (white text on a dark page instead of black on black).
+- MCP: a 2-D scatter `size` is a diameter in pixels, as documented and as in 3-D (it was passed on as
+  matplotlib's area in pt^2, so `size=14` drew a 3 px dot).
+- The warning for `text(ha=/va=/rotation=)` says they are drawn in saved images and animations (it said
+  they had no effect); MCP text no longer reports it for the default alignment.
 
 - MCP tool replies keep non-ASCII text as written (`T (°C)`, `µm`, accents) instead of `\uXXXX` escapes.
 - `plt.step`, `mesh3d`, `annotate`, `arrow`, `axhline`, `axvline`, `axline`, `hlines`, `vlines`,
@@ -113,6 +145,10 @@ for public releases.
 
 ### Fixed
 
+- An opaque `fill_between` / area exported a hairline diagonal across every quad (the antialiasing gap
+  between its two triangles, with the page showing through); its triangles are now stroked in their own
+  colour. `legend().remove()` / `set_visible(False)` now also hide the legend of an exported image, and the
+  MCP's `set_axes(legend=False)` does it (and stops the review asking for a legend).
 - **Axis limits now behave as in matplotlib.** `ylim(...)` / `xlim(...)` pin only the axis you set: before,
   one limit on an axes with no data yet pinned *both* axes, so the other stayed at its empty default
   (-1, 1); now it keeps following the data, including data added later (`Panel.pinned_x/pinned_y`; an

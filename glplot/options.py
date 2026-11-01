@@ -362,6 +362,9 @@ class EngineOptions:
     )
 
     # Style
+    #: The preset's :class:`glplot.gui.styles.ExportLook` (text face, maths font, axis lines,
+    #: grid of a saved image); read by the headless export only. None: the export's own look.
+    export_look: Any = None
     blend_mode: BlendMode = BlendMode.AUTO
     line_colormap_enabled: bool = False
     enable_auto_alpha: bool = True  # Scale alpha based on N

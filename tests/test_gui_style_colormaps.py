@@ -294,15 +294,16 @@ class TestPlotStyleApi:
 
 class TestPresetCatalogue:
     def test_the_gallery_grew_by_the_looks_that_were_asked_for(self):
-        assert styles.STYLE_KEYS[-6:] == (
+        assert styles.STYLE_KEYS[-7:] == (
             "aurora",
             "synthwave",
             "sunset",
             "ocean",
             "vintage",
             "candy",
+            "3b1b",
         )
-        assert len(styles.STYLES) == 25
+        assert len(styles.STYLES) == 26
 
     def test_dataclass_default_cmap_is_a_safe_fallback(self):
         assert dataclasses.fields(styles.PlotStyle)[0].name == "key"

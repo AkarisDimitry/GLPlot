@@ -19,8 +19,15 @@ from glplot.mcp.state import AnimationLimits, Limits, McpError
 def test_every_easing_runs_from_zero_to_one(name):
     ease = dynamics.EASINGS[name]
     assert float(ease(0.0)) == pytest.approx(0.0)
+    values = np.asarray(ease(np.linspace(0, 1, 51)))
+    if name == "there_and_back":
+        # the one that comes back: up to the target at the middle, home again at the end
+        assert float(ease(1.0)) == pytest.approx(0.0) and values[25] == pytest.approx(1.0)
+        assert np.all(np.diff(values[:26]) >= -1e-12) and np.all(np.diff(values[25:]) <= 1e-12)
+        assert dynamics.ease_end(name) == pytest.approx(0.0)
+        return
     assert float(ease(1.0)) == pytest.approx(1.0)
-    values = np.asarray(ease(np.linspace(0, 1, 50)))
+    assert dynamics.ease_end(name) == 1.0
     assert np.all(np.diff(values) >= -1e-12), "an easing never goes backwards"
 
 

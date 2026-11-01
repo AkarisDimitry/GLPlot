@@ -51,6 +51,7 @@ __all__ = [
     "control_variable",
     "coerce_property",
     "evaluate_value",
+    "reveal_text",
     "make_control",
     "parse_target",
     "set_path",
@@ -75,6 +76,9 @@ HELPERS: Dict[str, Callable[..., Any]] = {
         "ease_out",
         "ease_in_out",
         "ease_sine",
+        "there_and_back",
+        "rush_into",
+        "rush_from",
         "pingpong",
         "ramp",
         "pulse",
@@ -90,7 +94,18 @@ EASINGS: Dict[str, Callable[[Any], np.ndarray]] = {
     "smooth": HELPERS["smoothstep"],
     "smoother": HELPERS["smootherstep"],
     "sine": HELPERS["ease_sine"],
+    # manim's own: its ``smooth`` is ``smoother`` above; these are the other three it uses most
+    "rush_into": HELPERS["rush_into"],
+    "rush_from": HELPERS["rush_from"],
+    # goes to the target and comes back, so the stage ends where it began (a pulse)
+    "there_and_back": HELPERS["there_and_back"],
 }
+
+
+def ease_end(name: Optional[str]) -> float:
+    """Where an easing finishes: 1 for all of them except ``there_and_back`` (0)."""
+    return float(EASINGS[name or "linear"](np.array(1.0)))
+
 
 #: Names a variable may not take: the clock, the stage position and the helpers.
 RESERVED_NAMES = frozenset({"t", "frame", "n", "time", "s", "stage", "x", "y", "z"} | set(HELPERS))
@@ -304,6 +319,20 @@ INTEGER_PROPERTIES = frozenset({"trail", "bins", "samples", "resolution", "level
 BOOLEAN_PROPERTIES = frozenset(
     {"head", "colorbar", "grid", "legend", "equal_aspect", "hide_axes", "sample", "integer"}
 )
+
+
+def reveal_text(text: str, fraction: float) -> str:
+    """The first ``fraction`` (0..1) of ``text``, as written so far.
+
+    A ``$...$`` formula is one piece -- half a formula cannot be typeset -- and every other
+    character is one, so a title is written letter by letter and its maths appears whole.
+    """
+    import re
+
+    pieces = re.findall(r"\$[^$]*\$|.", str(text), flags=re.S)
+    share = min(max(float(fraction), 0.0), 1.0)
+    count = int(np.ceil(share * len(pieces) - 1e-9))
+    return "".join(pieces[:count])
 
 
 def coerce_property(prop: str, value: Any) -> Any:
@@ -799,7 +828,11 @@ def build_timeline(
                 begin = float(values[lo]) if start is None else start
                 weight = ease(s[lo:hi])
                 values[lo:hi] = begin + (stop - begin) * weight  # type: ignore[operator]
-                values[hi:] = float(stop)  # type: ignore[arg-type]
+                # where the easing ends: the target, or the start again for there_and_back
+                end = float(ease(np.array(1.0)))
+                values[hi:] = (
+                    float(stop) if end == 1.0 else begin + (float(stop) - begin) * end
+                )  # type: ignore[arg-type]
 
     # -- derived variables ------------------------------------------------------------
     resolved: Dict[str, np.ndarray] = dict(parameters)

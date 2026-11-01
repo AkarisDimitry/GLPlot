@@ -182,4 +182,5 @@ jobs:
           tests/test_mcp_recipes.py tests/test_mcp_analysis.py tests/test_mcp_review.py \
           tests/test_mcp_http.py tests/test_mcp_textdata.py tests/test_mcp_dynamics.py \
           tests/test_mcp_motion.py tests/test_mcp_animation.py tests/test_mcp_simulate.py \
-          tests/test_mcp_script.py tests/test_llm_docs.py
+          tests/test_mcp_script.py tests/test_mcp_effects.py tests/test_mcp_video.py \
+          tests/test_export_look.py tests/test_llm_docs.py

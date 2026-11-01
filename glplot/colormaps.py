@@ -6,7 +6,7 @@ matplotlib built-ins cover the scientific cases well -- viridis, cividis and gra
 Clean, Colour-safe and Print use -- but they cannot give a look its own voice: a synthwave
 page whose heat map is viridis is a synthwave page with a stock chart pasted into it.
 
-These six are written the way the built-ins are, as a short list of anchor colours
+These seven are written the way the built-ins are, as a short list of anchor colours
 interpolated in RGB, and are held to the same rule that makes a ramp readable: **lightness
 only ever moves one way**. Dark-page ramps climb from near the page colour to near-white
 (so "low" dissolves into the background and "high" glows); the one light-page ramp descends
@@ -53,6 +53,12 @@ CUSTOM_COLORMAPS: Dict[str, Tuple[RGB, ...]] = {
     # Paper to ink, the only descending ramp: for a light page, where "low" is the page.
     "parchment": tuple(
         _hex(c) for c in ("#f7efd9", "#e6c985", "#cf8a45", "#a04a31", "#5a2638", "#1f1226")
+    ),
+    # manim's blues climbing to its yellow, for the 3Blue1Brown look: night, BLUE_E, BLUE_D,
+    # BLUE_C, TEAL_B, YELLOW_C, YELLOW_A. Lightness rises the whole way.
+    "manim": tuple(
+        _hex(c)
+        for c in ("#0b1a26", "#236B8E", "#29ABCA", "#58C4DD", "#76DDC0", "#F7D96F", "#FFF1B6")
     ),
     # A light, saturated pop ramp: white-pink to raspberry to plum.
     "candy": tuple(

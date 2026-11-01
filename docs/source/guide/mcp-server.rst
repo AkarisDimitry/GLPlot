@@ -156,6 +156,10 @@ What the model can do
    * - ``animate``
      - **Animation**: properties follow time, in stages, and the result is a GIF, APNG, MP4, WebM or
        numbered PNGs. Returns a contact sheet and measured problems. See :ref:`mcp-animation`.
+   * - ``compose_video``
+     - A **whole video**: several animated figures (the scenes) cut together into one MP4/WebM/GIF, with
+       fades or crossfades and an optional soundtrack. Reuses the frames ``animate`` rendered. See
+       :ref:`mcp-video`.
    * - ``export_script``
      - The **Python script** behind a figure -- also an interactive version (real sliders) or an animation
        (``FuncAnimation``) -- for the user to keep and edit.
@@ -247,10 +251,49 @@ checks as a still, and the figure itself is never touched.
                      {"target": "a1", "property": "parameters.amp", "value": "amp"},
                      {"target": "a1", "property": "parameters.k", "value": "k"}])
 
-The guide ``get_guide("mcp-animation")`` carries eight worked recipes (a travelling wave, a self-drawing
+The guide ``get_guide("mcp-animation")`` carries nine worked recipes (a travelling wave, a self-drawing
 Lissajous curve, a damped pendulum, the Lorenz attractor with a camera orbit, growing bars, a rippling
-surface as a seamless loop, a swept slider, morphing points); the test suite *runs* each of them, so they
+surface as a seamless loop, a swept slider, morphing points, a 3Blue1Brown-style explainer); the test suite *runs* each of them, so they
 cannot rot. The prompt ``animate_this`` walks a model through preview, review and output.
+
+.. _mcp-video:
+
+Step by step, and a whole video (the 3Blue1Brown style)
+-------------------------------------------------------
+
+An explainer is built one *play* at a time, as in a manim scene. A stage of ``animate`` can carry
+``effects``, all of which happen together in that stage::
+
+   animate(fig1, stages=[
+       {"name": "curve",   "duration": 1.2, "effects": {"create": "a1"}},
+       {"name": "title",   "duration": 1.0, "effects": {"write": "a2"}},
+       {"name": "slide",   "duration": 2.0, "animate": {"x0": [0.5, 3.5]}},
+       {"name": "point",   "duration": 0.8, "effects": {"indicate": "a5"}},
+       {"name": "next",    "duration": 1.0, "effects": {"transform": {"a5": "a6"}}},
+       {"name": "clear",   "duration": 0.8, "effects": {"fade_out": ["a3", "a4"]}}])
+
+``create`` / ``uncreate`` draw a curve, an arrow or a text in and out; ``write`` / ``unwrite`` write text
+letter by letter (a ``$...$`` formula appears whole); ``grow`` grows an arrow; ``fade_in`` / ``fade_out``;
+``indicate`` flashes yellow and grows, then settles; ``transform`` fades one artist out as another comes in.
+An artist an effect brings in is hidden until its stage. Effects are compiled into stage variables and
+bindings, so the contact sheet, the review, the limits and ``export_script`` work on them unchanged.
+
+``create_figure(style="3b1b")`` gives the look of 3Blue1Brown's manim videos: a black page, manim's
+BLUE_C / YELLOW_C / TEAL palette, white serif text with ``$...$`` maths in Computer Modern, and axes that
+cross at the origin with arrow tips; ``set_axes(grid=True)`` is a NumberPlane grid. Text annotations take
+``coords="axes"`` (captions that stay put), ``align``, ``alpha`` and ``reveal``; ``kind="arrow"`` draws a
+vector (``x``, ``y``, ``dx``, ``dy``).
+
+A complete video is **one figure per scene**, each animated and previewed on its own, then::
+
+   compose_video(["fig1", "fig2", {"figure_id": "fig3", "hold_end": 1}],
+                 output="explainer.mp4", transition="fade")
+
+Frames ``animate`` already rendered are reused (a scene changed since is rendered again), every scene is
+fitted to one size and frame rate, ``transition`` is ``fade``, ``crossfade`` or ``cut``, and ``audio=``
+adds a soundtrack. The guide topic ``mcp-video`` and the prompt ``explainer_video`` give a model the whole
+workflow; ``examples/mcp/derivative_explainer_video.py`` makes a four-scene video through the official MCP
+client, start to finish.
 
 .. _mcp-dynamics:
 

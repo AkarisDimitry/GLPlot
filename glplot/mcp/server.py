@@ -512,6 +512,16 @@ def build_server(
         ] = None,
         linestyle: Annotated[Optional[str], Field(description="'-', '--', '-.' or ':'.")] = None,
         panel: Panel = 1,
+        reveal: Annotated[
+            Optional[float],
+            Field(
+                ge=0,
+                le=1,
+                description="Draw only the first share of the curve (0..1); bind it, or use the "
+                "create effect, and the graph draws itself.",
+            ),
+        ] = None,
+        head: Annotated[bool, Field(description="A dot on the last point drawn.")] = False,
     ) -> Any:
         """Plot y = expression(x) over [x_min, x_max] in one call, without making a dataset.
 
@@ -534,6 +544,8 @@ def build_server(
             linewidth,
             linestyle,
             panel,
+            reveal,
+            head,
         )
 
     @tool()
@@ -706,8 +718,44 @@ def build_server(
         ] = None,
         label: Annotated[Optional[str], Field(description="Legend text for a line.")] = None,
         panel: Panel = 1,
+        dx: Annotated[
+            Optional[float], Field(description="kind='arrow': tip minus tail along x (data units).")
+        ] = None,
+        dy: Annotated[
+            Optional[float], Field(description="kind='arrow': tip minus tail along y (data units).")
+        ] = None,
+        alpha: Annotated[
+            Optional[float],
+            Field(ge=0, le=1, description="Opacity 0..1 (fade it by binding this)."),
+        ] = None,
+        reveal: Annotated[
+            Optional[float],
+            Field(
+                ge=0,
+                le=1,
+                description="Text: the share of it written so far (a $...$ formula appears whole); "
+                "arrow: the share of its length grown. Bind it, or use the write/grow effects.",
+            ),
+        ] = None,
+        coords: Annotated[
+            str,
+            Field(
+                description="Text position in 'data' units or in 'axes' fractions (0..1 of the "
+                "box: x=0.5, y=0.92 is a centred caption that stays put).",
+            ),
+        ] = "data",
+        align: Annotated[
+            str, Field(description="Text alignment at x: 'left', 'center' or 'right'.")
+        ] = "left",
+        background: Annotated[
+            bool,
+            Field(
+                description="A box in the page colour behind the text, hiding grid and axis "
+                "lines under it (manim's BackgroundRectangle)."
+            ),
+        ] = False,
     ) -> Any:
-        """Add a text note, a horizontal reference line (at y) or a vertical one (at x). 2-D only."""  # noqa: E501
+        """Add text (with $...$ maths), a horizontal/vertical line, or an arrow (a vector from x, y to x+dx, y+dy). 2-D only. Example: add_annotation('fig1', 'text', x=0.5, y=0.9, coords='axes', align='center', text='$f(x) = x^2$', fontsize=30)."""  # noqa: E501
         return run(
             box.add_annotation,
             figure_id,
@@ -721,6 +769,13 @@ def build_server(
             fontsize,
             label,
             panel,
+            dx,
+            dy,
+            alpha,
+            reveal,
+            coords,
+            align,
+            background,
         )
 
     @tool(destructive=True)
@@ -1039,7 +1094,11 @@ def build_server(
                 "{'amp': 3} (to, from wherever it is), {'amp': {'from': 1, 'to': 3, 'ease': "
                 "'in_out'}} or {'k': '2 + 3*s'} (expression of s, 0..1 across the stage). A stage "
                 "starts where the last ended and ends exactly on its target; afterwards the value "
-                "holds. Easings: linear, in, out, in_out, smooth, smoother, sine."
+                "holds. Easings: linear, in, out, in_out, smooth, smoother (manim's smooth), "
+                "sine, rush_into, rush_from, there_and_back. Step by step like a manim scene: "
+                "'effects': {'create': 'a1', 'write': ['a2'], 'fade_in': 'a3', 'indicate': 'a2', "
+                "'fade_out': 'a4'} (also uncreate, unwrite, grow) -- an artist brought in by an "
+                "effect is hidden until its stage; see get_guide('mcp-animation')."
             ),
         ] = None,
         variables: Annotated[
@@ -1103,6 +1162,78 @@ def build_server(
         return run(
             box.animate, figure_id, output, frames, duration, fps, loop, stages, variables,
             bindings, scale, hold_start, hold_end, sheet_frames, frame, overwrite, repeat, quality,
+        )  # fmt: skip
+
+    @tool()
+    def compose_video(
+        segments: Annotated[
+            List[Any],
+            Field(
+                description="The scenes in order. Each is a figure id ('fig1': its last "
+                "animate) or an object {'figure_id': 'fig1', 'hold_end': 1} (extra seconds on "
+                "its last frame). A figure that was never animated is a still: "
+                "{'figure_id': 'fig4', 'duration': 3}."
+            ),
+        ],
+        output: Annotated[
+            Optional[str],
+            Field(
+                description="The video file: .mp4 (best for anything long; needs ffmpeg), .webm, "
+                ".gif or .apng. Omit to preview: a contact sheet of every scene is returned."
+            ),
+        ] = None,
+        fps: Annotated[
+            Optional[float],
+            Field(ge=1, le=60, description="Frame rate; default the fastest scene's."),
+        ] = None,
+        transition: Annotated[
+            str,
+            Field(
+                description="Between scenes: 'fade' (out to the page colour and back in), "
+                "'crossfade' (the scenes overlap and blend) or 'cut'."
+            ),
+        ] = "fade",
+        transition_s: Annotated[
+            float, Field(ge=0, le=5, description="Length of each transition in seconds.")
+        ] = 0.6,
+        size: Annotated[
+            Optional[List[int]],
+            Field(
+                min_length=2,
+                max_length=2,
+                description="[width, height] of the video; default the first scene's. Scenes "
+                "of another shape are letterboxed (give all the same create_figure size).",
+            ),
+        ] = None,
+        audio: Annotated[
+            Optional[str],
+            Field(
+                description="A soundtrack (.mp3, .wav, .m4a, .ogg...) inside the allowed "
+                "directory, muxed into an .mp4/.webm and cut to the video's length."
+            ),
+        ] = None,
+        quality: Annotated[str, Field(description="'draft', 'good' or 'high'.")] = "good",
+        repeat: Annotated[
+            int, Field(ge=0, le=1000, description="GIF/APNG: extra plays (0: forever).")
+        ] = 0,
+        overwrite: Annotated[bool, Field(description="Replace an existing file.")] = False,
+        sheet_frames: Annotated[
+            int, Field(ge=1, le=16, description="Frames in the contact sheet.")
+        ] = 12,
+    ) -> Any:
+        """Cut several scenes (animated figures) together into ONE video: a complete explainer.
+
+        Build each scene as its own figure (same width x height for all), animate and preview it
+        until it is right, then compose. Frames animate rendered are reused, so composing is
+        mostly encoding; a scene changed since is re-rendered. The reply lists each scene's start
+        and end time. Workflow: get_guide('mcp-video').
+
+        Example: compose_video(["fig1", {"figure_id": "fig2", "hold_end": 1}, "fig3"],
+        output="explainer.mp4", transition="fade").
+        """
+        return run(
+            box.compose_video, segments, output, fps, transition, transition_s, size, audio,
+            quality, repeat, overwrite, sheet_frames,
         )  # fmt: skip
 
     @tool()
@@ -1376,6 +1507,12 @@ def build_server(
     @prompt("python_script_for")
     def python_script_for(task: str) -> str:
         return catalog.find_prompt("python_script_for").build(task=task)
+
+    @prompt("explainer_video")
+    def explainer_video(topic: str, length: str = "", output: str = "", language: str = "") -> str:
+        return catalog.find_prompt("explainer_video").build(
+            topic=topic, length=length, output=output, language=language
+        )
 
     return server
 

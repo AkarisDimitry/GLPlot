@@ -220,6 +220,8 @@ class _Script:
         self.notes: List[str] = []
         self.helpers: Dict[str, None] = {}
         self.uses_ramp = False
+        self.uses_fade = False
+        self.uses_reveal_text = False
         #: In an interactive or animated script every control and variable is a local name, so a
         #: function's own parameters are written under ``p_`` names that cannot collide with them.
         self.dynamic = kind != "figure"
@@ -591,8 +593,9 @@ class _Script:
             if a.get("head"):
                 self._head(writer, api, ref, a, color or self._drawn_color(op.artist_id))
         elif kind == "scatter":
+            flat = "z" not in ref
             kw = {k: common[k] for k in ("color", "alpha", "marker", "label")}
-            kw["size"] = a.get("size")
+            kw["size"] = self.area(a.get("size")) if flat else a.get("size")
             kw["cmap"] = a.get("cmap")
             if "color_by" in ref:
                 kw["c"] = ref["color_by"]
@@ -604,6 +607,8 @@ class _Script:
                     "_unit = (_s - np.nanmin(_s)) / _span if _span > 0 else np.full(len(_s), 0.5)"
                 )
                 kw["size"] = Raw("4.0 + 24.0 * _unit")
+                if flat:
+                    kw["size"] = self.area(kw["size"])
             writer.call(f"{api}.scatter", pos, kw)
             if a.get("colorbar") and "color_by" in ref:
                 writer.add(
@@ -689,15 +694,31 @@ class _Script:
     ) -> None:
         size = a.get("size")
         pos = [Raw(f"{k}_[-1:]") for k in ("x", "y", "z") if k in ref]
+        if isinstance(size, Raw):
+            dot: Any = Raw(f"({size.code}) * 1.6")
+        else:
+            dot = float(size) * 1.6 if size else 10.0
         writer.call(
             f"{api}.scatter",
             pos,
             {
-                "size": round(size * 1.6, 6) if isinstance(size, (int, float)) else 10.0,
+                "size": dot if "z" in ref else self.area(dot),
                 "marker": "o",
                 "color": color,
             },
         )
+
+    def area(self, diameter: Any) -> Any:
+        """A 2-D marker's diameter in px as the area the server hands to scatter (see
+        ``toolbox._px_area``): the same number when it is one, the same arithmetic when bound."""
+        if diameter is None:
+            return None
+        dpi = float(getattr(self.entry.plot, "_figure_dpi", 100.0) or 100.0)
+        if isinstance(diameter, Raw):
+            return Raw(f"(np.maximum({diameter.code}, 0.5) * 72.0 / {dpi!r}) ** 2")
+        from ..utils.preview import _point_diameter_px_to_area_pt2
+
+        return _point_diameter_px_to_area_pt2(float(diameter), self.entry.plot)
 
     def _tick_labels(
         self, a: Mapping[str, Any], kind: str, dataset: Optional[str]
@@ -826,17 +847,52 @@ class _Script:
     def op_add_annotation(self, writer: _Writer, op: Any, a: Dict[str, Any]) -> None:
         self.panel(writer, a.get("panel", 1))
         kind = a["kind"]
-        style = {k: a.get(k) for k in ("color", "linestyle", "linewidth", "label")}
+        color = a.get("color") or op.resolved.get("color")
+        shade: Any = color
+        if a.get("alpha") is not None:
+            self.uses_fade = True
+            shade = Raw(f"_fade({lit(color)}, {lit(a['alpha'])})")
+        style = {
+            "color": shade,
+            "linestyle": a.get("linestyle"),
+            "linewidth": a.get("linewidth"),
+            "label": a.get("label"),
+        }
         if kind == "text":
-            writer.call(
-                "plt.text",
-                [a["x"], a["y"], a["text"]],
-                {"color": a.get("color"), "fontsize": a.get("fontsize")},
-            )
+            text: Any = a["text"]
+            if a.get("reveal") is not None:
+                self.uses_reveal_text = True
+                text = Raw(f"reveal_text({lit(a['text'])}, {lit(a['reveal'])})")
+            kw: Dict[str, Any] = {"color": shade, "fontsize": a.get("fontsize")}
+            if a.get("align", "left") != "left":
+                kw["ha"] = a["align"]
+            if a.get("coords", "data") == "axes":
+                kw["transform"] = Raw("plt.gca().transAxes")
+            if a.get("reveal") is not None:
+                kw["layout_text"] = a["text"]
+            if a.get("background"):
+                page = op.resolved.get("page", "#ffffff")
+                kw["bbox"] = {"facecolor": page, "edgecolor": "none", "pad": 4}
+            writer.call("plt.text", [a["x"], a["y"], text], kw)
         elif kind == "hline":
             writer.call("plt.axhline", [a["y"]], style)
-        else:
+        elif kind == "vline":
             writer.call("plt.axvline", [a["x"]], style)
+        else:
+            grow = a.get("reveal")
+            scale = "" if grow is None else f" * ({lit(grow)})"
+            writer.add(f"_dx, _dy = ({lit(a['dx'])}){scale}, ({lit(a['dy'])}){scale}")
+            writer.add("_head = 0.22 * float(np.hypot(_dx, _dy))")
+            writer.add("if _head > 0:")
+            with writer.indent():
+                kw = {
+                    "head_length": Raw("_head"),
+                    "head_width": Raw("0.6 * _head"),
+                    "color": shade,
+                    "width": a.get("linewidth") if a.get("linewidth") is not None else 3.0,
+                    "label": a.get("label"),
+                }
+                writer.call("plt.arrow", [a["x"], a["y"], Raw("_dx"), Raw("_dy")], kw)
 
     def op_set_style(self, writer: _Writer, op: Any, a: Dict[str, Any]) -> None:
         writer.add(f"plt.plot_style({a['preset']!r})")
@@ -863,6 +919,9 @@ class _Script:
             writer.add(f"plt.grid({lit(bool(a['grid']))})")
         if a.get("legend"):
             writer.add("plt.legend()")
+        elif a.get("legend") is False:
+            writer.add("plt.legend()")
+            writer.add("plt.gca().get_legend().remove()  # no legend")
         if a.get("equal_aspect") is not None:
             writer.add(f"plt.axis({'equal' if a['equal_aspect'] else 'auto'!r})")
         if a.get("hide_axes") is not None:
@@ -1118,7 +1177,16 @@ def _timeline_code(
                 if move_ease != "linear":
                     script.helpers.setdefault(_EASE_FUNCTION[move_ease])
                 writer.add(f"{arr}[{lo}:{hi}] = _begin + ({lit(stop_value)} - _begin) * {weight}")
-                writer.add(f"{arr}[{hi}:] = {lit(stop_value)}")
+                # what the server holds afterwards: the target, or the start for a pulse
+                end = dynamics.ease_end(move_ease)
+                writer.add(
+                    f"{arr}[{hi}:] = "
+                    + (
+                        lit(stop_value)
+                        if end == 1.0
+                        else f"_begin + ({lit(stop_value)} - _begin) * {lit(end)}"
+                    )
+                )
     derived = {k: v for k, v in (spec.get("variables") or {}).items() if isinstance(v, str)}
     for name, expression in derived.items():
         rename[name] = f"_tl_{name}"
@@ -1135,6 +1203,9 @@ _EASE_FUNCTION = {
     "smooth": "smoothstep",
     "smoother": "smootherstep",
     "sine": "ease_sine",
+    "rush_into": "rush_into",
+    "rush_from": "rush_from",
+    "there_and_back": "there_and_back",
 }
 
 
@@ -1147,6 +1218,13 @@ _AS_COLUMN = '''def _as_column(value, n=None):
     """An expression's result as a 1-D float array (a single number is repeated n times)."""
     array = np.asarray(value, dtype=float)
     return array if array.ndim else np.full(n or 1, float(array))'''
+
+_FADE = '''def _fade(color, alpha):
+    """``color`` with its opacity multiplied by ``alpha``."""
+    from matplotlib.colors import to_rgba
+
+    r, g, b, a = to_rgba(color)
+    return (r, g, b, a * float(alpha))'''
 
 _RAMP = '''def _ramp(colors, at):
     """A colour (hex) at position ``at`` (0..1) along a colormap name or a list of colours."""
@@ -1321,6 +1399,12 @@ def export_script(
             head.add()
     if script.uses_ramp:
         head.add(_RAMP)
+        head.add()
+    if script.uses_fade:
+        head.add(_FADE)
+        head.add()
+    if script.uses_reveal_text:
+        head.add(textwrap.dedent(inspect.getsource(dynamics.reveal_text)).rstrip())
         head.add()
     head.lines.extend(data.lines)
     text = head.text().rstrip() + "\n\n" + body.text().rstrip() + "\n"

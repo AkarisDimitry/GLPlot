@@ -225,6 +225,42 @@ AXES3D_FIELDS: Tuple[str, ...] = (
 
 
 @dataclass(frozen=True)
+class ExportLook:
+    """What a preset says about the **exported** picture's text and axes (PNG, GIF, MP4).
+
+    Read by :mod:`glplot.utils.preview` only -- the live window's text and axes are drawn by
+    imgui/GL and keep their own look. ``PlotStyle.export_look = None`` means "no opinion",
+    so every preset that predates this exports exactly as it did.
+
+    The fields are what a 3Blue1Brown-style explainer needs and matplotlib can draw: a serif
+    face with Computer Modern maths (the LaTeX look of manim's ``Tex``), two axis lines that
+    cross at the origin with a tip on each instead of a box (manim's ``Axes``), and a coloured
+    grid with faded lines between the major ones (manim's ``NumberPlane``).
+    """
+
+    #: ``rcParams["font.family"]`` for every exported text, in order of preference: a glyph a
+    #: face lacks (matplotlib's Computer Modern has no accents) falls back to the next one.
+    font_family: Optional[Tuple[str, ...]] = None
+    #: ``rcParams["mathtext.fontset"]`` for ``$...$`` text: ``"cm"`` is Computer Modern.
+    math_fontset: Optional[str] = None
+    #: ``"box"``: the usual frame. ``"cross"``: only the two axis lines, through the origin
+    #: when it is in view (else along the bottom and left edges), with no box around them.
+    axes: str = "box"
+    #: A triangular tip on the positive end of each axis line (``axes="cross"`` only).
+    arrow_tips: bool = False
+    #: The grid, when one is shown (``grid(True)``): colour, opacity and width in points.
+    grid_color: Optional[RGB] = None
+    grid_alpha: float = 0.25
+    grid_width: Optional[float] = None
+    #: Faint lines between the major ones: the number of intervals per major step (manim's
+    #: ``faded_line_ratio`` is 4), drawn at a quarter of ``grid_alpha``. 0 draws none.
+    faded_lines: int = 0
+    #: Tick label size in points (the export's own default is 24): manim's numbers are small
+    #: next to its titles, which keeps them from crowding the curves they sit beside.
+    tick_label_size: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class PlotStyle:
     """One complete look, as leaf data.
 
@@ -307,6 +343,11 @@ class PlotStyle:
     #: Seeded, and stable across frames by construction: the jitter is computed once at
     #: apply time and stored. A per-frame reseed would shimmer.
     hand_seed: int = 7
+
+    # -- exported picture --------------------------------------------------------
+    #: Text face, maths font and axis decoration of a saved image or animation; ``None``
+    #: leaves the export as it always was. See :class:`ExportLook`.
+    export_look: Optional[ExportLook] = None
 
 
 # ----------------------------------------------------------------------------------
@@ -630,6 +671,23 @@ _CANDY_PALETTE: Tuple[RGBA, ...] = (
     (0.950, 0.350, 0.700, 1.0),  # bubblegum
     (0.850, 0.620, 0.050, 1.0),  # honey
 )
+
+
+#: manim's colour constants, the ones 3Blue1Brown's videos are made of (``manim/utils/color/
+#: manim_colors.py``): BLUE_C leads because it is the colour of "the thing being explained",
+#: YELLOW_C is the highlight, then TEAL, RED, GREEN, GOLD and PURPLE, all C shades.
+_MANIM_PALETTE: Tuple[RGBA, ...] = (
+    (0.345, 0.769, 0.867, 1.0),  # #58C4DD BLUE_C
+    (0.969, 0.851, 0.435, 1.0),  # #F7D96F YELLOW_C
+    (0.361, 0.816, 0.702, 1.0),  # #5CD0B3 TEAL_C
+    (0.988, 0.384, 0.333, 1.0),  # #FC6255 RED_C
+    (0.514, 0.757, 0.404, 1.0),  # #83C167 GREEN_C
+    (0.941, 0.675, 0.373, 1.0),  # #F0AC5F GOLD_C
+    (0.604, 0.447, 0.675, 1.0),  # #9A72AC PURPLE_C
+)
+
+#: manim's BLUE_D, the colour of a ``NumberPlane``'s grid lines.
+_MANIM_GRID: RGB = (0.161, 0.671, 0.792)
 
 
 # -- shared 3D decorations -----------------------------------------------------------
@@ -1481,6 +1539,55 @@ STYLES: Tuple[PlotStyle, ...] = (
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_DEFAULT,
     ),
+    PlotStyle(
+        # FOR: the explainer -- an idea built up on screen one step at a time, the way
+        # 3Blue1Brown's videos do it (they are made with manim, whose defaults this copies):
+        # a black page, BLUE_C for the thing being explained and YELLOW_C for what to look at,
+        # bold 4px-feeling strokes, white text, maths in Computer Modern, and axes that are
+        # two lines crossing at the origin with tips instead of a measuring box. With
+        # grid(True) the grid is manim's NumberPlane: BLUE_D lines with faded ones between.
+        # An unaffiliated tribute to the look, not the channel's branding.
+        #
+        # SACRIFICES: reading values off the plot. No box, few ticks and a dark page are for
+        # watching an idea, not for taking a number to three digits; print it with Journal.
+        key="3b1b",
+        name="3Blue1Brown",
+        description="Explainer look of 3Blue1Brown's manim videos: black, blue, yellow.",
+        background=(0.0, 0.0, 0.0),
+        palette=_MANIM_PALETTE,
+        ink=(1.0, 1.0, 1.0, 1.0),
+        line_width=3.2,
+        point_size=9.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=False,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.45,
+        grid_color=_MANIM_GRID,
+        ticks=TickSettings(show=True, length_px=6.0, minor=False),
+        colormap_index=1,  # Viridis
+        cmap="manim",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_PRESENTATION,
+        export_look=ExportLook(
+            # LaTeX's own text faces when installed; matplotlib's Computer Modern (cmr10) is
+            # left out on purpose: it has no accents, and the text around a $...$ formula is
+            # set in the first face with no fallback, so "función" would lose its accent.
+            font_family=("Latin Modern Roman", "CMU Serif", "DejaVu Serif"),
+            math_fontset="cm",
+            axes="cross",
+            arrow_tips=True,
+            grid_color=_MANIM_GRID,
+            grid_alpha=0.6,
+            grid_width=1.2,
+            faded_lines=4,
+            tick_label_size=18.0,
+        ),
+    ),
 )
 
 #: The look the workstation opens with, per the user's steer ("plots más limpios").
@@ -1951,6 +2058,8 @@ def apply_style(
     options.axis_grid_alpha = float(style.grid_alpha)
     options.axis_grid_color = tuple(style.grid_color) if style.grid_color else AUTO_GRID_COLOR
     options.density_scheme_index = int(style.colormap_index)
+    # Read by the headless export only (utils/preview.py); None keeps the export as it was.
+    _set_optional(options, "export_look", style.export_look)
 
     # Ticks only when the preset has an opinion. ``None`` is not "the defaults", it is
     # "leave whatever gplt.tick_params / minorticks_on set" — see :class:`TickSettings`.
@@ -2025,6 +2134,7 @@ _OPTION_FIELDS = (
     "axis_minor_subdivisions",
     "density_scheme_index",
     "light_bg_mode",
+    "export_look",
 )
 
 _GLOW_FIELDS = ("enabled", "threshold", "intensity", "radius_px")

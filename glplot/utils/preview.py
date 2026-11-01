@@ -743,6 +743,18 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
                     outline_segments = _boundary_segments(layer.vertices, tris)
                     collection_style["linewidths"] = 0.0
                     collection_style.setdefault("edgecolors", [ec])
+                elif (
+                    not hatched
+                    and isinstance(face_colors, list)  # one colour, not one per vertex
+                    and ec[3] == 0.0
+                    and fc[3] >= 0.999
+                ):
+                    # An opaque fill with no edge of its own: antialiasing leaves a hairline
+                    # gap along every shared side, and the page shows through it as a diagonal
+                    # across each quad. Stroking each triangle thinly in its own colour (what
+                    # matplotlib's edgecolor="face" does for meshes) closes the gaps. Not for a
+                    # translucent fill, where the doubled stroke would show as a darker line.
+                    collection_style = dict(edgecolors=[fc], linewidths=0.6)
                 coll = PolyCollection(
                     polys,
                     facecolors=face_colors,
@@ -835,9 +847,14 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             fraction = meta.get("axes_fraction")
             if fraction is not None:
                 extras["transform"] = ax.transAxes
-            text = ax.text(
+            anchor = (
                 fraction[0] if fraction is not None else layer.x,
                 fraction[1] if fraction is not None else layer.y,
+            )
+            _place_in_whole_text(ax, layer, anchor, extras)
+            text = ax.text(
+                anchor[0],
+                anchor[1],
                 layer.text,
                 fontsize=layer.style.text_size_px,
                 color=_rgba(layer.style.color),
@@ -847,6 +864,35 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             # The classic use of withStroke: a halo that keeps a label legible over data.
             # Glyphs have no line width, so the stroke is the outline width alone.
             _apply_outline(text, layer.style)
+
+
+def _place_in_whole_text(
+    ax: object, layer: object, anchor: Tuple[float, float], extras: dict
+) -> None:
+    """Anchor a text being written (``layout_text``) where its letters sit in the whole text.
+
+    A centred "Whe" is centred on its own and so drifts right as "Where does..." is written;
+    measured against the whole text, it starts where the whole one starts and grows in place.
+    The shift is kept in points, which later changes of the axis limits do not move.
+    """
+    whole = layer.metadata.get("layout_text")
+    align = extras.get("ha", "left")
+    if not whole or whole == layer.text or align == "left" or extras.get("rotation"):
+        return
+    from matplotlib.transforms import offset_copy
+
+    fig = ax.figure
+    base = extras.get("transform", ax.transData)
+    probe = ax.text(anchor[0], anchor[1], whole, fontsize=layer.style.text_size_px, **extras)
+    try:
+        box = probe.get_window_extent(fig.canvas.get_renderer())
+        origin = base.transform(anchor)
+    finally:
+        probe.remove()
+    extras["ha"] = "left"
+    extras["transform"] = offset_copy(
+        base, fig=fig, x=(box.x0 - origin[0]) * 72.0 / fig.dpi, units="points"
+    )
 
 
 def _resolve_axes_title(panel: object, engine: object, allow_caption: bool = True) -> str:
@@ -1174,7 +1220,11 @@ def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None)
     resolved_title = _resolve_axes_title(panel, engine)
     if resolved_title:
         ax.set_title(resolved_title, **title_kwargs)
-    _apply_legend(ax)
+    # Drawn whenever there are labelled layers (the historical behaviour), unless the legend
+    # was switched off on purpose (``legend().remove()``, ``set_visible(False)``): the flag is
+    # absent until someone sets it, so only an explicit False hides it.
+    if getattr(engine, "legend_show", None) is not False:
+        _apply_legend(ax)
     if has_3d:
         ax.autoscale(enable=True)
         # An explicit set_xlim3d()/set_ylim3d()/set_zlim3d() call (stored on
@@ -1282,6 +1332,159 @@ def _apply_axis_state(ax: object, engine: object, panel: object = None) -> None:
     # together; the title and the artists stay. Used to be dropped by every 2D export.
     if getattr(panel, "axis_off", False):
         ax.set_axis_off()
+
+
+def _export_look(engine: object) -> object:
+    """The style preset's :class:`~glplot.gui.styles.ExportLook`, or None."""
+    return getattr(getattr(engine, "options", None), "export_look", None)
+
+
+@contextmanager
+def _look_fonts(engine: object):
+    """Draw inside the preset's text face and maths font (``ExportLook``), if it has them.
+
+    Wraps building *and* saving the figure: a ``Text`` takes its family when it is made, but
+    ``mathtext.fontset`` is read when it is drawn. Families that are not installed are left
+    out of the list (matplotlib would log a warning for each on every frame).
+    """
+    look = _export_look(engine)
+    if look is None or not (getattr(look, "font_family", None) or look.math_fontset):
+        yield
+        return
+    import matplotlib
+    from matplotlib import font_manager
+
+    rc: dict = {}
+    if look.font_family:
+        installed = {f.name for f in font_manager.fontManager.ttflist}
+        families = [name for name in look.font_family if name in installed]
+        if families:
+            rc["font.family"] = families
+    if look.math_fontset:
+        rc["mathtext.fontset"] = look.math_fontset
+        # Computer Modern has no Unicode minus: tick labels are typeset as maths instead, in
+        # the same face, which is also what makes the numbers match the formulas.
+        rc["axes.formatter.use_mathtext"] = True
+        # and no accents or dashes either: those come from STIX inside a $...$ string
+        rc["mathtext.fallback"] = "stix"
+    with matplotlib.rc_context(rc):
+        yield
+
+
+def _skip_zero_formatter():
+    from matplotlib.ticker import Formatter
+
+    class SkipZero(Formatter):
+        """Another formatter's labels, with the one at 0 left blank."""
+
+        def __init__(self, inner: object) -> None:
+            self.inner = inner
+
+        def set_axis(self, axis: object) -> None:
+            super().set_axis(axis)
+            self.inner.set_axis(axis)
+
+        def format_ticks(self, values):
+            labels = self.inner.format_ticks(values)
+            span = max((abs(v) for v in values), default=1.0) or 1.0
+            return ["" if abs(v) <= 1e-9 * span else t for v, t in zip(values, labels)]
+
+        def __call__(self, x, pos=None):
+            return self.inner(x, pos)
+
+        def get_offset(self) -> str:
+            return self.inner.get_offset()
+
+    return SkipZero
+
+
+def _SkipZero(inner: object) -> object:  # noqa: N802 - reads as the class it builds
+    return _skip_zero_formatter()(inner)
+
+
+def _apply_export_look(ax: object, has_3d: bool, engine: object, panel: object = None) -> None:
+    """Draw a 2-D axes the way the preset's ``ExportLook`` says: axis lines, tips, grid.
+
+    ``axes="cross"`` keeps only the two axis lines, each through the origin when it is in view
+    (along the bottom/left edge otherwise), puts the axis titles beside the tips the way
+    manim's ``Axes`` labels them, and draws ticks across the line. A twin or secondary axis
+    needs the right/top edges, so those keep the box.
+    """
+    look = _export_look(engine)
+    if look is None or has_3d or getattr(panel, "axis_off", False):
+        return
+    if not ax.axison:
+        return
+    if look.tick_label_size is not None:
+        ax.tick_params(which="major", labelsize=look.tick_label_size)
+    linear_x = ax.get_xscale() == "linear"
+    linear_y = ax.get_yscale() == "linear"
+    if look.grid_color is not None and getattr(engine, "grid_visible", False):
+        width = look.grid_width if look.grid_width is not None else 1.0
+        ax.grid(True, which="major", color=look.grid_color, alpha=look.grid_alpha, linewidth=width)
+        if look.faded_lines and look.faded_lines > 1:
+            from matplotlib.ticker import AutoMinorLocator
+
+            if linear_x:
+                ax.xaxis.set_minor_locator(AutoMinorLocator(look.faded_lines))
+            if linear_y:
+                ax.yaxis.set_minor_locator(AutoMinorLocator(look.faded_lines))
+            ax.grid(
+                True,
+                which="minor",
+                color=look.grid_color,
+                alpha=look.grid_alpha / 4.0,
+                linewidth=width * 0.6,
+            )
+            ax.tick_params(which="minor", length=0)
+        ax.set_axisbelow(True)
+    twinned = bool(getattr(ax, "_glplot_twins", ())) or bool(getattr(ax, "_glplot_secondaries", ()))
+    if look.axes != "cross" or twinned:
+        return
+
+    ink = ax.spines["bottom"].get_edgecolor()
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    x0, x1 = sorted(ax.get_xlim())
+    y0, y1 = sorted(ax.get_ylim())
+    # the x axis line sits at y = 0 when that is in view; the y axis line at x = 0
+    at_y = linear_y and y0 < 0.0 < y1
+    at_x = linear_x and x0 < 0.0 < x1
+    if at_y:
+        ax.spines["bottom"].set_position(("data", 0.0))
+    if at_x:
+        ax.spines["left"].set_position(("data", 0.0))
+    for spine in ("bottom", "left"):
+        ax.spines[spine].set_linewidth(max(ax.spines[spine].get_linewidth(), 1.6))
+        # under the data, as in manim: a dot on the x axis sits on the line, not behind it
+        ax.spines[spine].set_zorder(0.8)
+    ax.set_axisbelow(True)
+    ax.tick_params(which="major", direction="inout", length=10, width=1.4)
+    # where each line is, as a fraction of the axes box
+    fy = (0.0 - ax.get_ylim()[0]) / (ax.get_ylim()[1] - ax.get_ylim()[0]) if at_y else 0.0
+    fx = (0.0 - ax.get_xlim()[0]) / (ax.get_xlim()[1] - ax.get_xlim()[0]) if at_x else 0.0
+    # the number at the crossing would sit on the other axis line: manim leaves it out
+    if at_x:
+        ax.xaxis.set_major_formatter(_SkipZero(ax.xaxis.get_major_formatter()))
+    if at_y:
+        ax.yaxis.set_major_formatter(_SkipZero(ax.yaxis.get_major_formatter()))
+    if look.arrow_tips:
+        tip = dict(color=ink, markersize=11, clip_on=False, zorder=0.9, linestyle="none")
+        ax.plot([1.0], [fy], marker=">", transform=ax.transAxes, **tip)
+        ax.plot([fx], [1.0], marker="^", transform=ax.transAxes, **tip)
+    # the tip and the top number reach above the box: give the title room
+    ax.title.set_y(1.05)
+    # axis titles beside the tips, inside the box: x just above the end of its line, y just to
+    # the right of the top of its line (a title above the box would collide with the title)
+    if ax.get_xlabel():
+        ax.xaxis.set_label_coords(1.0, fy + 0.03)
+        ax.xaxis.label.set_horizontalalignment("right")
+        ax.xaxis.label.set_verticalalignment("bottom")
+    if ax.get_ylabel():
+        ax.yaxis.set_label_coords(fx + 0.02, 1.0)
+        ax.yaxis.label.set_rotation(0)
+        ax.yaxis.label.set_horizontalalignment("left")
+        ax.yaxis.label.set_verticalalignment("top")
 
 
 def _apply_style_chrome(fig: object, ax: object, has_3d: bool, engine: object) -> None:
@@ -1565,6 +1768,7 @@ def _build_preview_figure(engine: object, scale: float = 1.0):
                     if not panel_3d and getattr(engine, "legend_show", False):
                         _apply_legend(ax)
             _apply_style_chrome(fig, ax, panel_3d, engine)
+            _apply_export_look(ax, panel_3d, engine, panel)
             for cb in getattr(panel, "colorbars", None) or []:
                 # `cax=`, not `ax=`: `panel.rect_frac` was already shrunk by `colorbar()`
                 # itself at call time (unless `inset=True`, which never shrinks it), so
@@ -1599,6 +1803,7 @@ def _build_preview_figure(engine: object, scale: float = 1.0):
         _draw_panel_layers(ax, primary, layers, has_3d, engine)
         _finish_axes(ax, has_3d, engine, panel=primary)
         _apply_style_chrome(fig, ax, has_3d, engine)
+        _apply_export_look(ax, has_3d, engine, primary)
         title_ax = ax
         if has_3d:
             single_3d_ax = ax
@@ -1706,6 +1911,11 @@ def render_preview(engine: object, filename: str, scale: float = 1.0, **savefig_
     keywords here -- this *is* a real matplotlib figure -- so they are forwarded rather than
     dropped.
     """
+    with _look_fonts(engine):
+        _render_preview_file(engine, filename, scale, savefig_kwargs)
+
+
+def _render_preview_file(engine: object, filename: str, scale: float, savefig_kwargs) -> None:
     import matplotlib.pyplot as mpl
 
     fig = _build_preview_figure(engine, scale)
@@ -1732,9 +1942,10 @@ def render_preview_array(engine: object, scale: float = 1.0) -> np.ndarray:
     """
     import matplotlib.pyplot as mpl
 
-    fig = _build_preview_figure(engine, scale)
-    fig.canvas.draw()
-    rgb = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+    with _look_fonts(engine):
+        fig = _build_preview_figure(engine, scale)
+        fig.canvas.draw()
+        rgb = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
     mpl.close(fig)
     return rgb
 
@@ -1766,11 +1977,12 @@ def render_preview_bytes(
 
     import matplotlib.pyplot as mpl
 
-    fig = _build_preview_figure(engine, scale)
-    try:
-        overrides = inspect(fig) if inspect is not None else None
-        buffer = io.BytesIO()
-        fig.savefig(buffer, format=format, **{**savefig_kwargs, **(overrides or {})})
-    finally:
-        mpl.close(fig)
+    with _look_fonts(engine):
+        fig = _build_preview_figure(engine, scale)
+        try:
+            overrides = inspect(fig) if inspect is not None else None
+            buffer = io.BytesIO()
+            fig.savefig(buffer, format=format, **{**savefig_kwargs, **(overrides or {})})
+        finally:
+            mpl.close(fig)
     return buffer.getvalue()

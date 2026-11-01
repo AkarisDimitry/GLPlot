@@ -81,6 +81,14 @@ class AnimationLimits:
     max_operations: int = 400
     #: Right-hand-side evaluations one ``simulate`` call may make.
     max_simulation_evals: int = 600_000
+    #: Frames in one composed video (``compose_video``): three minutes at 30 fps.
+    max_video_frames: int = 5400
+    #: Frames in a composed GIF, which is held in memory whole and is huge past this anyway.
+    max_video_gif_frames: int = 480
+    #: Seconds ``compose_video`` may spend re-rendering scenes whose frames are not cached.
+    max_video_seconds: float = 900.0
+    #: Bytes of rendered frames kept between ``animate`` and ``compose_video`` (all figures).
+    max_frame_cache_bytes: int = 768_000_000
 
 
 @dataclass(frozen=True)
@@ -208,18 +216,22 @@ class FileSandbox:
             )
         return resolved
 
-    def read_path(self, path: str) -> Path:
-        """Resolve ``path`` for reading: inside a root, a regular file, a known extension."""
+    def read_path(self, path: str, extensions: Optional[Sequence[str]] = None) -> Path:
+        """Resolve ``path`` for reading: inside a root, a regular file, a known extension.
+
+        ``extensions`` replaces the data extensions (a soundtrack is read as ``.mp3``...).
+        """
         resolved = self._locate(path)
         if not resolved.exists():
             raise McpError(f"File not found: {path!r} (looked for {resolved}).")
         if not resolved.is_file():
             raise McpError(f"{path!r} is not a regular file.")
         extension = resolved.suffix.lower()
-        if extension not in self.READ_EXTENSIONS:
+        allowed = tuple(extensions) if extensions is not None else tuple(self.READ_EXTENSIONS)
+        if extension not in allowed:
             raise McpError(
                 f"Cannot read {extension or 'a file with no extension'!r} files. "
-                f"Supported: {', '.join(self.READ_EXTENSIONS)}."
+                f"Supported: {', '.join(allowed)}."
             )
         size = resolved.stat().st_size
         if size > self._max_read_bytes:

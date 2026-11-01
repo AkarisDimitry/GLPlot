@@ -56,6 +56,9 @@ Click any animation to open its script.
 <td align="center" width="25%"><a href="15_3d_fireworks.py"><img src="results/15_3d_fireworks.gif" alt="3D fireworks" width="200"/></a><br><sub>15 · 3D fireworks</sub></td>
 <td align="center" width="25%"><a href="16_pes_particle_dynamics.py">16_pes_particle_dynamics.py</a><br><sub>16 · PES particle dynamics (run it to write the GIF)</sub></td>
 </tr>
+<tr>
+<td align="center" width="25%"><a href="18_3b1b_unit_circle_sine.py"><img src="results/18_3b1b_unit_circle_sine.gif" alt="Unit circle to sine, 3Blue1Brown style" width="200"/></a><br><sub>18 · Unit circle to sine (3Blue1Brown style)</sub></td>
+</tr>
 </table>
 
 ## Details

@@ -370,6 +370,29 @@ def _animate_this(description: str, figure_id: str = "", output: str = "") -> st
     )
 
 
+def _explainer_video(topic: str, length: str = "", output: str = "", language: str = "") -> str:
+    target = output or "explainer.mp4"
+    return (
+        f"Make a complete explainer video, in the style of 3Blue1Brown, about: {topic}.\n"
+        + (f"Length: about {length}.\n" if length else "Length: about 30-60 seconds.\n")
+        + (f"Write all on-screen text in {language}.\n" if language else "")
+        + "1. Read get_guide('mcp-video') and get_guide('mcp-animation') (the 'Step by step' "
+        "section and the explainer_3b1b recipe).\n"
+        "2. Plan 3-6 scenes, one idea each: a title card, the scenes that build the idea, a "
+        "recap. For every scene write its plays: what is drawn (create), written (write), "
+        "brought in (fade_in), moved (a stage animating a variable), pointed at (indicate), "
+        "turned into the next step (transform) and cleared (fade_out).\n"
+        "3. Build each scene as its own figure: create_figure(width=1280, height=720, "
+        "style='3b1b'), pinned axes, legend=false, text placed with coords='axes', maths as "
+        "$...$. Preview it with animate(...) WITHOUT output; read the contact sheet and the "
+        "issues, and fix it until each step reads clearly.\n"
+        f"4. compose_video([...all scenes in order...], output='{target}', transition='fade'), "
+        "after a preview without output if you changed anything.\n"
+        "5. Report the file, each scene's start and end time from the reply, and offer "
+        "export_script(figure_id, kind='animation') for any scene."
+    )
+
+
 def _interactive_figure(figure_id: str, parameters: str = "") -> str:
     which = f" Parameters to expose: {parameters}." if parameters else ""
     return (
@@ -457,6 +480,20 @@ PROMPTS: Tuple[PromptDef, ...] = (
             PromptArg("output", "File to write, e.g. 'wave.gif' or 'orbit.mp4'."),
         ),
         _animate_this,
+    ),
+    PromptDef(
+        "explainer_video",
+        "Plan, build, preview and compose a complete multi-scene explainer video in the "
+        "3Blue1Brown style.",
+        (
+            PromptArg(
+                "topic", "What the video explains, e.g. 'why the derivative is a slope'.", True
+            ),
+            PromptArg("length", "About how long, e.g. '45 seconds'."),
+            PromptArg("output", "File to write, e.g. 'derivative.mp4'."),
+            PromptArg("language", "Language of the on-screen text, e.g. 'Spanish'."),
+        ),
+        _explainer_video,
     ),
     PromptDef(
         "interactive_figure",

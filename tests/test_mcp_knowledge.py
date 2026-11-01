@@ -56,6 +56,7 @@ class TestGetGuide:
             "mcp-plot-kinds",
             "mcp-recipes",
             "mcp-animation",
+            "mcp-video",
             "mcp-interactive",
             "mcp-styling",
             "mcp-notes",

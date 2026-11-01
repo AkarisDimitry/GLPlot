@@ -83,7 +83,15 @@ def _color_cycle() -> tuple:
 
 
 def _default_linewidth() -> float:
-    """``rcParams["lines.linewidth"]``, read live so a style change reaches new lines."""
+    """``rcParams["lines.linewidth"]``, read live so a style change reaches new lines.
+
+    A figure given a GLPlot preset (:func:`plot_style`) draws its new lines at the preset's
+    width instead: the preset restyled what was already there, and what comes next is part of
+    the same look.
+    """
+    width = getattr(_CURRENT_PLOT, "_style_line_width", None)
+    if width is not None:
+        return float(width)
     from matplotlib import rcParams
 
     try:
@@ -260,6 +268,19 @@ def _get_or_create_plot() -> GPULinePlot:
         _CURRENT_PLOT = GPULinePlot()
         _ALL_PLOTS.append(_CURRENT_PLOT)
     return _CURRENT_PLOT
+
+
+def _style_ink(plot_obj: GPULinePlot) -> Optional[tuple]:
+    """The text colour of the preset this figure was given, or None if it was given none."""
+    key = getattr(plot_obj, "_style_key", "") or ""
+    if not key:
+        return None
+    from .gui import styles as _styles
+
+    try:
+        return tuple(_styles.get_style(key).ink)
+    except KeyError:
+        return None
 
 
 def _next_cycle_color(plot_obj: GPULinePlot) -> str:
@@ -6431,6 +6452,17 @@ def plot_style(name: Optional[str] = None, *, layers: bool = True, colormap: boo
         raise ValueError(f"unknown style {name!r}; expected one of {keys}")
 
     _styles.apply_style(plot_obj, style, layers=bool(layers), colormaps=bool(colormap))
+    if layers:
+        # What is drawn next takes the preset's palette and width too, not only what was
+        # already there: plot_style() before plot() is the usual order. The cycle carries on
+        # from the layers the preset just repainted (they are coloured by position).
+        from matplotlib.colors import to_hex
+
+        palette = tuple(to_hex(c[:3]) for c in style.palette) or None
+        plot_obj._prop_cycle_colors = palette
+        if palette:
+            plot_obj._color_cycle_index = len(plot_obj.scene.layers) % len(palette)
+        plot_obj._style_line_width = float(style.line_width)
     # apply_style() itself records plot_obj._style_key now, so plot_style() with no argument
     # reports the current preset regardless of whether it was set from code or by clicking a
     # card in the Style panel. The Style panel still tracks its own selection separately (on
@@ -13295,6 +13327,7 @@ def text(
     horizontalalignment: Optional[str] = None,
     verticalalignment: Optional[str] = None,
     rotation: Optional[Any] = None,
+    layout_text: Optional[str] = None,
     **kwargs: Any,
 ) -> GPULinePlot:
     """Add a text string at specified plot coordinates.
@@ -13319,6 +13352,10 @@ def text(
             reconstructs this text as a real matplotlib ``Text`` and can give it a real
             box there; the live GL/imgui text renderer has no background-box primitive
             yet, so the box does not appear in an interactive ``show()`` window.
+        layout_text (str, optional): GLPlot only. The whole text ``s`` is the beginning of,
+            when a text is written letter by letter: a centred or right-aligned ``s`` is then
+            placed where its letters sit in the whole text, so it grows in place instead of
+            re-centring every frame. Export only, like ``ha``.
         ha, va, horizontalalignment, verticalalignment, rotation: Accepted for
             matplotlib parity. Ignored -- GLPlot draws text left-aligned, baseline-
             aligned, and horizontal only.
@@ -13364,14 +13401,21 @@ def text(
         "text",
         {"ha": ha, "va": va, "rotation": rotation, **kwargs},
         {
-            "ha": "has no effect: text is always drawn left-aligned",
-            "va": "has no effect: text is always drawn baseline-aligned",
-            "rotation": "has no effect: GLPlot draws text horizontally only",
+            "ha": "is drawn in saved images and animations only; the live window draws text "
+            "left-aligned",
+            "va": "is drawn in saved images and animations only; the live window draws text "
+            "baseline-aligned",
+            "rotation": "is drawn in saved images and animations only; the live window draws "
+            "text horizontally",
         },
     )
 
     # The defaults live here rather than in the signature so that "unset" stays
     # distinguishable from "explicitly 12pt black" long enough for `fontdict` to fill it.
+    if color is None:
+        # On a figure given a preset, unset text is the preset's ink (white on a dark page),
+        # as the preset made the text already there; black otherwise.
+        color = _style_ink(plot_obj)
     rgba = _normalize_rgba(color if color is not None else (0.0, 0.0, 0.0, 1.0), n=None)
     # A single date (`text(datetime.date(...), y, ...)`, the natural way to annotate a
     # point on a date-axis plot) needs the same date->number conversion `plot()`/
@@ -13390,7 +13434,13 @@ def text(
     # What the live renderer cannot draw but the headless export can: alignment, rotation, and
     # an anchor that stays put in axes fractions however the view is later fitted.
     plot_obj.scene.layers[-1].metadata.update(
-        {"ha": ha, "va": va, "rotation": rotation, "axes_fraction": axes_fraction}
+        {
+            "ha": ha,
+            "va": va,
+            "rotation": rotation,
+            "axes_fraction": axes_fraction,
+            "layout_text": None if layout_text is None else str(layout_text),
+        }
     )
     if bbox is not None:
         plot_obj.scene.layers[-1].metadata["bbox"] = bbox

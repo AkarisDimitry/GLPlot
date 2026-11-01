@@ -40,7 +40,7 @@ glplot-mcp config --client claude-desktop --write         # merge into the file,
 | Analysis | `analyze_dataset`: fit (linear, polynomial, gaussian, lorentzian, exp_decay, power_law, sigmoid, multipeak, custom), smooth, rolling, derivative, integrate, fft, peaks, filter, detrend, normalize, resample, histogram, correlate, autocorrelation, aggregate (mean/sum/... per category), describe |
 | Drawing | `add_plot` (line, scatter, step, stem, bar, barh, area, errorbar, hist, box, violin, pie, hist2d, hexbin; `axis='right'` second y axis, `hatch`, `reveal`/`trail`/`head`), `add_function`, `add_field` (image, contour, surface...), `add_recipe`, `add_annotation`, `update_artist`, `remove_artist` |
 | Axes and style | `set_axes` (title, labels, limits, scales, grid, legend, aspect, 3-D camera, right-hand axis), `set_style` |
-| Dynamics | `simulate` (ODEs: pendulum, orbits, Lorenz...), `add_control` / `set_control` / `bind_property` (sliders, toggles, choices, buttons that drive properties), `animate` (time and stages drive properties; GIF, APNG, MP4, WebM, PNG frames; contact sheet + measured issues) |
+| Dynamics | `simulate` (ODEs: pendulum, orbits, Lorenz...), `add_control` / `set_control` / `bind_property` (sliders, toggles, choices, buttons that drive properties), `animate` (time and stages drive properties, stage effects such as create/write/fade_in/indicate; GIF, APNG, MP4, WebM, PNG frames; contact sheet + measured issues), `compose_video` (scenes cut into one video) |
 | Output | `render_figure` (image + resolved axes), `save_figure` (PNG, SVG, PDF, JPEG), `export_script` (the Python for the figure, an interactive version, or an animation) |
 | Knowledge (read-only) | `get_guide`, `search_api`, `get_api_doc`, `get_example`, `server_info`, `list_recipes` |
 
@@ -65,6 +65,13 @@ itself, a parameter swept, a camera orbit, data recomputed -- and returns a cont
 problems (nothing moves, axes rescale, the loop does not close). Preview with no `output`, fix, then write
 `.gif` / `.mp4`. `simulate` supplies trajectories; `export_script(kind='animation')` returns the Python.
 Read `get_guide('mcp-animation')`.
+
+Step by step like a 3Blue1Brown video: a stage's `effects` (`create`, `write`, `fade_in`, `indicate`,
+`transform`, `fade_out`...) bring artists in and out, and `create_figure(style='3b1b')` gives manim's look
+(black page, serif maths in Computer Modern, axes through the origin). A **complete video** is one figure per
+scene, each animated and previewed, then `compose_video([...scenes...], output='explainer.mp4')` cuts them
+together with fades (and an optional soundtrack). Read `get_guide('mcp-video')`, or use the prompt
+`explainer_video`.
 
 ## Safety model
 

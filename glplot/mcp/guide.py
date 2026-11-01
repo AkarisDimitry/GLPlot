@@ -14,7 +14,7 @@ from .. import pyplot as gplt
 from ..gui import recipes
 from ..llm.guides import Topic
 from . import analysis, cookbook, dynamics, motion
-from .guide_text import ANIMATION_BODY, ANIMATION_INTRO, INTERACTIVE_BODY
+from .guide_text import ANIMATION_BODY, ANIMATION_INTRO, INTERACTIVE_BODY, VIDEO_BODY
 from .state import DEFAULT_LIMITS, FileSandbox, Limits, expression_vocabulary
 from .toolbox import ANNOTATION_KINDS, FIELD_KINDS
 
@@ -72,6 +72,10 @@ def build_instructions(sandbox: Optional[FileSandbox] = None) -> str:
         "dataset to animate; update_artist edits what is drawn; add_control + bind_property "
         "make a figure depend on sliders; export_script returns the Python behind a figure, an "
         "interactive version or an animation for the user to keep.\n"
+        "A complete explainer video (3Blue1Brown style: create_figure(style='3b1b'), stage "
+        "effects create/write/fade_in/indicate/transform/fade_out) is one figure per scene, each "
+        "animated and previewed, then compose_video cuts them into one MP4 "
+        "(get_guide('mcp-video')).\n"
         "Keep large data out of the conversation: load it from a file or generate it with an "
         "expression (e.g. 'sin(2*pi*t)*exp(-t)') instead of typing numbers. Always set a title "
         "and axis labels, and call render_figure to check the result before answering.\n"
@@ -114,6 +118,12 @@ _SECTION_META = (
         "Animation",
         "animate: time, stages and variables drive properties; GIF/MP4/WebM output; "
         "simulate for dynamics; worked recipes.",
+    ),
+    (
+        "mcp-video",
+        "A whole video",
+        "compose_video: several animated scenes cut into one explainer video, step by step "
+        "in the 3Blue1Brown style; the workflow for an agent.",
     ),
     (
         "mcp-interactive",
@@ -283,6 +293,10 @@ Colours: names (`red`), hex (`#1f77b4`), `tab:blue`. Colormaps: {COLORMAPS}.
 """
     bodies = {
         "mcp-animation": _animation_guide(limits),
+        "mcp-video": VIDEO_BODY.format(
+            max_gif=limits.animation.max_video_gif_frames,
+            max_frames=limits.animation.max_video_frames,
+        ),
         "mcp-interactive": INTERACTIVE_BODY,
         "mcp-workflow": workflow,
         "mcp-data": data,
