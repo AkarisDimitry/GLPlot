@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "GLPlot: GPU-accelerated interactive scientific visualization with a Matplotlib-like interface"
+title: "GLPlot: GPU-accelerated interactive scientific visualization with a Matplotlib-like interface and an MCP server for AI assistants"
 message: >-
   If you use GLPlot in your research, please cite the GLPlot paper below (the "preferred
   citation"); to point at the exact software version you used, cite this repository as well.
