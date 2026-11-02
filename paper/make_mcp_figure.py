@@ -99,7 +99,7 @@ def main() -> None:
     top.text(0.005, 0.99, "(a)", fontsize=15, fontweight="bold", va="top", color=INK)
 
     client = "any MCP client\n(Claude, Codex,\nCursor, ...)"
-    _box(top, 0.025, 0.38, 0.185, 0.48, "AI assistant", client, INK)
+    _box(top, 0.025, 0.38, 0.185, 0.48, "AI agent", client, INK)
     _box(top, 0.38, 0.25, 0.24, 0.61, "glplot-mcp",
          f"{tools} typed tools:\ncreate_figure, add_plot,\nrender_figure, animate, ...\n\n"
          "no code execution;\nfiles only in chosen folders", BLUE)  # fmt: skip

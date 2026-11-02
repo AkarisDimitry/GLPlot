@@ -1,5 +1,5 @@
 ---
-title: "GLPlot: GPU-accelerated interactive scientific visualization with a Matplotlib-like interface and an MCP server for AI assistants"
+title: "GLPlot: GPU-accelerated visualization with an MCP server for AI agents and a Matplotlib-like interface"
 tags:
   - Python
   - scientific visualization
@@ -8,7 +8,8 @@ tags:
   - large-scale plotting
   - interactive visualization
   - Model Context Protocol
-  - AI assistants
+  - AI agents
+  - large language models
 authors:
   - name: Juan Manuel Lombardi
     corresponding: true
@@ -41,7 +42,7 @@ Interactive visualization is part of the scientific reasoning process: researche
 
 Here, we propose `GLPlot`, an open-source Python plotting package that exposes a familiar `pyplot`-style interface while using an OpenGL rendering engine in the backend. It supports the common two- and three-dimensional scientific plot types. A more dedicated `plot_lines` interface represents large families of straight lines by their slope and intercept coefficients and expands their visible geometry analytically on the GPU.
 
-The rendering engine combines event-driven updates, shader-based geometry generation, stable viewport transforms, density accumulation, adaptive level of detail, and GPU picking behind that interface, so large datasets can be explored without touching OpenGL. This paper describes version 0.3.0, which also provides an interactive workstation, headless export of figures and animations, and a Model Context Protocol (MCP) server [@mcp] through which AI assistants build, inspect, and animate figures.
+The rendering engine combines event-driven updates, shader-based geometry generation, stable viewport transforms, density accumulation, adaptive level of detail, and GPU picking behind that interface, so large datasets can be explored without touching OpenGL. This paper describes version 0.3.0, which also provides an interactive workstation, headless export of figures and animations, and a Model Context Protocol (MCP) server [@mcp] through which AI agents build, inspect, and animate figures.
 
 # Statement of need
 
@@ -55,7 +56,7 @@ The design is guided by five requirements:
 4. avoid unnecessary CPU and GPU work when a scene is unchanged; and
 5. support interactive inspection and selection without CPU searches that scale linearly with the number of rendered objects.
 
-Analyses are increasingly carried out with AI assistants, which need to produce a figure and check it without running arbitrary code; `GLPlot` exposes its plotting to them as typed tools over MCP.
+Analyses are increasingly carried out by AI agents built on large language models (LLMs), which need to produce a figure and check it without running arbitrary code; `GLPlot` exposes its plotting to them as typed tools over MCP.
 
 # State of the field
 
@@ -109,9 +110,9 @@ Dense, overlapping geometry is accumulated additively into a floating-point fram
 
 ## Workstation, export, and the MCP server
 
-Three further layers reuse the same scene model. `python -m glplot` opens a workstation, built with Dear ImGui [@imgui], for editing layers, data, styles, and multi-panel layouts live with undo history, with native controls (sliders, buttons) and a gallery of recipes that map a user's columns onto designed plots. A headless export path rebuilds any figure through Matplotlib for publication output, including animations written as GIF or video, and style presets that set palettes, fonts, and axes. The MCP server (`glplot-mcp`) exposes typed plotting tools to AI assistants: each render returns an image with a review of provable problems, no arbitrary code is executed, and file access is confined to directories the user chooses (\autoref{fig:mcp}).
+Three further layers reuse the same scene model. `python -m glplot` opens a workstation, built with Dear ImGui [@imgui], for editing layers, data, styles, and multi-panel layouts live with undo history, with native controls (sliders, buttons) and a gallery of recipes that map a user's columns onto designed plots. A headless export path rebuilds any figure through Matplotlib for publication output, including animations written as GIF or video, and style presets that set palettes, fonts, and axes. The MCP server (`glplot-mcp`) exposes typed plotting tools to AI agents: each render returns an image with a review of provable problems, no arbitrary code is executed, and file access is confined to directories the user chooses (\autoref{fig:mcp}).
 
-![(a) An assistant calls typed tools; GLPlot renders headlessly and returns the image with a review (real server output shown). (b) Four scenes of an explainer video built only through MCP tool calls.\label{fig:mcp}](mcp.png)
+![(a) An AI agent calls typed tools; GLPlot renders headlessly and returns the image with a review (real server output shown). (b) Four scenes of an explainer video built only through MCP tool calls.\label{fig:mcp}](mcp.png)
 
 # Research impact statement
 
