@@ -1,6 +1,6 @@
 """Stage effects: ``create``, ``write``, ``fade_in``, ``indicate``... as in a manim scene.
 
-A 3Blue1Brown-style explainer is a sequence of *plays*: draw the axes' curve, write the
+A step-by-step explainer is a sequence of *plays* (as in manim): draw the axes' curve, write the
 equation, fade a dot in, flash the term that matters, fade it all out. ``animate`` expresses
 that with ``stages=[{"name", "duration", "effects": {"create": "a1", "write": ["a2"]}}]``.
 

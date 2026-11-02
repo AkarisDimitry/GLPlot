@@ -25,7 +25,7 @@ def box(tmp_path):
     toolbox.close_all()
 
 
-def scene(box, style="3b1b"):
+def scene(box, style="manim"):
     """Curve a1, title a2 (axes coords), dot a3, formula a4: the parts of an explainer."""
     box.create_figure(width=640, height=360, style=style)
     box.set_axes("fig1", xlim=[-1, 4], ylim=[-1, 5], xlabel="x", ylabel="y", legend=False)
@@ -149,7 +149,7 @@ def test_a_variable_named_like_an_effect_channel_is_refused(box):
 
 
 def test_what_cannot_be_drawn_in_part_fades_and_the_reply_says_so(box):
-    box.create_figure(width=500, height=300, style="3b1b")
+    box.create_figure(width=500, height=300, style="manim")
     box.add_field("fig1", "image", expression="sin(x)*cos(y)", x_range=[0, 3], y_range=[0, 3])
     result = box.animate("fig1", stages=[{"frames": 4, "effects": {"create": "a1"}}])
     assert result.data["effects"] == [{"stage": "stage 1", "effects": {"create": ["a1"]}}]
@@ -243,7 +243,7 @@ def test_partial_text_is_drawn(box):
 
 
 def test_unset_annotation_colour_is_the_page_ink(box):
-    box.create_figure(width=500, height=300, style="3b1b")
+    box.create_figure(width=500, height=300, style="manim")
     box.add_annotation("fig1", "text", x=1, y=1, text="white on black")
     box.add_annotation("fig1", "hline", y=0)
     for artist in ("a1", "a2"):
@@ -255,7 +255,7 @@ def test_unset_annotation_colour_is_the_page_ink(box):
 
 
 def test_an_arrow_is_a_vector_that_can_grow(box):
-    box.create_figure(width=500, height=500, style="3b1b")
+    box.create_figure(width=500, height=500, style="manim")
     box.set_axes("fig1", xlim=[-1, 3], ylim=[-1, 3], equal_aspect=True)
     box.add_annotation("fig1", "arrow", x=0, y=0, dx=2, dy=1)
     shaft = layers_of(box, "a1")

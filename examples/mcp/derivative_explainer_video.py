@@ -1,4 +1,4 @@
-"""A complete 3Blue1Brown-style explainer video, made only through GLPlot's MCP server.
+"""A complete step-by-step explainer video, made only through GLPlot's MCP server.
 
 This is the sequence of tool calls an agent makes for "explain why the derivative of x^2 is 2x":
 it talks to the server exactly as an MCP client does (the official ``mcp`` SDK over stdio), never
@@ -75,7 +75,7 @@ async def main() -> None:
                 return data
 
             async def card(**axes):
-                data, _ = await call("create_figure", width=W, height=H, style="3b1b")
+                data, _ = await call("create_figure", width=W, height=H, style="manim")
                 figure = data["figure_id"]
                 await call("set_axes", figure_id=figure, hide_axes=True, legend=False, **axes)
                 return figure
@@ -147,7 +147,7 @@ async def main() -> None:
             ])  # fmt: skip
 
             # ---- scene 3: the graph and its slope ----------------------------------------------
-            data, _ = await call("create_figure", width=W, height=H, style="3b1b")
+            data, _ = await call("create_figure", width=W, height=H, style="manim")
             gr = data["figure_id"]
             await call("set_axes", figure_id=gr, xlim=[-0.5, 3.3], ylim=[-1.2, 10.5],
                        xlabel="x", ylabel="y", grid=True, legend=False)  # fmt: skip

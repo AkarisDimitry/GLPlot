@@ -50,7 +50,7 @@ reference lines, arrows and text take its ink; `"C0"`..`"C9"` name the preset's 
 display name or a common alias works: `"economist"`, `"The Economist"`, `"538"`, `"Tokyo Night"`,
 `"manim"`. `plt.plot_styles()` returns `(key, title, description)` for every preset.
 
-When someone asks for a look by a person, publication or theme ("like a 3Blue1Brown video", "an
+When someone asks for a look by a person, publication or theme ("like a manim explainer", "an
 Economist chart", "in Catppuccin"), use that preset. Several also shape the saved picture beyond its
 colours -- which axis lines there are, where the title sits, the grid, the faces -- as listed below.
 The presets, by use:
@@ -60,7 +60,7 @@ The presets, by use:
 Effects such as glow, SSAO depth shading and density tinting exist only in the live window; the
 saved file shows the page, colours, lines and, where listed, the preset's own axes and type. A face
 that is not installed falls back to the next one named (the last always ships with matplotlib), so a
-look exports everywhere; `3b1b` sets its text in matplotlib's own Computer Modern.
+look exports everywhere; `manim` sets its text in matplotlib's own Computer Modern.
 
 ## Text size, fonts, rcParams
 

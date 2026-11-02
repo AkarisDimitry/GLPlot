@@ -301,7 +301,7 @@ class TestPresetCatalogue:
             "ocean",
             "vintage",
             "candy",
-            "3b1b",
+            "manim",
         )
         # creators, newsrooms, chart grammars, editor themes and design systems
         assert styles.STYLE_KEYS[-11:] == (

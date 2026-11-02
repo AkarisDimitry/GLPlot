@@ -93,7 +93,7 @@ def chart(style, grid=None):
 
 
 class TestTheBorrowedLooks:
-    def test_they_ship_after_3b1b_in_order(self):
+    def test_they_ship_after_manim_in_order(self):
         assert styles.STYLE_KEYS[-len(BORROWED) :] == BORROWED
 
     @pytest.mark.parametrize("key", BORROWED)
@@ -233,7 +233,7 @@ class TestTheExportsText:
 
 class TestComputerModernText:
     """matplotlib's cmr10 is laid out like TeX's OT1: some ASCII characters draw as other
-    glyphs, and it has no accents. The 3b1b export writes those as one-symbol formulas."""
+    glyphs, and it has no accents. The manim export writes those as one-symbol formulas."""
 
     @pytest.mark.parametrize(
         "text, expected",
@@ -250,9 +250,9 @@ class TestComputerModernText:
     def test_cm_safe(self, text, expected):
         assert _cm_safe(text) == expected
 
-    def test_a_3b1b_export_draws_every_glyph(self):
+    def test_a_manim_export_draws_every_glyph(self):
         plot = gplt.figure(figsize=(6, 3.5))
-        gplt.plot_style("3b1b")
+        gplt.plot_style("manim")
         gplt.plot([0, 1], [0, 1])
         gplt.title("The slope of $x^2$ — café")
         gplt.xlabel("x > 0")
@@ -266,7 +266,7 @@ class TestComputerModernText:
         from matplotlib.text import Text
 
         before = Text._preprocess_math
-        render_preview_bytes(chart("3b1b"), 1.0)
+        render_preview_bytes(chart("manim"), 1.0)
         assert Text._preprocess_math is before
 
 
@@ -295,8 +295,9 @@ class TestTheCatalogue:
             ("538", "fivethirtyeight"),
             ("Five Thirty Eight", "fivethirtyeight"),
             ("Tokyo Night", "tokyonight"),
-            ("3Blue1Brown", "3b1b"),
-            ("manim", "3b1b"),
+            ("Manim", "manim"),
+            ("explainer", "manim"),
+            ("manim", "manim"),
             ("ggplot2", "ggplot"),
             ("Financial Times", "ft"),
             ("Catppuccin Mocha", "catppuccin"),
@@ -316,7 +317,7 @@ class TestTheCatalogue:
 
     def test_each_look_says_how_it_exports(self):
         assert "y numbers on the right" in styles.export_summary(styles.get_style("economist"))
-        assert "LaTeX" in styles.export_summary(styles.get_style("3b1b"))
+        assert "LaTeX" in styles.export_summary(styles.get_style("manim"))
         assert styles.export_summary(styles.get_style("clean")) == ""
 
     def test_the_guide_lists_every_preset_by_use(self):
@@ -508,7 +509,7 @@ class TestInvisibleOnThePage:
         box.add_annotation(figure, "text", x=1, y=0.5, text="a black note", color="black")
         assert "invisible_on_page" in self.codes(box, figure)
 
-    @pytest.mark.parametrize("style", ["3b1b", "economist", "hand", "catppuccin", "ggplot"])
+    @pytest.mark.parametrize("style", ["manim", "economist", "hand", "catppuccin", "ggplot"])
     def test_a_presets_own_colours_never_trip_it(self, box, style):
         figure = box.create_figure(style=style).data["figure_id"]
         for k in range(7):  # the whole palette
@@ -530,7 +531,7 @@ class TestPromptsAndInstructions:
         from glplot.mcp import catalog
 
         text = catalog.find_prompt("publication_figure").build(figure_id="fig1", venue="a blog")
-        for key in ("journal", "slide", "economist", "material", "3b1b"):
+        for key in ("journal", "slide", "economist", "material", "manim"):
             assert f"'{key}'" in text
 
     def test_the_server_instructions_say_a_look_is_one_argument(self):

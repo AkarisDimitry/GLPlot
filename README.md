@@ -20,13 +20,9 @@ know carries over directly.
 <p align="center">
   <a href="examples/mcp/results/derivative_explainer.mp4">
     <img src="examples/mcp/results/derivative_explainer.gif"
-         alt="A 3Blue1Brown-style explainer of why the derivative of x squared is 2x, made with GLPlot"
+         alt="A step-by-step explainer of why the derivative of x squared is 2x, made with GLPlot"
          width="640"/>
   </a>
-  <br>
-  <sub>A complete explainer video in the style of 3Blue1Brown, built step by step by a language model
-  through GLPlot's MCP server (<a href="examples/mcp/results/derivative_explainer.mp4">watch the MP4</a>
-  · <a href="examples/mcp/derivative_explainer_video.py">the script</a>).</sub>
 </p>
 
 ## Install
@@ -497,8 +493,8 @@ plt.show()
   pick a card (each is a real render), map your columns, and the plot is drawn in the look it was
   designed in -- 2-D and 3-D, one undoable step, with a live preview of *your* data first
 - **37 looks, each with its own colormap** — from journal and colour-blind-safe to aurora,
-  synthwave and vintage print, plus looks borrowed from famous designs: 3Blue1Brown and
-  Kurzgesagt explainers, The Economist, the Financial Times and FiveThirtyEight, ggplot2, Tufte,
+  synthwave and vintage print, plus looks borrowed from famous designs: manim-style and
+  Kurzgesagt-style explainers, The Economist, the Financial Times and FiveThirtyEight, ggplot2, Tufte,
   Material, a market terminal, and the Nord, Catppuccin and Tokyo Night editor themes. A preset
   shapes saved images too (axis lines, title, grid, faces), so `plot_style("economist")` exports
   a newsroom chart, not just its colours; the Style panel shows every preset rendered on a line
@@ -555,7 +551,7 @@ such as `create`, `write`, `fade_in`, `indicate` and `transform` build a scene s
 **`compose_video`** (several animated scenes cut into one video, with fades and an optional soundtrack) and
 `export_script` (the Python for a figure, with real widgets, or as a `FuncAnimation`).
 
-With `create_figure(style="3b1b")` the figures take the look of 3Blue1Brown's manim videos (black page,
+With `create_figure(style="manim")` the figures take the look of manim's defaults (black page,
 manim's palette, serif maths in Computer Modern, axes through the origin), so a model can make a complete
 explainer video in that style: [examples/mcp/derivative_explainer_video.py](examples/mcp/derivative_explainer_video.py)
 does it through the official MCP client, four scenes, start to finish

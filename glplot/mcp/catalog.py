@@ -322,7 +322,7 @@ def _publication_figure(figure_id: str, venue: str = "a scientific journal") -> 
         "the look that suits the venue: 'journal' or 'tufte' for a paper ('colorsafe' / "
         "'print' if it must survive colour blindness or greyscale), 'slide' / 'stage' for a "
         "talk, 'economist' / 'ft' / 'fivethirtyeight' for an article or a blog, 'material' / "
-        "'ggplot' for a dashboard or a notebook, '3b1b' / 'kurzgesagt' for a video. Give every "
+        "'ggplot' for a dashboard or a notebook, 'manim' / 'kurzgesagt' for a video. Give every "
         "axis a name and unit, shorten the title to what the figure shows, keep the legend "
         "only if several series need telling apart (set_axes(legend_loc=...) moves it off the "
         "data), remove chart junk, and make sure nothing is clipped or overlapping. Render "
@@ -404,17 +404,17 @@ def _animate_this(description: str, figure_id: str = "", output: str = "") -> st
 def _explainer_video(topic: str, length: str = "", output: str = "", language: str = "") -> str:
     target = output or "explainer.mp4"
     return (
-        f"Make a complete explainer video, in the style of 3Blue1Brown, about: {topic}.\n"
+        f"Make a complete explainer video, in the manim style, about: {topic}.\n"
         + (f"Length: about {length}.\n" if length else "Length: about 30-60 seconds.\n")
         + (f"Write all on-screen text in {language}.\n" if language else "")
         + "1. Read get_guide('mcp-video') and get_guide('mcp-animation') (the 'Step by step' "
-        "section and the explainer_3b1b recipe).\n"
+        "section and the explainer_manim recipe).\n"
         "2. Plan 3-6 scenes, one idea each: a title card, the scenes that build the idea, a "
         "recap. For every scene write its plays: what is drawn (create), written (write), "
         "brought in (fade_in), moved (a stage animating a variable), pointed at (indicate), "
         "turned into the next step (transform) and cleared (fade_out).\n"
         "3. Build each scene as its own figure: create_figure(width=1280, height=720, "
-        "style='3b1b'), pinned axes, legend=false, text placed with coords='axes', maths as "
+        "style='manim'), pinned axes, legend=false, text placed with coords='axes', maths as "
         "$...$. Preview it with animate(...) WITHOUT output; read the contact sheet and the "
         "issues, and fix it until each step reads clearly.\n"
         f"4. compose_video([...all scenes in order...], output='{target}', transition='fade'), "
@@ -490,7 +490,7 @@ PROMPTS: Tuple[PromptDef, ...] = (
             PromptArg(
                 "look",
                 "The look, by preset or by name: 'The Economist', 'Financial Times', '538', "
-                "'ggplot2', 'Tufte', '3Blue1Brown', 'Kurzgesagt', 'Nord', 'Tokyo Night'...",
+                "'ggplot2', 'Tufte', 'manim', 'Kurzgesagt', 'Nord', 'Tokyo Night'...",
                 True,
             ),
         ),
@@ -529,7 +529,7 @@ PROMPTS: Tuple[PromptDef, ...] = (
     PromptDef(
         "explainer_video",
         "Plan, build, preview and compose a complete multi-scene explainer video in the "
-        "3Blue1Brown style.",
+        "manim style.",
         (
             PromptArg(
                 "topic", "What the video explains, e.g. 'why the derivative is a slope'.", True

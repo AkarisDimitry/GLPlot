@@ -71,14 +71,14 @@ bars, histograms, fills) or its ink (reference lines, arrows, text). The presets
 Paper                     clean, journal, colorsafe, print, tufte
 Talks                     slide, stage
 Notebooks, dashboards     ggplot, material, minimal, dark, dense
-Explainer videos          3b1b, kurzgesagt
+Explainer videos          manim, kurzgesagt
 Newsroom charts           economist, ft, fivethirtyeight, terminal
 Editor themes             ide, solarized, dracula, gruvbox, nord, catppuccin, tokyonight
 Drawing board             blueprint, chalk, marker, hand, kids
 Moods                     neon, aurora, synthwave, sunset, ocean, vintage, candy
 ========================  ========================================================================
 
-Several are tributes to famous designs -- 3Blue1Brown's and Kurzgesagt's videos, The Economist, the
+Several are tributes to famous designs -- manim-style and Kurzgesagt-style videos, The Economist, the
 Financial Times, FiveThirtyEight, ggplot2, Edward Tufte, Material Design, Nord, Catppuccin, Tokyo
 Night -- built from their public colours and habits, unaffiliated, with nothing on the picture
 naming them. ``plot_style`` accepts a key, the display name or an alias (``"The Economist"``,

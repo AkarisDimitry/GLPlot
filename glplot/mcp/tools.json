@@ -60,7 +60,7 @@
       }
      ],
      "default": null,
-     "description": "Style preset, by use -- paper: clean, journal, colorsafe, print, tufte; talks: slide, stage; notebooks and dashboards: ggplot, material, minimal, dark, dense; explainer videos: 3b1b, kurzgesagt; newsroom charts: economist, ft, fivethirtyeight, terminal; editor themes: ide, solarized, dracula, gruvbox, nord, catppuccin, tokyonight; drawing board: blueprint, chalk, marker, hand, kids; moods: neon, aurora, synthwave, sunset, ocean, vintage, candy. A display name ('The Economist', 'Tokyo Night') or alias ('538', 'manim') works too."
+     "description": "Style preset, by use -- paper: clean, journal, colorsafe, print, tufte; talks: slide, stage; notebooks and dashboards: ggplot, material, minimal, dark, dense; explainer videos: manim, kurzgesagt; newsroom charts: economist, ft, fivethirtyeight, terminal; editor themes: ide, solarized, dracula, gruvbox, nord, catppuccin, tokyonight; drawing board: blueprint, chalk, marker, hand, kids; moods: neon, aurora, synthwave, sunset, ocean, vintage, candy. A display name ('The Economist', 'Tokyo Night') or alias ('538', 'manim') works too."
     }
    }
   },
@@ -1913,7 +1913,7 @@
     },
     "preset": {
      "type": "string",
-     "description": "Style preset, by use -- paper: clean, journal, colorsafe, print, tufte; talks: slide, stage; notebooks and dashboards: ggplot, material, minimal, dark, dense; explainer videos: 3b1b, kurzgesagt; newsroom charts: economist, ft, fivethirtyeight, terminal; editor themes: ide, solarized, dracula, gruvbox, nord, catppuccin, tokyonight; drawing board: blueprint, chalk, marker, hand, kids; moods: neon, aurora, synthwave, sunset, ocean, vintage, candy. A display name ('The Economist', 'Tokyo Night') or alias ('538', 'manim') works too."
+     "description": "Style preset, by use -- paper: clean, journal, colorsafe, print, tufte; talks: slide, stage; notebooks and dashboards: ggplot, material, minimal, dark, dense; explainer videos: manim, kurzgesagt; newsroom charts: economist, ft, fivethirtyeight, terminal; editor themes: ide, solarized, dracula, gruvbox, nord, catppuccin, tokyonight; drawing board: blueprint, chalk, marker, hand, kids; moods: neon, aurora, synthwave, sunset, ocean, vintage, candy. A display name ('The Economist', 'Tokyo Night') or alias ('538', 'manim') works too."
     }
    },
    "required": [

@@ -103,7 +103,7 @@ for public releases.
   as `linspace`), so a log-spaced x axis does not need `10**linspace(...)`.
 - `plt.stats()` is implemented (it always raised before): count and min/max/mean/std of the plotted
   points, in the view or in total.
-- **The `3b1b` style preset**: the look of 3Blue1Brown's manim videos -- a black page, manim's BLUE_C /
+- **The `manim` style preset**: the look of manim's defaults (the maths-animation library) -- a black page, manim's BLUE_C /
   YELLOW_C / TEAL palette and a matching `manim` colormap, white serif text, `$...$` maths in Computer
   Modern, and in saved images and animations two axis lines crossing at the origin with arrow tips (the
   number at the crossing left out); `grid(True)` is a NumberPlane grid with faded lines between the major
@@ -126,7 +126,7 @@ for public releases.
   box in the page colour). `add_function` takes `reveal` and `head`.
 - `plt.text(layout_text=...)`: a text being written letter by letter stays where its letters sit in the
   whole text instead of re-centring every frame.
-- Gallery animation 18: the unit circle drawing a sine wave, in the 3Blue1Brown style, built play by play.
+- Gallery animation 18: the unit circle drawing a sine wave, in the manim style, built play by play.
 - **Eleven looks borrowed from famous designs** (37 presets in all, each with a GL gallery card):
   `kurzgesagt`, `economist`, `ft` (Financial Times), `fivethirtyeight`, `ggplot` (ggplot2), `tufte`,
   `nord`, `catppuccin` (Mocha), `tokyonight`, `material` and `terminal` (a market-data screen), from their
@@ -174,7 +174,7 @@ for public releases.
 - Exported text is written in the preset's ink (Solarized's base1, Gruvbox's light1) instead of plain
   white or black. A face is chosen by the weight it really has: macOS registers a font collection as one
   face, so Avenir Next was bold everywhere and Helvetica could not set a bold title.
-- `3b1b` text is set in matplotlib's own Computer Modern (cmr10) when no LaTeX face is installed, so the
+- `manim` text is set in matplotlib's own Computer Modern (cmr10) when no LaTeX face is installed, so the
   LaTeX look is there on every machine; the characters cmr10 draws as other glyphs (`< > { } | _ \`) and
   accents beside a formula are written as one-symbol formulas.
 

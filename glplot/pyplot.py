@@ -6505,7 +6505,7 @@ def plot_style(name: Optional[str] = None, *, layers: bool = True, colormap: boo
     :func:`plot_styles` for the keys.
 
     Args:
-        name: A preset key (``"chalk"``, ``"economist"``, ``"3b1b"``, ...), its display name
+        name: A preset key (``"chalk"``, ``"economist"``, ``"manim"``, ...), its display name
             or a common alias (``"The Economist"``, ``"538"``, ``"Tokyo Night"``,
             ``"manim"``), matched ignoring case, spaces and punctuation. ``None`` applies
             nothing and returns the key of the last preset this figure was given (``""`` if

@@ -102,7 +102,7 @@ clock there (`animate` says when this happens).
 * Real dynamics (pendulum, orbit, predator-prey, Lorenz): `simulate` solves the equations into a dataset;
   plot it with `reveal` + `head`.
 
-## Step by step, like a 3Blue1Brown video: stage `effects`
+## Step by step, like a manim explainer: stage `effects`
 
 An explainer is a sequence of plays: draw the curve, write the formula, bring a dot in, point at the
 term that matters, clear the stage. A stage's `effects` does that, all of its effects together:
@@ -127,7 +127,7 @@ term that matters, clear the stage. A stage's `effects` does that, all of its ef
 * Pacing like the videos: 1-2 s per play, a short stage with nothing in it after each idea, and
   `hold_end=1` so the last picture stays.
 
-**The look**: `create_figure(style="3b1b")` (or `set_style`) is manim's: a black page, BLUE_C for the
+**The look**: `create_figure(style="manim")` (or `set_style`) is manim's: a black page, BLUE_C for the
 thing being explained and YELLOW_C to point at things, white serif text, `$...$` maths in Computer
 Modern, axes that cross at the origin with arrow tips. `set_axes(grid=true)` gives a NumberPlane grid,
 `legend=false` drops the legend (an explainer labels things in place).
@@ -136,7 +136,7 @@ Modern, axes that cross at the origin with arrow tips. `set_axes(grid=true)` giv
 y=1.05, align="center", fontsize=34)`; a formula, `text="$f'(x) = 2x$"`; a number that changes, bind
 `text` to a `format`; a vector, `add_annotation(kind="arrow", x=0, y=0, dx=2, dy=1)` and bind `dx`,
 `dy`; a dot, `add_plot(kind="scatter", x=[1], y=[1], size=16)` and bind `x`, `y`. The recipe
-`explainer_3b1b` below is a complete one.
+`explainer_manim` below is a complete one.
 
 ## Reading the reply
 
@@ -229,7 +229,7 @@ when small, and `notes` says when they are too big. The script needs only `glplo
 
 VIDEO_BODY = """A whole explainer -- a title card, a few scenes that build an idea step by step, a recap -- is
 **one figure per scene**, each animated and checked on its own, then **cut together** with
-`compose_video`. This is how to make a complete video in the 3Blue1Brown style.
+`compose_video`. This is how to make a complete explainer video in the manim style.
 
 ## 1. Plan
 
@@ -244,7 +244,7 @@ For each scene list its plays (what appears, what moves, what is pointed at). Ty
 
 ## 2. Build every scene the same way
 
-* `create_figure(width=1280, height=720, style="3b1b")` -- the **same size for every scene**, so
+* `create_figure(width=1280, height=720, style="manim")` -- the **same size for every scene**, so
   nothing is letterboxed. A text-only card: `set_axes(hide_axes=true, xlim=[0, 1], ylim=[0, 1])`
   and place text with `coords="axes"`.
 * Pin the axes (`xlim`, `ylim`), `legend=false`, and label things in place with text.

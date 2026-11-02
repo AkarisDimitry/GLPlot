@@ -80,11 +80,11 @@ def build_instructions(sandbox: Optional[FileSandbox] = None) -> str:
         "interactive version or an animation for the user to keep.\n"
         f"A look is one argument: create_figure(style=...) or set_style takes {_preset_count()} presets by use "
         "-- paper (journal, tufte), talks, dashboards (ggplot, material), explainer videos "
-        "(3b1b, kurzgesagt), newsroom charts (economist, ft, fivethirtyeight), editor themes "
+        "(manim, kurzgesagt), newsroom charts (economist, ft, fivethirtyeight), editor themes "
         "(nord, catppuccin, tokyonight...) -- by key or by name ('The Economist'); it sets the "
         "page, palette, faces and axes of the saved image, so leave color= unset and let it "
         "choose. When the user names a person's, a publication's or a theme's look, use it.\n"
-        "A complete explainer video (3Blue1Brown style: create_figure(style='3b1b'), stage "
+        "A complete explainer video (manim style: create_figure(style='manim'), stage "
         "effects create/write/fade_in/indicate/transform/fade_out) is one figure per scene, each "
         "animated and previewed, then compose_video cuts them into one MP4 "
         "(get_guide('mcp-video')).\n"
@@ -135,7 +135,7 @@ _SECTION_META = (
         "mcp-video",
         "A whole video",
         "compose_video: several animated scenes cut into one explainer video, step by step "
-        "in the 3Blue1Brown style; the workflow for an agent.",
+        "in the manim style; the workflow for an agent.",
     ),
     (
         "mcp-interactive",

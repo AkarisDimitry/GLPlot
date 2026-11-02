@@ -44,15 +44,15 @@ ani.save("wave.gif", fps=25)       # no window needed; plt.show() plays it live 
 5. Frame cost matters: a 200-frame GIF at figsize (8, 5) is 200 full exports. Reduce `frames`, `figsize`, or `scale`.
 6. `ArtistAnimation(fig, [[artist, ...], ...])` plays a precomputed list of artist groups.
 
-## A 3Blue1Brown-style explainer
+## A step-by-step explainer (the manim look)
 
-`plt.plot_style("3b1b")` gives the look of 3Blue1Brown's manim videos: a black page, manim's BLUE_C /
+`plt.plot_style("manim")` gives the look of manim's defaults: a black page, manim's BLUE_C /
 YELLOW_C / TEAL palette, white serif text, `$...$` maths in Computer Modern and, in the saved GIF/MP4, axes
 that cross at the origin with arrow tips (`plt.grid(True)` is a NumberPlane grid). Build the video one *play*
 at a time: give every element the fraction of its play it has reached at frame `i` (eased with manim's
 `smooth`, `t**3 * (10 - 15*t + 6*t**2)`), and draw it from that -- a curve sliced to that share of its
 points, text cut to that many letters, a colour faded by it. `examples/gallery/animations/
-18_3b1b_unit_circle_sine.py` is a complete one (the unit circle drawing a sine wave, with the question
+18_manim_unit_circle_sine.py` is a complete one (the unit circle drawing a sine wave, with the question
 written and the formula pointed at).
 
 ## Live playback
