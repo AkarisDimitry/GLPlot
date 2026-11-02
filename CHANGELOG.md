@@ -7,6 +7,10 @@ for public releases.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+
+The JOSS submission version: everything since 0.2.0, which was tagged but never published to PyPI.
+
 ### Added
 
 - **Animation through MCP (`animate`).** A model can now make GIFs, APNGs, MP4s, WebMs and numbered PNGs of
@@ -160,6 +164,10 @@ for public releases.
 
 ### Changed
 
+- The JOSS paper (`paper/paper.md`) meets the current submission rules: under 1,750 words, the required
+  "Research impact statement" heading, a full AI usage disclosure, author contributions, funding
+  acknowledgement and a conflicts-of-interest statement; the figure sits next to the paper (its path
+  was broken for JOSS's build) and the key dependencies and related software are cited.
 - Citation: the GLPlot paper (ChemRxiv, doi:10.26434/chemrxiv.15007777/v1) is the preferred citation in
   `CITATION.cff`, so GitHub's "Cite this repository" gives it in APA and BibTeX; the README and the docs
   cite it too (they had a placeholder Zenodo DOI and a one-author entry), with a paper badge.
@@ -501,7 +509,8 @@ they brought, reconstructed from the project history rather than release by rele
 
 - CI and lint configuration for multi-platform publication checks.
 
-[Unreleased]: https://github.com/AkarisDimitry/GLPlot/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/AkarisDimitry/GLPlot/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/AkarisDimitry/GLPlot/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/AkarisDimitry/GLPlot/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/AkarisDimitry/GLPlot/releases/tag/v0.1.3
 [0.1.2]: https://github.com/AkarisDimitry/GLPlot/releases/tag/v0.1.2

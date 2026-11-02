@@ -5,8 +5,8 @@ message: >-
   citation"); to point at the exact software version you used, cite this repository as well.
   Felix Riccius, Julian Holland and Gianmarco Ducci contributed equally to this work.
 type: software
-version: 0.2.0
-date-released: 2026-10-24
+version: 0.3.0
+date-released: 2026-11-02
 license: MIT
 authors:
   - family-names: Lombardi

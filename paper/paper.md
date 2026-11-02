@@ -28,14 +28,14 @@ affiliations:
   - name: "Fritz Haber Institute of the Max Planck Society, Berlin, Germany"
     index: 1
     ror: "03k9qs827"
-date: 16 August 2026
+date: 2 November 2026
 bibliography: paper.bib
 thanks: "Software repository: \\url{https://github.com/AkarisDimitry/GLPlot}"
 ---
 
 # Summary
 
-Interactive visualization is part of the scientific reasoning process: researchers use plots to inspect convergence, identify outliers, compare simulations, assess uncertainty, and decide which analyses or experiments to perform next. Furthermore, plots enable us to identify relationships that would otherwise be missed by visualizing abstract concepts alone; for these reasons, it is imperative that the scientific community have access to easy, fast tools to visualize their data. The complexity of these tasks rapidly escalates when a figure contains a large number of points, vertices, curves, or other geometric primitives. Conventional plotting workflows may incur substantial costs from CPU-side geometry construction, per-object draw calls, repeated rasterization, and transfer of expanded geometry to the graphics device. These speed bumps are not just a minor irritation, but an active hindrance to scientific discovery, as fewer potential lines of reasoning are pursued if one must wait hours to confirm one's logic.
+Interactive visualization is part of the scientific reasoning process: researchers use plots to inspect convergence, identify outliers, compare simulations, assess uncertainty, and decide which analyses or experiments to perform next. These tasks become slow when a figure contains very many points, vertices, curves, or other geometric primitives, because conventional plotting workflows pay for CPU-side geometry construction, per-object draw calls, repeated rasterization, and the transfer of expanded geometry to the graphics device. Waiting on every view change is more than an irritation: fewer lines of reasoning are pursued when each one is slow to check.
 
 Here, we propose `GLPlot`, an open-source Python plotting package that exposes a familiar `pyplot`-style interface while using an OpenGL rendering engine in the backend. It is intentionally developed to support common two- and three-dimensional scientific visualizations, including polylines, scatter plots, histograms, matrix images, contour and pseudocolor plots, vector fields, surfaces, and meshes. A more dedicated `plot_lines` interface represents large families of straight lines by their slope and intercept coefficients and expands their visible geometry analytically on the GPU.
 
@@ -55,23 +55,23 @@ The design is guided by five requirements:
 
 # State of the field
 
-Scientific visualization tools span a broad range of abstraction levels and rendering strategies. General-purpose plotting libraries prioritize flexibility and publication-quality output, GPU-oriented frameworks expose programmable rendering pipelines, and large-data visualization systems aggregate observations into display-resolution representations. These approaches address different requirements and therefore provide complementary rather than interchangeable solutions.
+Scientific visualization tools span a range of abstraction levels and rendering strategies; general-purpose plotting libraries, browser-based libraries [@bokeh; @plotly], VTK-based applications [@schroeder2006vtk; @ramachandran2011mayavi; @ahrens2005paraview], GPU frameworks, and aggregation systems answer different needs and complement rather than replace one another.
 
-Matplotlib is the reference general-purpose visualization library for scientific Python, supporting static, animated, and interactive figures across a broad range of plotting and publication workflows [@hunter2007matplotlib]. Its artist-based architecture and extensive layout, annotation, and backend systems make it appropriate for most conventional scientific figures. However, performance can deteriorate when a figure contains very large numbers of individual primitives, because geometry construction, artist management, coordinate transformation, and redraw operations are largely coordinated on the CPU. This limitation becomes particularly relevant for dense line families, large point clouds, trajectory ensembles, and complex three-dimensional scenes requiring repeated interactive updates.
+Matplotlib is the reference plotting library of scientific Python, with static, animated, and interactive figures and extensive layout, annotation, and backend systems [@hunter2007matplotlib]. Its artist-based architecture coordinates geometry construction, coordinate transforms, and redraws largely on the CPU, so performance deteriorates for very large numbers of primitives: dense line families, large point clouds, trajectory ensembles, and three-dimensional scenes updated interactively.
 
-VisPy provides high-performance interactive two- and three-dimensional visualization through an OpenGL-based rendering framework [@vispy]. Its interfaces range from relatively low-level graphics abstractions, including buffers, shaders, and rendering programs, to higher-level scene graphs and reusable visual components. This flexibility makes VisPy well suited to the development of custom visualization applications and specialized rendering techniques. At the same time, achieving highly specialized behavior may require users to work directly with graphics concepts or implement custom visual components, which can impose a substantial development burden for routine scientific plotting.
+VisPy offers high-performance OpenGL visualization, from buffers and shaders up to scene graphs and reusable visuals [@vispy]. This flexibility suits custom applications, but specialized behavior often requires working with graphics concepts or writing custom visuals, a substantial burden for routine plotting; fastplotlib makes a similar trade with a modern GPU API [@fastplotlib].
 
-Datashader addresses large-data visualization through rasterization and aggregation into the finite pixel grid of the display [@datashader]. This strategy is highly effective when the primary objective is to preserve the statistical or spatial distribution of a dataset despite severe overplotting. Because the resulting representation is defined at the level of aggregate cells or image pixels, however, the original geometric objects are not necessarily retained as persistent elements of an interactive scene. This limits workflows in which individual lines, trajectories, points, or surfaces must remain separately identifiable, selectable, or subject to object-specific styling.
+Datashader rasterizes and aggregates data into the display's pixel grid [@datashader], which preserves the distribution of severely overplotted data; the aggregate representation, however, does not keep individual lines, points, or surfaces as persistent objects that can be selected or styled.
 
-PyQtGraph is designed for scientific and engineering applications requiring responsive desktop graphics, data-acquisition displays, and rapidly updated signals [@pyqtgraph]. Its integration with Qt makes it particularly suitable for instrumentation, monitoring interfaces, and custom graphical applications. Its principal strengths lie in fast two-dimensional visualization and application development, whereas highly specialized three-dimensional rendering, analytical shader-side primitive generation, density accumulation, and large-scale GPU-based object selection are not its central design focus.
+PyQtGraph targets responsive desktop graphics for instrumentation and rapidly updated signals [@pyqtgraph]; its strength is fast two-dimensional application development rather than shader-side primitive generation, density accumulation, or GPU object selection in three dimensions.
 
-`GLPlot` targets the gap between these approaches. It retains a concise procedural interface close to Matplotlib's pyplot idiom while adopting a GPU-resident rendering architecture for large two- and three-dimensional scientific scenes. Its design combines analytical shader-side generation of specialized primitives, numerically stable coordinate transformations during deep zoom, density-aware rendering of overlapping geometry, suppression of unnecessary redraws, interaction caching, and GPU-based object picking. `GLPlot` is therefore intended for workloads in which large numbers of geometric objects must remain individually represented, interactive, and semantically identifiable without requiring users to construct a custom graphics pipeline.
+`GLPlot` sits between these approaches. Contributing these capabilities to an existing package would have meant changing its core rendering model, so `GLPlot` keeps a procedural interface close to Matplotlib's `pyplot` and builds a GPU-resident architecture underneath it, for workloads in which many geometric objects must remain individually represented, interactive, and identifiable without a custom graphics pipeline.
 
 # Software design
 
-`GLPlot` converts plotting data into OpenGL-ready buffers on the CPU and delegates the expensive per-frame work to the GPU: 2D data is staged as float32 vertex buffers and rendered through shader-based wide-line and density-accumulation paths; 3D data is built into geometry buffers with model-view-projection transforms and rendered with perspective scaling, depth testing, ambient-occlusion/rim shading, and transparency composition. CPU readback is restricted to explicit export calls through `glReadPixels`; the interactive path never transfers pixels back to the host.
+`GLPlot` converts plotting data into OpenGL-ready buffers on the CPU and delegates the expensive per-frame work to the GPU: 2D data is staged as float32 vertex buffers and rendered through shader-based wide-line and density-accumulation paths; 3D data is built into geometry buffers with model-view-projection transforms and rendered with perspective scaling, depth testing, ambient-occlusion/rim shading, and transparency composition. CPU readback is restricted to explicit export calls through `glReadPixels`; the interactive path never transfers pixels back to the host. Rendering uses OpenGL [@opengl] through PyOpenGL [@pyopengl] and GLFW [@glfw], and the interactive editing workstation is built with Dear ImGui [@imgui].
 
-![GLPlot's 2D and 3D rendering pipelines, from CPU-side data staging through GPU shading, blending, and post-processing to optional export.](examples/dataflow.png)
+![GLPlot's 2D and 3D rendering pipelines, from CPU-side data staging through GPU shading, blending, and post-processing to optional export.](dataflow.png)
 
 ## User-facing interface
 
@@ -105,24 +105,32 @@ For a line family $y_i(x) = a_i x + b_i$, `GLPlot` uploads $(a_i, b_i)$ as insta
 
 Dense, overlapping geometry is accumulated additively into a floating-point framebuffer, log-normalized to the display range, and optionally tone-mapped in the style of @reinhard2002photographic to preserve contrast. During rapid pan or zoom, a cached offscreen image is reprojected over the expanded viewport and an exact redraw is scheduled once interaction stops, so pointer motion never forces full geometry work. Level of detail is decided from estimated fill-rate cost rather than primitive count alone, using viewport size, line width, and projected polyline length; because the decision is derived from the instance identifier, a static view does not flicker between frames. Object selection uses a deferred integer picking pass: selectable primitives write an encoded identifier to an integer framebuffer, and a click resolves to a layer and element index from a single-pixel readback, independent of scene size.
 
-# Research impact
+# Research impact statement
 
 `GLPlot` is designed for research workflows in which visualization is a bottleneck between numerical computation and interpretation. It has been used in this capacity in `EZGA`, a published evolutionary structure-exploration framework for computational materials science, to visualize energy landscapes, convex-hull reconstructions, and surface phase diagrams produced across its benchmark systems [@lombardi2026ezga]. More broadly, representative applications include the inspection of large trajectory projections, chemical-potential line families, phase-stability or feasibility constructions, energy distributions, structural descriptors, spatial fields, large vector fields, and uncertainty ensembles. Related visualization patterns occur in atomistic simulation, computational chemistry and physics, bioinformatics, engineering simulation, and exploratory data analysis.
 
-The principal scholarly contribution is the integration of multiple GPU rendering techniques into a coherent scientific plotting interface: analytical primitive expansion, viewport-relative transforms, hardware clipping, floating-point density accumulation, interaction caching, fill-rate-aware level of detail, lightweight depth cues for three-dimensional primitives, and integer-ID picking. Although these techniques are established individually in computer graphics, their combination is intended to make them usable by researchers who should not need to manage shaders and framebuffer objects directly.
+The principal scholarly contribution is to make established GPU rendering techniques, combined as described above, usable by researchers who should not need to manage shaders and framebuffer objects themselves.
 
 # Limitations
 
-`GLPlot` focuses on high-performance interactive visualization rather than exhaustive Matplotlib compatibility. Complex publication layouts, specialized axis artists, advanced tick formatting, and some annotation or backend features may remain better served by Matplotlib. GPU rendering also introduces hardware, driver, and context-creation dependencies. Reproducible performance reports should therefore record the GPU model, driver and OpenGL versions, operating system, Python version, package version, viewport size, and rendering configuration.
+`GLPlot` focuses on high-performance interactive visualization rather than exhaustive Matplotlib compatibility. Complex publication layouts, specialized axis artists, advanced tick formatting, and some annotation or backend features may remain better served by Matplotlib. GPU rendering also introduces hardware and driver dependencies, so performance reports should record the GPU, driver and OpenGL versions, operating system, and viewport size.
 
-The package currently requires a functional OpenGL context and a driver supporting OpenGL 3.3 core profile, the minimum version its shaders and context request. The continuous integration suite runs fully headless on this same core-profile context, without opening a visible window, so it also serves as a compatibility check for reviewer testing and automated report generation.
+The package requires an OpenGL 3.3 core-profile context, the minimum its shaders request; figures can also be exported headlessly. Continuous integration runs the test suite on Linux, macOS, and Windows with Python 3.11 to 3.13, using Mesa's software OpenGL under a virtual display on Linux.
 
 # AI usage disclosure
 
-Portions of `GLPlot`'s implementation, its test suite, its packaging configuration, and this
-manuscript (including this disclosure) were produced with assistance from Claude (Anthropic),
-an AI coding assistant, across multiple development sessions. The author directed the work,
-formulated the problems to be solved, reviewed and tested the AI-assisted output, and is
-responsible for all final decisions, correctness, and content in the software and this paper.
+Generative AI was used in developing `GLPlot`. Claude Opus 5.5 (Anthropic), through Claude Code, and OpenAI Codex were used as coding assistants for parts of the implementation, the test suite, packaging and continuous-integration configuration, documentation and examples, and for editing this manuscript. The authors made the core design decisions, defined the problems to be solved, and reviewed, tested, and validated all AI-assisted output: changes were accepted only after passing the automated test suite and manual inspection of the rendered figures. The authors take full responsibility for the software and this paper.
+
+# Author contributions
+
+J.M.L. conceived and developed the software, wrote the documentation and the test suite, and drafted the manuscript. F.R., J.H., and G.D. contributed equally to the writing of the manuscript, to the design of features, and to testing the software in real research applications.
+
+# Acknowledgements
+
+This work was supported by the Fritz Haber Institute of the Max Planck Society, which had no role in the design of the software or in the writing of this paper.
+
+# Conflicts of interest
+
+The authors declare no conflicts of interest.
 
 # References

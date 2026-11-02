@@ -217,7 +217,7 @@ Related Documentation
 - :doc:`../guide/installation` - Installation instructions
 - :doc:`../guide/quickstart` - Quick start examples
 - :doc:`../guide/basic-plotting` - Basic plotting reference
-- :doc:`../api/index` - API documentation
+- :doc:`../api/plotting` - API documentation (plotting functions)
 
 Citation and Credits
 --------------------
