@@ -47,7 +47,7 @@ glplot-mcp config --client claude-desktop --write         # merge into the file,
 The knowledge tools are how a model learns GLPlot instead of guessing: `get_guide()` lists these guides,
 `search_api("heatmap")` finds Python functions, `get_example()` returns runnable scripts. Resources
 (`glplot://guide`, `glplot://api/<name>`, `glplot://llms-full.txt`, ...) and prompts (`quick_look`, `fix_my_figure`,
-`fit_and_plot`, `publication_figure`, `python_script_for`, ...) are also served.
+`fit_and_plot`, `publication_figure`, `restyle_like`, `python_script_for`, ...) are also served.
 
 ## A typical session
 

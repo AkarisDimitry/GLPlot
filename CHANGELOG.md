@@ -152,6 +152,10 @@ for public releases.
   `plt.legend(loc=...)`); the cookbook's `newsroom_chart` recipe asks for a look by name, moves the
   legend and draws two series in before the call-out. Gallery example 31 exports one chart under twelve
   presets and tiles them.
+- MCP prompt `restyle_like` ("make this figure look like The Economist"); `publication_figure` now picks
+  the look by venue (paper, talk, article, dashboard, video) and the server's instructions tell a model
+  that a look is one argument and to leave `color=` to the style. The review flags a series, bar or
+  text drawn in a colour the page swallows (`invisible_on_page`), with the fix.
 
 ### Changed
 

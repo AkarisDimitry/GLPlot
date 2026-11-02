@@ -516,3 +516,26 @@ class TestInvisibleOnThePage:
         box.add_plot(figure, "bar", x=[0, 1], y=[1, 2], label="bars")
         box.add_annotation(figure, "text", x=0.5, y=3, text="a note")
         assert "invisible_on_page" not in self.codes(box, figure)
+
+
+class TestPromptsAndInstructions:
+    def test_restyle_like_sends_the_look_to_set_style(self):
+        from glplot.mcp import catalog
+
+        text = catalog.find_prompt("restyle_like").build(figure_id="fig1", look="The Economist")
+        assert "set_style(figure_id='fig1', preset='The Economist')" in text
+        assert "legend_loc" in text and "invisible_on_page" in text
+
+    def test_publication_figure_picks_the_look_by_venue(self):
+        from glplot.mcp import catalog
+
+        text = catalog.find_prompt("publication_figure").build(figure_id="fig1", venue="a blog")
+        for key in ("journal", "slide", "economist", "material", "3b1b"):
+            assert f"'{key}'" in text
+
+    def test_the_server_instructions_say_a_look_is_one_argument(self):
+        from glplot.mcp.guide import build_instructions
+
+        text = build_instructions()
+        assert "37 presets" in text and "'The Economist'" in text
+        assert f"{len(styles.STYLE_KEYS)} presets" in text, "the count is the registry's"

@@ -48,6 +48,12 @@ def _recipe_table() -> str:
     return "\n".join(rows)
 
 
+def _preset_count() -> int:
+    from ..gui.styles import STYLE_KEYS
+
+    return len(STYLE_KEYS)
+
+
 def build_instructions(sandbox: Optional[FileSandbox] = None) -> str:
     """The text sent to the client at connect time: the loop, and where to learn the rest."""
     files = (
@@ -72,6 +78,12 @@ def build_instructions(sandbox: Optional[FileSandbox] = None) -> str:
         "dataset to animate; update_artist edits what is drawn; add_control + bind_property "
         "make a figure depend on sliders; export_script returns the Python behind a figure, an "
         "interactive version or an animation for the user to keep.\n"
+        f"A look is one argument: create_figure(style=...) or set_style takes {_preset_count()} presets by use "
+        "-- paper (journal, tufte), talks, dashboards (ggplot, material), explainer videos "
+        "(3b1b, kurzgesagt), newsroom charts (economist, ft, fivethirtyeight), editor themes "
+        "(nord, catppuccin, tokyonight...) -- by key or by name ('The Economist'); it sets the "
+        "page, palette, faces and axes of the saved image, so leave color= unset and let it "
+        "choose. When the user names a person's, a publication's or a theme's look, use it.\n"
         "A complete explainer video (3Blue1Brown style: create_figure(style='3b1b'), stage "
         "effects create/write/fade_in/indicate/transform/fade_out) is one figure per scene, each "
         "animated and previewed, then compose_video cuts them into one MP4 "

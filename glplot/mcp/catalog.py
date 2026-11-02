@@ -308,8 +308,9 @@ def _fix_my_figure(figure_id: str, problem: str = "") -> str:
         f"Call render_figure on {figure_id!r} and inspect the picture and the axis summary like a "
         "reviewer: are the axes labelled with units, is the title informative, do tick labels "
         "overlap, is anything clipped, is the scale appropriate (log for data over decades), "
-        "are the colours distinguishable (consider set_style 'colorsafe'), is there a legend "
-        "when there are several series? Fix each issue with set_axes / set_style / "
+        "are the colours distinguishable (consider set_style 'colorsafe') and none lost in "
+        "the page (invisible_on_page), is there a legend when there are several series and "
+        "does it cover data (set_axes(legend_loc=...))? Fix each issue with set_axes / set_style / "
         "remove_artist + add_*, render again, and repeat until it is clean. Then summarise "
         "what you changed." + extra
     )
@@ -317,13 +318,29 @@ def _fix_my_figure(figure_id: str, problem: str = "") -> str:
 
 def _publication_figure(figure_id: str, venue: str = "a scientific journal") -> str:
     return (
-        f"Prepare {figure_id!r} for {venue}. First render_figure to see it. Then: use "
-        "set_style 'journal' (or 'colorsafe' / 'print' if it must survive greyscale), give every "
-        "axis a "
-        "name and unit, shorten the title to what the figure shows, keep the legend only if "
-        "several series need telling apart, remove chart junk, and make sure nothing is "
-        "clipped or overlapping. Render again and save_figure as PNG at scale 2 (and "
-        "an SVG or PDF if a root directory is available)."
+        f"Prepare {figure_id!r} for {venue}. First render_figure to see it. Then set_style with "
+        "the look that suits the venue: 'journal' or 'tufte' for a paper ('colorsafe' / "
+        "'print' if it must survive colour blindness or greyscale), 'slide' / 'stage' for a "
+        "talk, 'economist' / 'ft' / 'fivethirtyeight' for an article or a blog, 'material' / "
+        "'ggplot' for a dashboard or a notebook, '3b1b' / 'kurzgesagt' for a video. Give every "
+        "axis a name and unit, shorten the title to what the figure shows, keep the legend "
+        "only if several series need telling apart (set_axes(legend_loc=...) moves it off the "
+        "data), remove chart junk, and make sure nothing is clipped or overlapping. Render "
+        "again and save_figure as PNG at scale 2 (and an SVG or PDF if a root directory is "
+        "available)."
+    )
+
+
+def _restyle_like(figure_id: str, look: str) -> str:
+    return (
+        f"Give {figure_id!r} the look of {look}. Call set_style(figure_id={figure_id!r}, "
+        f"preset={look!r}): a preset key, its display name or a common alias works, and a "
+        "refusal lists every preset by use -- pick the nearest one and say so. The reply says "
+        "how the saved image will look. render_figure and check it against what the look is "
+        "known for (page, palette, type, axes, where the title sits). Keep the data, labels "
+        "and units; move a legend that covers data with set_axes(legend_loc=...); fix every "
+        "invisible_on_page issue by letting the style choose the colour. Then save_figure at "
+        "scale 2 if a root directory is available, and tell the user which preset you used."
     )
 
 
@@ -464,6 +481,20 @@ PROMPTS: Tuple[PromptDef, ...] = (
             PromptArg("venue", "Where it will appear (default: a scientific journal)."),
         ),
         _publication_figure,
+    ),
+    PromptDef(
+        "restyle_like",
+        "Restyle a figure in a named look: a publication, a creator, an editor theme.",
+        (
+            PromptArg("figure_id", "Figure id from create_figure.", True),
+            PromptArg(
+                "look",
+                "The look, by preset or by name: 'The Economist', 'Financial Times', '538', "
+                "'ggplot2', 'Tufte', '3Blue1Brown', 'Kurzgesagt', 'Nord', 'Tokyo Night'...",
+                True,
+            ),
+        ),
+        _restyle_like,
     ),
     PromptDef(
         "compare_series",

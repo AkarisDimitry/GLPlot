@@ -1502,6 +1502,10 @@ def build_server(
     def publication_figure(figure_id: str, venue: str = "a scientific journal") -> str:
         return catalog.find_prompt("publication_figure").build(figure_id=figure_id, venue=venue)
 
+    @prompt("restyle_like")
+    def restyle_like(figure_id: str, look: str) -> str:
+        return catalog.find_prompt("restyle_like").build(figure_id=figure_id, look=look)
+
     @prompt("compare_series")
     def compare_series(dataset: str, columns: str = "") -> str:
         return catalog.find_prompt("compare_series").build(dataset=dataset, columns=columns)

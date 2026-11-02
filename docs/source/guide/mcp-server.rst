@@ -331,7 +331,9 @@ read *resources* on their own, so the documentation is reachable both ways:
   ``glplot://llms-full.txt`` (everything in one document), ``glplot://capabilities``,
   ``glplot://recipes``, ``glplot://styles``, ``glplot://figures/{id}/image`` and ``glplot://datasets/{name}``.
 * **Prompts**: ``plot_data_file``, ``explore_function``, ``quick_look`` (explore a dataset),
-  ``fix_my_figure`` (review and repair), ``publication_figure``, ``compare_series`` and
+  ``fix_my_figure`` (review and repair), ``publication_figure`` (the look chosen by venue),
+  ``restyle_like`` ("make it look like The Economist"), ``compare_series``, ``animate_this``,
+  ``explainer_video``, ``interactive_figure`` and
   ``fit_and_plot`` (fit a model, report parameters and R\ :sup:`2`, plot data and fit together) and
   ``python_script_for`` (write and verify a GLPlot script after reading the guides).
 
