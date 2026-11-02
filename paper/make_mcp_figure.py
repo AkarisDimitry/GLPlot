@@ -98,13 +98,13 @@ def main() -> None:
     top.axis("off")
     top.text(0.005, 0.99, "(a)", fontsize=15, fontweight="bold", va="top", color=INK)
 
-    _box(top, 0.025, 0.38, 0.185, 0.48, "AI assistant", "any MCP client\n(Claude, Codex,\nCursor, ...)",
-         INK)  # fmt: skip
+    client = "any MCP client\n(Claude, Codex,\nCursor, ...)"
+    _box(top, 0.025, 0.38, 0.185, 0.48, "AI assistant", client, INK)
     _box(top, 0.38, 0.25, 0.24, 0.61, "glplot-mcp",
          f"{tools} typed tools:\ncreate_figure, add_plot,\nrender_figure, animate, ...\n\n"
          "no code execution;\nfiles only in chosen folders", BLUE)  # fmt: skip
-    _box(top, 0.79, 0.38, 0.185, 0.48, "GLPlot", "headless renderer,\nsame scene model\nas the window",
-         INK)  # fmt: skip
+    renderer = "headless renderer,\nsame scene model\nas the window"
+    _box(top, 0.79, 0.38, 0.185, 0.48, "GLPlot", renderer, INK)
 
     _arrow(top, (0.215, 0.74), (0.375, 0.74), "tool call", INK)
     _arrow(top, (0.625, 0.74), (0.785, 0.74), "scene ops", INK)
