@@ -54,7 +54,7 @@ CUSTOM_COLORMAPS: Dict[str, Tuple[RGB, ...]] = {
     "parchment": tuple(
         _hex(c) for c in ("#f7efd9", "#e6c985", "#cf8a45", "#a04a31", "#5a2638", "#1f1226")
     ),
-    # manim's blues climbing to its yellow, for the 3Blue1Brown look: night, BLUE_E, BLUE_D,
+    # manim's blues climbing to its yellow, for the manim look: night, BLUE_E, BLUE_D,
     # BLUE_C, TEAL_B, YELLOW_C, YELLOW_A. Lightness rises the whole way.
     "manim": tuple(
         _hex(c)

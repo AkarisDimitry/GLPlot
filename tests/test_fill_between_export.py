@@ -53,7 +53,7 @@ def test_an_opaque_fill_has_no_seam_where_its_triangles_meet():
     from glplot.utils.preview import render_preview_bytes
 
     gplt.figure(figsize=(4, 4))
-    gplt.plot_style("3b1b")
+    gplt.plot_style("manim")
     # a wide, low strip: the shallow diagonal is where a thin covering stroke still leaks
     gplt.fill_between([0.0, 2.0], [0.0, 0.0], [0.6, 0.6], color="#236B8E")
     gplt.xlim(-0.5, 2.5)

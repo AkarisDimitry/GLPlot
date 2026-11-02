@@ -253,12 +253,12 @@ checks as a still, and the figure itself is never touched.
 
 The guide ``get_guide("mcp-animation")`` carries nine worked recipes (a travelling wave, a self-drawing
 Lissajous curve, a damped pendulum, the Lorenz attractor with a camera orbit, growing bars, a rippling
-surface as a seamless loop, a swept slider, morphing points, a 3Blue1Brown-style explainer); the test suite *runs* each of them, so they
+surface as a seamless loop, a swept slider, morphing points, a step-by-step explainer); the test suite *runs* each of them, so they
 cannot rot. The prompt ``animate_this`` walks a model through preview, review and output.
 
 .. _mcp-video:
 
-Step by step, and a whole video (the 3Blue1Brown style)
+Step by step, and a whole video (the manim style)
 -------------------------------------------------------
 
 An explainer is built one *play* at a time, as in a manim scene. A stage of ``animate`` can carry
@@ -278,7 +278,7 @@ letter by letter (a ``$...$`` formula appears whole); ``grow`` grows an arrow; `
 An artist an effect brings in is hidden until its stage. Effects are compiled into stage variables and
 bindings, so the contact sheet, the review, the limits and ``export_script`` work on them unchanged.
 
-``create_figure(style="3b1b")`` gives the look of 3Blue1Brown's manim videos: a black page, manim's
+``create_figure(style="manim")`` gives the look of manim's defaults: a black page, manim's
 BLUE_C / YELLOW_C / TEAL palette, white serif text with ``$...$`` maths in Computer Modern, and axes that
 cross at the origin with arrow tips; ``set_axes(grid=True)`` is a NumberPlane grid. Text annotations take
 ``coords="axes"`` (captions that stay put), ``align``, ``alpha`` and ``reveal``; ``kind="arrow"`` draws a

@@ -6,7 +6,7 @@ recipe that stops working fails a test instead of misleading a model.
 
 The recipes are chosen to cover the ways something can move: a parameter swept in stages, a curve
 drawing itself, a simulated trajectory, a camera orbit, data recomputed every frame, colour and
-size changing, a 3-D surface, a loop, and a step-by-step explainer in the 3Blue1Brown style.
+size changing, a 3-D surface, a loop, and a step-by-step explainer in the manim style.
 """
 
 from __future__ import annotations
@@ -558,15 +558,15 @@ COOKBOOK: Tuple[Recipe, ...] = (
         ),
     ),
     Recipe(
-        "explainer_3b1b",
-        "A 3Blue1Brown-style explainer: the derivative is a slope, built up step by step",
+        "explainer_manim",
+        "A manim-style explainer: the derivative is a slope, built up step by step",
         "Stage `effects` play like a manim scene: the curve is drawn (`create`), the title is "
         "written letter by letter (`write`), a dot fades in, the tangent and the formula appear, "
         "the point slides along the curve with the slope updating live (a `format` binding), the "
         "formula is pointed at (`indicate`) and everything but the curve fades out. Artists an "
-        "effect brings in are hidden until their stage. `style='3b1b'` gives manim's look.",
+        "effect brings in are hidden until their stage. `style='manim'` gives manim's look.",
         (
-            ("create_figure", {"width": 1280, "height": 720, "style": "3b1b"}),
+            ("create_figure", {"width": 1280, "height": 720, "style": "manim"}),
             (
                 "set_axes",
                 {

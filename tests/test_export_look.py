@@ -1,4 +1,4 @@
-"""The 3Blue1Brown preset and the part of a preset that shapes the exported picture.
+"""The manim preset and the part of a preset that shapes the exported picture.
 
 ``PlotStyle.export_look`` is read by the headless export only (``utils/preview.py``): text face,
 maths font, axis lines through the origin with tips, a NumberPlane grid. These tests read the
@@ -43,7 +43,7 @@ def finished(plot):
     return seen
 
 
-def crossing_figure(style="3b1b"):
+def crossing_figure(style="manim"):
     plot = gplt.figure(figsize=(6, 4))
     if style:
         gplt.plot_style(style)
@@ -59,7 +59,7 @@ def crossing_figure(style="3b1b"):
 
 class TestThePreset:
     def test_it_is_manim_s_look(self):
-        style = styles.get_style("3b1b")
+        style = styles.get_style("manim")
         assert to_hex(style.palette[0][:3]) == "#58c4dd"  # BLUE_C
         assert to_hex(style.palette[1][:3]) == "#f7d96f"  # YELLOW_C
         assert style.background == (0.0, 0.0, 0.0) and style.cmap == "manim"
@@ -76,8 +76,8 @@ class TestThePreset:
     def test_it_is_recorded_on_the_figure_and_undone(self):
         plot = gplt.figure()
         state = styles.capture_state(plot)
-        gplt.plot_style("3b1b")
-        assert plot.options.export_look is styles.get_style("3b1b").export_look
+        gplt.plot_style("manim")
+        assert plot.options.export_look is styles.get_style("manim").export_look
         styles.restore_state(plot, state)
         assert plot.options.export_look is None
 
@@ -85,7 +85,7 @@ class TestThePreset:
 class TestWhatIsDrawnNext:
     def test_new_lines_take_the_presets_palette_and_width(self):
         gplt.figure()
-        gplt.plot_style("3b1b")
+        gplt.plot_style("manim")
         first = gplt.plot([0, 1], [0, 1])
         second = gplt.plot([0, 1], [1, 0])
         layers = gplt.gcf().scene.layers
@@ -96,7 +96,7 @@ class TestWhatIsDrawnNext:
     def test_the_cycle_continues_after_what_was_repainted(self):
         gplt.figure()
         gplt.plot([0, 1], [0, 1])
-        gplt.plot_style("3b1b")  # repaints this line BLUE_C
+        gplt.plot_style("manim")  # repaints this line BLUE_C
         gplt.plot([0, 1], [1, 0])
         colours = [to_hex(tuple(layer.style.color[:3])) for layer in gplt.gcf().scene.layers]
         assert colours == ["#58c4dd", "#f7d96f"]
@@ -105,7 +105,7 @@ class TestWhatIsDrawnNext:
         gplt.figure()
         gplt.text(0, 0, "plain")
         assert tuple(gplt.gcf().scene.layers[-1].style.color[:3]) == (0.0, 0.0, 0.0)
-        gplt.plot_style("3b1b")
+        gplt.plot_style("manim")
         gplt.text(0, 0, "on black")
         assert tuple(gplt.gcf().scene.layers[-1].style.color[:3]) == (1.0, 1.0, 1.0)
         gplt.text(0, 0, "chosen", color="red")
@@ -144,7 +144,7 @@ class TestTheExport:
         seen = finished(crossing_figure())
         assert seen["rc"]["mathtext.fontset"] == "cm"
         installed = {f.name for f in matplotlib.font_manager.fontManager.ttflist}
-        expected = [f for f in styles.get_style("3b1b").export_look.font_family if f in installed]
+        expected = [f for f in styles.get_style("manim").export_look.font_family if f in installed]
         assert seen["rc"]["font.family"] == expected
 
     def test_the_fonts_do_not_leak_out_of_the_export(self):

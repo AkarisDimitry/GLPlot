@@ -66,8 +66,8 @@ problems (nothing moves, axes rescale, the loop does not close). Preview with no
 `.gif` / `.mp4`. `simulate` supplies trajectories; `export_script(kind='animation')` returns the Python.
 Read `get_guide('mcp-animation')`.
 
-Step by step like a 3Blue1Brown video: a stage's `effects` (`create`, `write`, `fade_in`, `indicate`,
-`transform`, `fade_out`...) bring artists in and out, and `create_figure(style='3b1b')` gives manim's look
+Step by step like a manim explainer: a stage's `effects` (`create`, `write`, `fade_in`, `indicate`,
+`transform`, `fade_out`...) bring artists in and out, and `create_figure(style='manim')` gives manim's look
 (black page, serif maths in Computer Modern, axes through the origin). A **complete video** is one figure per
 scene, each animated and previewed, then `compose_video([...scenes...], output='explainer.mp4')` cuts them
 together with fades (and an optional soundtrack). Read `get_guide('mcp-video')`, or use the prompt

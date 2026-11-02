@@ -710,11 +710,11 @@ def server_frame(box, index):
 
 
 def test_a_step_by_step_explainer_script_matches_the_server_frame_by_frame(box, monkeypatch):
-    # the cookbook's 3Blue1Brown-style recipe: effects hide, draw, write, pulse and fade, and the
-    # 3b1b preset changes the export (fonts, axes through the origin, tips, grid)
+    # the cookbook's manim-style recipe: effects hide, draw, write, pulse and fade, and the
+    # manim preset changes the export (fonts, axes through the origin, tips, grid)
     from glplot.mcp import cookbook
 
-    recipe = next(r for r in cookbook.COOKBOOK if r.key == "explainer_3b1b")
+    recipe = next(r for r in cookbook.COOKBOOK if r.key == "explainer_manim")
     for tool, args in recipe.calls:
         args = dict(args)
         if tool == "animate":
@@ -722,7 +722,7 @@ def test_a_step_by_step_explainer_script_matches_the_server_frame_by_frame(box, 
             args["fps"] = 6
         getattr(box, tool)(**args)
     text = source(box.export_script("fig1", "animation"))
-    assert "fx_a1_draw" in text and "plt.plot_style('3b1b')" in text
+    assert "fx_a1_draw" in text and "plt.plot_style('manim')" in text
     namespace = run(text, monkeypatch)
     try:
         n = namespace["N"]
@@ -759,7 +759,7 @@ def test_a_pulse_returns_in_the_script_as_it_does_on_the_server(box, monkeypatch
 
 
 def test_annotations_of_every_new_kind_in_a_script(box, monkeypatch):
-    box.create_figure(width=500, height=400, style="3b1b")
+    box.create_figure(width=500, height=400, style="manim")
     box.set_axes("fig1", xlim=[-1, 3], ylim=[-1, 3], legend=False)
     box.add_annotation("fig1", "arrow", x=0, y=0, dx=2, dy=1, reveal=0.5)
     box.add_annotation(

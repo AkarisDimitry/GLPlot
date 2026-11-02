@@ -47,7 +47,7 @@ EXPECTED_FILES = [
             "tufte",
             "material",
             "kurzgesagt",
-            "3b1b",
+            "manim",
             "tokyonight",
             "catppuccin",
             "terminal",

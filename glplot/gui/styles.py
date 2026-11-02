@@ -733,7 +733,7 @@ _CANDY_PALETTE: Tuple[RGBA, ...] = (
 )
 
 
-#: manim's colour constants, the ones 3Blue1Brown's videos are made of (``manim/utils/color/
+#: manim's colour constants, the defaults of the open-source animation library (``manim/utils/color/
 #: manim_colors.py``): BLUE_C leads because it is the colour of "the thing being explained",
 #: YELLOW_C is the highlight, then TEAL, RED, GREEN, GOLD and PURPLE, all C shades.
 _MANIM_PALETTE: Tuple[RGBA, ...] = (
@@ -1906,19 +1906,19 @@ STYLES: Tuple[PlotStyle, ...] = (
         ),
     ),
     PlotStyle(
-        # FOR: the explainer -- an idea built up on screen one step at a time, the way
-        # 3Blue1Brown's videos do it (they are made with manim, whose defaults this copies):
-        # a black page, BLUE_C for the thing being explained and YELLOW_C for what to look at,
+        # FOR: the explainer -- an idea built up on screen one step at a time, in the look of
+        # manim's defaults (the open-source maths-animation library, MIT licensed): a black
+        # page, BLUE_C for the thing being explained and YELLOW_C for what to look at,
         # bold 4px-feeling strokes, white text, maths in Computer Modern, and axes that are
         # two lines crossing at the origin with tips instead of a measuring box. With
         # grid(True) the grid is manim's NumberPlane: BLUE_D lines with faded ones between.
-        # An unaffiliated tribute to the look, not the channel's branding.
+        # Built from manim's public defaults; nothing on the picture names anyone.
         #
         # SACRIFICES: reading values off the plot. No box, few ticks and a dark page are for
         # watching an idea, not for taking a number to three digits; print it with Journal.
-        key="3b1b",
-        name="3Blue1Brown",
-        description="Explainer look of 3Blue1Brown's manim videos: black, blue, yellow.",
+        key="manim",
+        name="Manim",
+        description="Maths-explainer look of manim's defaults: black page, blue and yellow.",
         background=(0.0, 0.0, 0.0),
         palette=_MANIM_PALETTE,
         ink=(1.0, 1.0, 1.0, 1.0),
@@ -2473,7 +2473,7 @@ STYLE_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("paper", ("clean", "journal", "colorsafe", "print", "tufte")),
     ("talks", ("slide", "stage")),
     ("notebooks and dashboards", ("ggplot", "material", "minimal", "dark", "dense")),
-    ("explainer videos", ("3b1b", "kurzgesagt")),
+    ("explainer videos", ("manim", "kurzgesagt")),
     ("newsroom charts", ("economist", "ft", "fivethirtyeight", "terminal")),
     (
         "editor themes",
@@ -2485,11 +2485,10 @@ STYLE_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 
 #: Other names people use for a look. Keys, names and these are matched ignoring case,
 #: spaces and punctuation (:func:`resolve_style_key`), so "Tokyo Night", "the economist" and
-#: "3Blue1Brown" need no entry here.
+#: "Manim" need no entry here.
 STYLE_ALIASES: Dict[str, str] = {
     "538": "fivethirtyeight",
-    "manim": "3b1b",
-    "3brown1blue": "3b1b",
+    "explainer": "manim",
     "financialtimes": "ft",
     "onedark": "ide",
     "workstation": "ide",

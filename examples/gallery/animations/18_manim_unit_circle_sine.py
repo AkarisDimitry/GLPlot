@@ -1,6 +1,6 @@
-"""Where does the sine wave come from? -- a step-by-step explainer in the 3Blue1Brown style.
+"""Where does the sine wave come from? -- a step-by-step explainer in the manim style.
 
-``plt.plot_style("3b1b")`` gives the look of 3Blue1Brown's videos, which are made with manim: a
+``plt.plot_style("manim")`` gives the look of manim's defaults (the maths-animation library): a
 black page, manim's BLUE_C / YELLOW_C / TEAL palette, white serif text with ``$...$`` maths in
 Computer Modern, and (in the exported GIF/MP4) axes that are two lines crossing at the origin with
 arrow tips instead of a box.
@@ -77,7 +77,7 @@ theta_full = np.linspace(0.0, 2.0 * np.pi, 400)
 
 # No window name: figure("...") would also become the plot title, and the question is the title.
 fig = plt.figure(figsize=(8.0, 4.5))
-plt.plot_style("3b1b")
+plt.plot_style("manim")
 
 
 def update(frame: int):
@@ -150,4 +150,4 @@ def update(frame: int):
 
 ani = animation.FuncAnimation(fig, update, frames=FRAMES, interval=1000 / FPS)
 # plt.show()   # play it in a window instead
-ani.save("examples/gallery/animations/results/18_3b1b_unit_circle_sine.gif", fps=FPS)
+ani.save("examples/gallery/animations/results/18_manim_unit_circle_sine.gif", fps=FPS)

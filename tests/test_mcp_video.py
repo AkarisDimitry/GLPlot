@@ -30,8 +30,8 @@ def box(tmp_path):
 
 
 def card(box, text, *, frames=6, fps=12, still=False):
-    """A text-only 3b1b scene: the text is written in, then held."""
-    figure = box.create_figure(width=480, height=270, style="3b1b").data["figure_id"]
+    """A text-only manim scene: the text is written in, then held."""
+    figure = box.create_figure(width=480, height=270, style="manim").data["figure_id"]
     box.set_axes(figure, hide_axes=True, xlim=[0, 1], ylim=[0, 1], legend=False)
     box.add_annotation(
         figure, "text", x=0.5, y=0.5, coords="axes", align="center", text=text, fontsize=30
