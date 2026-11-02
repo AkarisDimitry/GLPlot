@@ -23,10 +23,12 @@ identifiers:
     value: "https://github.com/AkarisDimitry/GLPlot"
   - type: url
     value: "https://gitlab.mpcdf.mpg.de/jmlombardi/glplot"
+  - type: url
+    value: "https://github.com/AkarisDimitry/GLPlot/blob/main/README.md"
+    description: Documentation
 repository-code: "https://github.com/AkarisDimitry/GLPlot"
 repository: "https://github.com/AkarisDimitry/GLPlot"
 url: "https://github.com/AkarisDimitry/GLPlot"
-documentation: "https://github.com/AkarisDimitry/GLPlot/blob/main/README.md"
 abstract: |
   GLPlot is a high-performance, GPU-accelerated plotting library for Python that provides a
   Matplotlib-compatible API with OpenGL/GLFW backend support. It efficiently handles millions
@@ -47,7 +49,5 @@ keywords:
   - high-performance computing
   - data visualization
 license: MIT
-status: "active development"
 version: 0.2.0
 date-released: 2026-10-24
-development-status: "Beta"
