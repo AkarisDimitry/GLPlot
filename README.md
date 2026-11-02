@@ -13,6 +13,22 @@ dense line families, large 3D scenes — stay interactive: smooth pan, zoom, and
 even at that scale. If you already know `plt.plot()` / `plt.scatter()`, most of what you
 know carries over directly.
 
+> **Paper:** J. M. Lombardi, F. Riccius, J. Holland and G. Ducci, *GLPlot: GPU-accelerated
+> interactive scientific visualization with a Matplotlib-like interface*, ChemRxiv (2026).
+> [doi:10.26434/chemrxiv.15007777/v1](https://doi.org/10.26434/chemrxiv.15007777/v1)
+
+<p align="center">
+  <a href="examples/mcp/results/derivative_explainer.mp4">
+    <img src="examples/mcp/results/derivative_explainer.gif"
+         alt="A 3Blue1Brown-style explainer of why the derivative of x squared is 2x, made with GLPlot"
+         width="640"/>
+  </a>
+  <br>
+  <sub>A complete explainer video in the style of 3Blue1Brown, built step by step by a language model
+  through GLPlot's MCP server (<a href="examples/mcp/results/derivative_explainer.mp4">watch the MP4</a>
+  · <a href="examples/mcp/derivative_explainer_video.py">the script</a>).</sub>
+</p>
+
 ## Install
 
 ```bash
@@ -542,7 +558,8 @@ such as `create`, `write`, `fade_in`, `indicate` and `transform` build a scene s
 With `create_figure(style="3b1b")` the figures take the look of 3Blue1Brown's manim videos (black page,
 manim's palette, serif maths in Computer Modern, axes through the origin), so a model can make a complete
 explainer video in that style: [examples/mcp/derivative_explainer_video.py](examples/mcp/derivative_explainer_video.py)
-does it through the official MCP client, four scenes, start to finish.
+does it through the official MCP client, four scenes, start to finish
+([the video](examples/mcp/results/derivative_explainer.mp4), previewed at the top of this page).
 
 The server also teaches the model the library, so it does not have to guess: read-only tools
 `get_guide` (23 topics: the MCP workflow and tools plus the Python API, 3-D, animation, controls, differences from
