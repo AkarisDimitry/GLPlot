@@ -186,8 +186,9 @@ class TestClientConfig:
         monkeypatch.setattr(sys, "platform", "darwin")
         assert "Application Support" in str(cli._claude_desktop_path())
         monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(cli.os, "name", "posix")
-        assert str(cli._claude_desktop_path()).endswith(".config/Claude/claude_desktop_config.json")
+        monkeypatch.setattr(cli, "_on_windows", lambda: False)
+        expected = ".config/Claude/claude_desktop_config.json"
+        assert cli._claude_desktop_path().as_posix().endswith(expected)
 
 
 class TestWritingAConfig:
@@ -229,7 +230,7 @@ class TestWritingAConfig:
     def test_the_command_writes_through_main(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(cli.os, "name", "posix")
+        monkeypatch.setattr(cli, "_on_windows", lambda: False)
         assert (
             cli.main(["config", "--client", "claude-desktop", "--write", "--root", str(tmp_path)])
             == 0
