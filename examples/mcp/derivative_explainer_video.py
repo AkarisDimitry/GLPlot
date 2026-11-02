@@ -16,7 +16,9 @@ Run it from the repository root (it needs ``pip install "glplot[mcp]"`` and ffmp
 
     python examples/mcp/derivative_explainer_video.py
 
-It writes ``examples/mcp/results/derivative_explainer.mp4`` and one contact sheet per scene.
+It writes ``examples/mcp/results/derivative_explainer.mp4``, one contact sheet per scene, and
+``derivative_explainer.gif``, the small preview the repository README shows (GitHub does not play
+an MP4 inside a README).
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ import asyncio
 import base64
 import json
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -217,6 +221,23 @@ async def main() -> None:
                     f"{scene['start_s']:.1f}-{scene['end_s']:.1f} s, {scene['source']}"
                 )
             print("   file:", data["file"]["path"], f"{data['file']['bytes'] / 1e6:.1f} MB")
+    write_preview(OUT / "derivative_explainer.mp4", OUT / "derivative_explainer.gif")
+
+
+def write_preview(video: Path, gif: Path) -> None:
+    """A 640 px, 12 fps GIF of the video for the README, with a palette made for it."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None or not video.exists():
+        return
+    palette = (
+        "fps=12,scale=640:-1:flags=lanczos,split[a][b];"
+        "[a]palettegen=max_colors=64:stats_mode=diff[p];"
+        "[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
+    )
+    subprocess.run(
+        [ffmpeg, "-v", "error", "-y", "-i", str(video), "-vf", palette, str(gif)], check=True
+    )
+    print("   preview:", gif, f"{gif.stat().st_size / 1e6:.1f} MB")
 
 
 if __name__ == "__main__":
