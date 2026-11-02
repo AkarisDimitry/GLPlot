@@ -167,7 +167,9 @@ The JOSS submission version: everything since 0.2.0, which was tagged but never 
 - The JOSS paper (`paper/paper.md`) meets the current submission rules: under 1,750 words, the required
   "Research impact statement" heading, a full AI usage disclosure, author contributions, funding
   acknowledgement and a conflicts-of-interest statement; the figure sits next to the paper (its path
-  was broken for JOSS's build) and the key dependencies and related software are cited.
+  was broken for JOSS's build) and the key dependencies and related software are cited. It describes
+  this version, 0.3.0: the workstation, headless export of figures and animations with style presets,
+  and the MCP server for language-model assistants are in it now.
 - Citation: the GLPlot paper (ChemRxiv, doi:10.26434/chemrxiv.15007777/v1) is the preferred citation in
   `CITATION.cff`, so GitHub's "Cite this repository" gives it in APA and BibTeX; the README and the docs
   cite it too (they had a placeholder Zenodo DOI and a one-author entry), with a paper badge.

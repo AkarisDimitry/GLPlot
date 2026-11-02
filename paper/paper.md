@@ -39,7 +39,7 @@ Interactive visualization is part of the scientific reasoning process: researche
 
 Here, we propose `GLPlot`, an open-source Python plotting package that exposes a familiar `pyplot`-style interface while using an OpenGL rendering engine in the backend. It is intentionally developed to support common two- and three-dimensional scientific visualizations, including polylines, scatter plots, histograms, matrix images, contour and pseudocolor plots, vector fields, surfaces, and meshes. A more dedicated `plot_lines` interface represents large families of straight lines by their slope and intercept coefficients and expands their visible geometry analytically on the GPU.
 
-The rendering engine separates scene representation from GPU execution. It combines event-driven updates, shader-based geometry generation, stable viewport transformations, hardware clipping, density accumulation, adaptive level-of-detail control, and GPU-based picking. These operations are exposed to the user through a high-level Python interface, allowing large scientific datasets to be explored without direct interaction with low-level OpenGL components.
+The rendering engine combines event-driven updates, shader-based geometry generation, stable viewport transforms, density accumulation, adaptive level of detail, and GPU picking behind that interface, so large datasets can be explored without touching OpenGL. This paper describes version 0.3.0, which also provides an interactive workstation, headless export of figures and animations, and a server through which language-model assistants can build and inspect figures.
 
 # Statement of need
 
@@ -69,7 +69,7 @@ PyQtGraph targets responsive desktop graphics for instrumentation and rapidly up
 
 # Software design
 
-`GLPlot` converts plotting data into OpenGL-ready buffers on the CPU and delegates the expensive per-frame work to the GPU: 2D data is staged as float32 vertex buffers and rendered through shader-based wide-line and density-accumulation paths; 3D data is built into geometry buffers with model-view-projection transforms and rendered with perspective scaling, depth testing, ambient-occlusion/rim shading, and transparency composition. CPU readback is restricted to explicit export calls through `glReadPixels`; the interactive path never transfers pixels back to the host. Rendering uses OpenGL [@opengl] through PyOpenGL [@pyopengl] and GLFW [@glfw], and the interactive editing workstation is built with Dear ImGui [@imgui].
+`GLPlot` stages data as float32 buffers on the CPU and leaves per-frame work to the GPU: 2D data goes through shader-based wide-line and density-accumulation paths, 3D data through model-view-projection transforms with depth testing, ambient-occlusion shading, and transparency. The interactive path never reads pixels back; `glReadPixels` is used only for explicit export. Rendering uses OpenGL [@opengl] through PyOpenGL [@pyopengl] and GLFW [@glfw].
 
 ![GLPlot's 2D and 3D rendering pipelines, from CPU-side data staging through GPU shading, blending, and post-processing to optional export.](dataflow.png)
 
@@ -93,21 +93,25 @@ plt.ylabel("a x + b")
 plt.show(density=True)
 ```
 
-This data model reduces host-side geometry construction: rather than the CPU generating per-line endpoints, the active viewport determines each line's visible segment analytically in the vertex shader.
+The CPU never generates per-line endpoints: the vertex shader derives each line's visible segment from the viewport.
 
 ## Rendering architecture and precision
 
-Data arrays, styles, coordinate transforms, and renderer-specific metadata are stored as scene layers; a rendering manager maps each layer to a primitive renderer and the framebuffer passes it needs. The render loop is reactive, redrawing only when a layer, camera transform, or effect is marked dirty, so an unchanged figure costs nothing between events.
+Data, styles, and transforms are stored as scene layers, each mapped to a primitive renderer and the framebuffer passes it needs. The render loop redraws only when a layer, the camera, or an effect is marked dirty, so an unchanged figure costs nothing between events.
 
-For a line family $y_i(x) = a_i x + b_i$, `GLPlot` uploads $(a_i, b_i)$ as instanced attributes; the vertex shader analytically recomputes each line's visible endpoints against the current viewport bounds and discards out-of-domain instances before rasterization, rather than the CPU generating explicit per-line geometry. To stay numerically stable during deep zoom, the viewport center is computed in double precision on the CPU, and world coordinates are expressed relative to it before conversion to normalized device coordinates — keeping the values the GPU sees close to the display range regardless of the absolute coordinate offset.
+For a line family $y_i(x) = a_i x + b_i$, `GLPlot` uploads $(a_i, b_i)$ as instanced attributes; the vertex shader analytically recomputes each line's visible endpoints against the current viewport bounds and discards out-of-domain instances before rasterization, rather than the CPU generating explicit per-line geometry. For stability during deep zoom, the viewport center is computed in double precision on the CPU and coordinates are expressed relative to it, so the values the GPU sees stay near the display range at any offset.
 
 ## Density, interaction, and level of detail
 
-Dense, overlapping geometry is accumulated additively into a floating-point framebuffer, log-normalized to the display range, and optionally tone-mapped in the style of @reinhard2002photographic to preserve contrast. During rapid pan or zoom, a cached offscreen image is reprojected over the expanded viewport and an exact redraw is scheduled once interaction stops, so pointer motion never forces full geometry work. Level of detail is decided from estimated fill-rate cost rather than primitive count alone, using viewport size, line width, and projected polyline length; because the decision is derived from the instance identifier, a static view does not flicker between frames. Object selection uses a deferred integer picking pass: selectable primitives write an encoded identifier to an integer framebuffer, and a click resolves to a layer and element index from a single-pixel readback, independent of scene size.
+Dense, overlapping geometry is accumulated additively into a floating-point framebuffer, log-normalized to the display range, and optionally tone-mapped in the style of @reinhard2002photographic to preserve contrast. During rapid pan or zoom a cached offscreen image is reprojected and an exact redraw follows when interaction stops. Level of detail is chosen from estimated fill-rate cost (viewport size, line width, projected length) rather than primitive count, deterministically per instance, so a static view does not flicker. Object selection uses a deferred integer picking pass: selectable primitives write an encoded identifier to an integer framebuffer, and a click resolves to a layer and element index from a single-pixel readback, independent of scene size.
+
+## Workstation, export, and language-model access
+
+Three further layers reuse the same scene model. `python -m glplot` opens a workstation, built with Dear ImGui [@imgui], for editing layers, data, styles, and multi-panel layouts live with undo history, with native controls (sliders, buttons) and a gallery of recipes that map a user's columns onto designed plots. A headless export path rebuilds any figure through Matplotlib for publication output, including animations written as GIF or video, and style presets that set palettes, fonts, and axes. A Model Context Protocol server (`glplot-mcp`) exposes typed plotting tools to language-model assistants: each render returns an image with a review of provable problems, no arbitrary code is executed, and file access is confined to directories the user chooses.
 
 # Research impact statement
 
-`GLPlot` is designed for research workflows in which visualization is a bottleneck between numerical computation and interpretation. It has been used in this capacity in `EZGA`, a published evolutionary structure-exploration framework for computational materials science, to visualize energy landscapes, convex-hull reconstructions, and surface phase diagrams produced across its benchmark systems [@lombardi2026ezga]. More broadly, representative applications include the inspection of large trajectory projections, chemical-potential line families, phase-stability or feasibility constructions, energy distributions, structural descriptors, spatial fields, large vector fields, and uncertainty ensembles. Related visualization patterns occur in atomistic simulation, computational chemistry and physics, bioinformatics, engineering simulation, and exploratory data analysis.
+`GLPlot` is designed for research workflows in which visualization is a bottleneck between numerical computation and interpretation. It has been used in this capacity in `EZGA`, a published evolutionary structure-exploration framework for computational materials science, to visualize energy landscapes, convex-hull reconstructions, and surface phase diagrams produced across its benchmark systems [@lombardi2026ezga]. Representative applications include large trajectory projections, chemical-potential line families, phase-stability constructions, energy distributions, vector fields, and uncertainty ensembles, patterns shared by atomistic simulation, computational chemistry and physics, and engineering simulation.
 
 The principal scholarly contribution is to make established GPU rendering techniques, combined as described above, usable by researchers who should not need to manage shaders and framebuffer objects themselves.
 
