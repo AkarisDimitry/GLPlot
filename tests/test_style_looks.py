@@ -698,3 +698,18 @@ def test_a_tall_title_makes_room_instead_of_poking_out():
     render_preview_bytes(plot, 1.0, inspect=inspect)
     assert seen["top"] <= seen["height"], "inside the figure"
     assert seen["size"] == pytest.approx(40.0), "a title that fits across keeps its size"
+
+
+def test_a_3d_curve_exports_as_one_line_not_one_per_segment():
+    from glplot.utils.preview import _segment_runs
+
+    segs = np.array([[[0, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 1, 0]], [[5, 5, 5], [6, 5, 5]]])
+    runs = _segment_runs(segs.astype(float))
+    assert [len(r) for r in runs] == [3, 2], "joined where they meet, split where they do not"
+    plot = gplt.figure()
+    ax = gplt.subplot(projection="3d")
+    t = np.linspace(0, 20, 1600)
+    ax.plot(np.cos(t), np.sin(t), t)
+    seen = {}
+    render_preview_bytes(plot, 1.0, inspect=lambda fig: seen.update(n=len(fig.axes[0].lines)))
+    assert seen["n"] == 1, "a 1,600-point curve was 1,599 artists, which made 3-D exports crawl"
