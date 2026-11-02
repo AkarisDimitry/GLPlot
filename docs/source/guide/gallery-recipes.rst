@@ -6,7 +6,7 @@ every look it can apply as a real render of itself. Both live in panels:
 
 * **Gallery** (``Ctrl+Shift+L``) -- 22 *recipes*: pick one, say which column goes where, and the plot is
   drawn on the scene in the look it was designed in.
-* **Style** > *Styles* -- 25 presets, each shown on a sample plot of your choice.
+* **Style** > *Styles* -- 37 presets, each shown on a sample plot of your choice.
 
 Recipes
 -------
@@ -62,18 +62,35 @@ Recipes are plain data in :mod:`glplot.gui.recipes`::
 Style presets
 -------------
 
-Each preset sets the page, the palette, the grid, line weight, effects, the 3-D axis box and --
-new -- **a colormap** for anything coloured by value (an image, a colour-by-column scatter, a
-surface). The six new looks are:
+Each preset sets the page, the palette, the grid, line weight, effects, the 3-D axis box and
+**a colormap** for anything coloured by value (an image, a colour-by-column scatter, a surface).
+On a styled figure, everything drawn without a colour takes the preset's palette (lines, scatter,
+bars, histograms, fills) or its ink (reference lines, arrows, text). The presets by use:
 
-=============  ===================================================================================
-aurora         polar-night gradient, mint and ice lines with a soft bloom
-synthwave      ultraviolet night, magenta grid, cyan and orange glow
-sunset         plum-to-ember gradient, orange, gold and coral
-ocean          deep-water gradient, aqua and seafoam with a coral accent
-vintage        aged paper with fine grain, sepia ink, mid-century pigments
-candy          thick strokes, sticker-outlined markers, sweet-shop colours on pink-white
-=============  ===================================================================================
+========================  ========================================================================
+Paper                     clean, journal, colorsafe, print, tufte
+Talks                     slide, stage
+Notebooks, dashboards     ggplot, material, minimal, dark, dense
+Explainer videos          3b1b, kurzgesagt
+Newsroom charts           economist, ft, fivethirtyeight, terminal
+Editor themes             ide, solarized, dracula, gruvbox, nord, catppuccin, tokyonight
+Drawing board             blueprint, chalk, marker, hand, kids
+Moods                     neon, aurora, synthwave, sunset, ocean, vintage, candy
+========================  ========================================================================
+
+Several are tributes to famous designs -- 3Blue1Brown's and Kurzgesagt's videos, The Economist, the
+Financial Times, FiveThirtyEight, ggplot2, Edward Tufte, Material Design, Nord, Catppuccin, Tokyo
+Night -- built from their public colours and habits, unaffiliated, with nothing on the picture
+naming them. ``plot_style`` accepts a key, the display name or an alias (``"The Economist"``,
+``"538"``, ``"Tokyo Night"``, ``"manim"``).
+
+**Saved images take the look too.** Beyond colours, a preset's ``export_look`` shapes the exported
+picture (PNG, GIF, MP4): which axis lines there are (a box, an open frame, a baseline, none, or
+manim's crossing axes), the grid and on which axis, the title (flush left, bold, its own face),
+muted tick labels, y numbers on the right, a legend without a frame, a coloured tag above the
+title, Tufte's range frame, a handwriting face and a hand-drawn stroke for chalk, marker, pencil
+and crayon. Faces that are not installed fall back to the next one named, ending with one that
+ships with matplotlib, so a look exports the same way everywhere it can.
 
 The Style panel's cards are real renders. **Preview on** switches the sample plot (lines, scatter,
 bars, heat map, 3-D surface), because one look reads very differently on each. Two switches control

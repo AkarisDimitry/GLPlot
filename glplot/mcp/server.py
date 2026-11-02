@@ -14,6 +14,7 @@ from typing import Annotated, Any, Dict, List, Optional, Sequence, Union
 
 from pydantic import Field
 
+from ..gui import styles as _styles
 from . import analysis, catalog
 from .cli import build_parser
 from .guide import build_instructions
@@ -21,6 +22,13 @@ from .state import DEFAULT_LIMITS, FileSandbox, Limits, McpError
 from .toolbox import ANNOTATION_KINDS, FIELD_KINDS, PLOT_KINDS, Toolbox, ToolResult
 
 __all__ = ["SdkUnavailable", "build_parser", "build_server", "main"]
+
+#: Every preset by use, generated from the registry so the tool description is never stale.
+_STYLE_HELP = (
+    "Style preset, by use -- "
+    + _styles.style_catalogue(compact=True)
+    + ". A display name ('The Economist', 'Tokyo Night') or alias ('538', 'manim') works too."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +158,7 @@ def build_server(
         ] = "2d",
         style: Annotated[
             Optional[str],
-            Field(description="Style preset, e.g. 'journal', 'dark', 'chalk'. See glplot://guide."),
+            Field(description=_STYLE_HELP),
         ] = None,
     ) -> Any:
         """Create an empty figure and return its figure_id. Start here.
@@ -844,6 +852,14 @@ def build_server(
         y2scale: Annotated[
             Optional[str], Field(description="Scale of the right-hand y axis: 'linear', 'log'...")
         ] = None,
+        legend_loc: Annotated[
+            Optional[str],
+            Field(
+                description="Where the legend sits (shows it): 'best', 'upper left', 'upper "
+                "right', 'lower left', 'lower right', 'upper center', 'center left'... Move it "
+                "off the data the render shows it covering."
+            ),
+        ] = None,
     ) -> Any:
         """Set title, axis labels, limits, scales, grid, legend and (3-D) camera on one panel.
 
@@ -874,14 +890,16 @@ def build_server(
             y2label,
             y2lim,
             y2scale,
+            legend_loc,
         )
 
     @tool()
     def set_style(
         figure_id: FigureId,
-        preset: Annotated[str, Field(description="Preset key, e.g. 'journal', 'dark'.")],
+        preset: Annotated[str, Field(description=_STYLE_HELP)],
     ) -> Any:
-        """Apply a style preset (background, palette, line width, grid) to the whole figure."""
+        """Apply a style preset to the whole figure: page, palette, line width, grid, colormap,
+        and how saved images look (axis lines, title, faces)."""
         return run(box.set_style, figure_id, preset)
 
     # -- output ---------------------------------------------------------------------

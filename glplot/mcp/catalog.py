@@ -108,9 +108,23 @@ def _recipes(box: Toolbox, params: Dict[str, str]) -> str:
 
 
 def _styles(box: Toolbox, params: Dict[str, str]) -> str:
-    from .. import pyplot as gplt
+    from ..gui import styles
 
-    return json.dumps([{"key": k, "title": t, "description": d} for k, t, d in gplt.plot_styles()])
+    group_of = {key: group for group, keys in styles.STYLE_GROUPS for key in keys}
+    rows = []
+    for style in styles.STYLES:
+        rows.append(
+            {
+                "key": style.key,
+                "title": style.name,
+                "description": style.description,
+                "use": group_of.get(style.key, ""),
+                "page": "light" if style.light_bg_mode else "dark",
+                "export": styles.export_summary(style) or "the colours, page and lines",
+                "aliases": sorted(a for a, k in styles.STYLE_ALIASES.items() if k == style.key),
+            }
+        )
+    return json.dumps(rows)
 
 
 def _figure_image(box: Toolbox, params: Dict[str, str]) -> bytes:

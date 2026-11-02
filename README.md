@@ -479,9 +479,13 @@ plt.show()
 - **A gallery you can point at your data** — the Gallery panel turns the examples into 22 recipes:
   pick a card (each is a real render), map your columns, and the plot is drawn in the look it was
   designed in -- 2-D and 3-D, one undoable step, with a live preview of *your* data first
-- **25 looks, each with its own colormap** — from journal and colour-blind-safe to aurora,
-  synthwave and vintage print; the Style panel shows every preset rendered on a line plot, a
-  scatter, bars, a heat map or a 3-D surface of your choice
+- **37 looks, each with its own colormap** — from journal and colour-blind-safe to aurora,
+  synthwave and vintage print, plus looks borrowed from famous designs: 3Blue1Brown and
+  Kurzgesagt explainers, The Economist, the Financial Times and FiveThirtyEight, ggplot2, Tufte,
+  Material, a market terminal, and the Nord, Catppuccin and Tokyo Night editor themes. A preset
+  shapes saved images too (axis lines, title, grid, faces), so `plot_style("economist")` exports
+  a newsroom chart, not just its colours; the Style panel shows every preset rendered on a line
+  plot, a scatter, bars, a heat map or a 3-D surface of your choice
 - **Native MCP server** — `glplot-mcp` lets Claude or any MCP client build figures,
   datasets and plots and *look at the result* (every render returns an image), with no
   arbitrary code execution and file access confined to directories you choose. It works after a

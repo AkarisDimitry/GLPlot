@@ -257,6 +257,90 @@ def _check_axes(
     return issues
 
 
+#: WCAG contrast below which a mark all but disappears into the page (1.0 is identical). 1.5 is
+#: the floor every style preset's palette clears, so a preset's own colours never trip it.
+_INVISIBLE_CONTRAST = 1.5
+#: Text has to be read, not just seen: below this it is lost.
+_INVISIBLE_TEXT_CONTRAST = 2.0
+
+
+def _luminance(rgb: Sequence[float]) -> float:
+    def channel(v: float) -> float:
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2])
+
+
+def _contrast(a: Sequence[float], b: Sequence[float]) -> float:
+    la, lb = _luminance(a), _luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def _page(ax: Any) -> Sequence[float]:
+    """The colour behind the data: the axes' own fill, or the figure's where that is clear."""
+    from matplotlib.colors import to_rgba
+
+    face = to_rgba(ax.get_facecolor())
+    if face[3] < 0.5:
+        face = to_rgba(ax.figure.get_facecolor())
+    return face[:3]
+
+
+def _invisible(axes: Sequence[Any]) -> List[Dict[str, Any]]:
+    """Series, bars and text drawn in a colour the page swallows -- black on a dark style, white
+    on a light one: the usual cost of naming a colour on a figure that has a style."""
+    from matplotlib.colors import to_rgba
+
+    issues: List[Dict[str, Any]] = []
+    for panel, ax in enumerate(axes, start=1):
+        if _is_3d(ax):
+            continue
+        page = _page(ax)
+        found: List[tuple] = []
+
+        def look(what: str, color: Any, floor: float = _INVISIBLE_CONTRAST) -> None:
+            try:
+                rgba = to_rgba(color)
+            except (TypeError, ValueError):
+                return
+            if rgba[3] == 0.0:
+                return
+            ratio = _contrast(rgba[:3], page)
+            if ratio < floor:
+                found.append((ratio, what, rgba))
+
+        for line in ax.lines:
+            if _is_public(line.get_label()) and line.get_linestyle() not in ("None", "none", ""):
+                look(f"line {line.get_label()!r}", line.get_color())
+        for collection in ax.collections:
+            faces = collection.get_facecolor()
+            if _is_public(collection.get_label()) and len(faces) == 1:
+                look(f"series {collection.get_label()!r}", faces[0])
+        for container in getattr(ax, "containers", []):
+            patches = getattr(container, "patches", None) or list(container)
+            label = container.get_label() if hasattr(container, "get_label") else ""
+            if patches and hasattr(patches[0], "get_facecolor") and _is_public(label):
+                look(f"bars {label!r}", patches[0].get_facecolor())
+        for text in ax.texts:
+            if text.get_visible() and text.get_text().strip():
+                look(f"text {text.get_text()[:30]!r}", text.get_color(), _INVISIBLE_TEXT_CONTRAST)
+        for ratio, what, rgba in sorted(found)[:2]:
+            from matplotlib.colors import to_hex
+
+            issues.append(
+                _issue(
+                    panel,
+                    "warning",
+                    "invisible_on_page",
+                    f"Panel {panel}: the {what} is drawn in {to_hex(rgba[:3])} on a "
+                    f"{to_hex(page)} page (contrast {ratio:.2f}:1) and can hardly be seen.",
+                    "drop color= so the style's palette (or its ink, for text) is used, or "
+                    "update_artist(..., {'color': ...}) with a colour that stands out.",
+                )
+            )
+    return issues
+
+
 def _tick_overlap(fig: Any, axes: Sequence[Any]) -> List[Dict[str, Any]]:
     """Adjacent tick labels whose boxes overlap -- the usual fate of long category names."""
     issues: List[Dict[str, Any]] = []
@@ -323,6 +407,7 @@ def review_figure(
                 legend_wanted=panel not in set(no_legend),
             )
         )
+    issues.extend(_invisible(axes))
     if measure_text is None:
         measure_text = _total_points(axes) <= _DRAW_BUDGET_POINTS
     if measure_text:

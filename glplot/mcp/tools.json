@@ -60,7 +60,7 @@
       }
      ],
      "default": null,
-     "description": "Style preset, e.g. 'journal', 'dark', 'chalk'. See glplot://guide."
+     "description": "Style preset, by use -- paper: clean, journal, colorsafe, print, tufte; talks: slide, stage; notebooks and dashboards: ggplot, material, minimal, dark, dense; explainer videos: 3b1b, kurzgesagt; newsroom charts: economist, ft, fivethirtyeight, terminal; editor themes: ide, solarized, dracula, gruvbox, nord, catppuccin, tokyonight; drawing board: blueprint, chalk, marker, hand, kids; moods: neon, aurora, synthwave, sunset, ocean, vintage, candy. A display name ('The Economist', 'Tokyo Night') or alias ('538', 'manim') works too."
     }
    }
   },
@@ -1876,6 +1876,18 @@
      ],
      "default": null,
      "description": "Scale of the right-hand y axis: 'linear', 'log'..."
+    },
+    "legend_loc": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Where the legend sits (shows it): 'best', 'upper left', 'upper right', 'lower left', 'lower right', 'upper center', 'center left'... Move it off the data the render shows it covering."
     }
    },
    "required": [
@@ -1891,7 +1903,7 @@
  },
  {
   "name": "set_style",
-  "description": "Apply a style preset (background, palette, line width, grid) to the whole figure.",
+  "description": "Apply a style preset to the whole figure: page, palette, line width, grid, colormap,\nand how saved images look (axis lines, title, faces).",
   "inputSchema": {
    "type": "object",
    "properties": {
@@ -1901,7 +1913,7 @@
     },
     "preset": {
      "type": "string",
-     "description": "Preset key, e.g. 'journal', 'dark'."
+     "description": "Style preset, by use -- paper: clean, journal, colorsafe, print, tufte; talks: slide, stage; notebooks and dashboards: ggplot, material, minimal, dark, dense; explainer videos: 3b1b, kurzgesagt; newsroom charts: economist, ft, fivethirtyeight, terminal; editor themes: ide, solarized, dracula, gruvbox, nord, catppuccin, tokyonight; drawing board: blueprint, chalk, marker, hand, kids; moods: neon, aurora, synthwave, sunset, ocean, vintage, candy. A display name ('The Economist', 'Tokyo Night') or alias ('538', 'manim') works too."
     }
    },
    "required": [

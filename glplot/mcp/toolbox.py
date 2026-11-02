@@ -395,6 +395,8 @@ class Toolbox:
                 f"close_figure: {', '.join(self._figures)}."
             )
 
+        if style is not None:
+            style = self._style_key(style)  # canonical, so the log and a script say "economist"
         figure_id = f"fig{self._next_figure}"
         self._next_figure += 1
         spec = {
@@ -408,10 +410,15 @@ class Toolbox:
         }
         entry = self._make_entry(figure_id, spec, _FIGURE_NUM_BASE + int(figure_id[3:]))
         self._figures[figure_id] = entry
+        data: Dict[str, Any] = {"figure_id": figure_id, "panels": entry.panels}
+        note = ""
+        if style:
+            data["style"] = style
+            note = f" Style {self._style_note(style)}"
         return ToolResult(
             f"Created {figure_id} ({width}x{height}px, {rows}x{cols} panel"
-            f"{'s' if entry.panels > 1 else ''}, {projection}).",
-            {"figure_id": figure_id, "panels": entry.panels},
+            f"{'s' if entry.panels > 1 else ''}, {projection}).{note}",
+            data,
         )
 
     def _make_entry(self, figure_id: str, spec: Mapping[str, Any], num: int) -> _Figure:
@@ -2298,6 +2305,7 @@ class Toolbox:
         y2label: Optional[str] = None,
         y2lim: Optional[Sequence[float]] = None,
         y2scale: Optional[str] = None,
+        legend_loc: Optional[str] = None,
     ) -> ToolResult:
         """Set titles, labels, limits, scales, grid, legend and (3-D) camera on one panel."""
         entry = self._figure(figure_id)
@@ -2345,7 +2353,18 @@ class Toolbox:
                 do(name, fn, lo, hi)
         if grid is not None:
             do("grid", gplt.grid, bool(grid))
-        if legend:
+        if legend_loc is not None:
+            places = list(dict.fromkeys(gplt._LEGEND_LOC_CODES.values()))
+            if legend is False:
+                raise McpError("legend_loc places a legend; it cannot go with legend=False.")
+            if legend_loc not in places:
+                raise McpError(
+                    f"legend_loc {legend_loc!r} is not a place.{suggest(str(legend_loc), places)} "
+                    f"Use one of: {', '.join(places)}."
+                )
+            do("legend", lambda: gplt.legend(loc=legend_loc))
+            entry.legend_off.discard(panel)
+        elif legend:
             do("legend", gplt.legend)
             entry.legend_off.discard(panel)
         elif legend is False:
@@ -2385,11 +2404,15 @@ class Toolbox:
     @_tool
     @_scene_op
     def set_style(self, figure_id: str, preset: str) -> ToolResult:
-        """Apply a GLPlot style preset (``chalk``, ``journal``, ``clean``...) to the whole figure."""  # noqa: E501
+        """Apply a GLPlot style preset (``chalk``, ``journal``, ``economist``...) to the figure."""
         entry = self._figure(figure_id)
         self._activate(entry, 1)
         key = self._apply_style(preset)
-        return ToolResult(f"Applied style {key!r} to {figure_id}.", {"style": key})
+        self._resolved["preset"] = key  # a script names the preset by its key
+        return ToolResult(
+            f"Applied style {key!r} to {figure_id}. {self._style_note(key)}",
+            {"style": key, "name": styles.get_style(key).name},
+        )
 
     # ------------------------------------------------------------------
     # Output
@@ -2915,14 +2938,28 @@ class Toolbox:
         except _USER_ERRORS as exc:
             raise McpError(f"{what}: {exc}") from exc
 
-    def _apply_style(self, preset: str) -> str:
-        try:
-            return gplt.plot_style(preset)
-        except ValueError as exc:
-            keys = [row[0] for row in gplt.plot_styles()]
+    def _style_key(self, preset: Any) -> str:
+        """The preset key ``preset`` names (a key, a display name such as "The Economist", or
+        an alias such as "538"), or an error that suggests the nearest and lists them all."""
+        key = styles.resolve_style_key(preset) if isinstance(preset, str) else None
+        if key is None:
             raise McpError(
-                f"Unknown style {preset!r}.{suggest(preset, keys)} Available: {', '.join(keys)}."
-            ) from exc
+                f"Unknown style {preset!r}.{suggest(str(preset), list(styles.STYLE_KEYS))} "
+                f"Available, by use -- {styles.style_catalogue(compact=True)}."
+            )
+        return key
+
+    def _apply_style(self, preset: str) -> str:
+        return gplt.plot_style(self._style_key(preset))
+
+    @staticmethod
+    def _style_note(key: str) -> str:
+        """One line on the preset just applied: its name, and how its exports look."""
+        style = styles.get_style(key)
+        summary = styles.export_summary(style)
+        return f"{style.name}: {style.description}" + (
+            f" Saved images and videos get {summary}." if summary else ""
+        )
 
     def _inline(self, values: Sequence[Optional[float]], what: str) -> np.ndarray:
         if len(values) > self.limits.max_inline_values:

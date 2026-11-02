@@ -68,10 +68,10 @@ class TestThePreset:
         assert to_hex(look.grid_color) == "#29abca"  # BLUE_D, a NumberPlane's lines
         assert look.faded_lines == 4
 
-    def test_every_older_preset_keeps_its_export(self):
-        for style in styles.STYLES:
-            if style.key != "3b1b":
-                assert style.export_look is None, style.key
+    def test_the_default_look_keeps_the_historical_export(self):
+        """A look is opt-in: Clean (the default), Colour-safe and Dense export the plain box."""
+        plain = [s.key for s in styles.STYLES if s.export_look is None]
+        assert plain == ["clean", "colorsafe", "dense"]
 
     def test_it_is_recorded_on_the_figure_and_undone(self):
         plot = gplt.figure()
@@ -161,7 +161,7 @@ class TestTheExport:
         assert not ax.spines["top"].get_visible()
 
     def test_a_preset_without_a_look_exports_the_usual_box(self):
-        ax = finished(crossing_figure(style="dark"))["ax"]
+        ax = finished(crossing_figure(style="colorsafe"))["ax"]
         assert ax.spines["top"].get_visible() and ax.spines["right"].get_visible()
 
     def test_a_removed_legend_is_not_exported(self):

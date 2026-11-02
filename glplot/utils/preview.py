@@ -1267,7 +1267,7 @@ def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None)
     # was switched off on purpose (``legend().remove()``, ``set_visible(False)``): the flag is
     # absent until someone sets it, so only an explicit False hides it.
     if getattr(engine, "legend_show", None) is not False:
-        _apply_legend(ax)
+        _apply_legend(ax, engine)
     if has_3d:
         ax.autoscale(enable=True)
         # An explicit set_xlim3d()/set_ylim3d()/set_zlim3d() call (stored on
@@ -1294,8 +1294,9 @@ def _finish_axes(ax: object, has_3d: bool, engine: object, panel: object = None)
         _apply_axis_state(ax, engine, panel)
 
 
-def _apply_legend(ax: object) -> None:
-    """Draw ``ax``'s legend from its labelled artists: deduplicated, capped, top right.
+def _apply_legend(ax: object, engine: object = None) -> None:
+    """Draw ``ax``'s legend from its labelled artists: deduplicated, capped, top right unless
+    ``legend(loc=...)`` said otherwise (its other matplotlib keywords are honoured too).
 
     A panel with twin axes gets one legend over all of them -- the combined-handles legend
     that matplotlib scripts otherwise build by hand.
@@ -1322,9 +1323,7 @@ def _apply_legend(ax: object) -> None:
 
         legend_handles.append(Line2D([], [], color="none"))
         legend_labels.append(f"+{hidden} more layers")
-    ax.legend(
-        legend_handles,
-        legend_labels,
+    options = dict(
         loc="upper right",
         fontsize=LEGEND_FONTSIZE,
         framealpha=0.78,
@@ -1332,6 +1331,10 @@ def _apply_legend(ax: object) -> None:
         labelspacing=0.4,
         handlelength=1.6,
     )
+    options.update(getattr(engine, "legend_style", None) or {})
+    if options.pop("reverse", False):
+        legend_handles, legend_labels = legend_handles[::-1], legend_labels[::-1]
+    ax.legend(legend_handles, legend_labels, **options)
 
 
 def _apply_axis_state(ax: object, engine: object, panel: object = None) -> None:
@@ -1391,16 +1394,19 @@ def _look_fonts(engine: object):
     out of the list (matplotlib would log a warning for each on every frame).
     """
     look = _export_look(engine)
-    if look is None or not (getattr(look, "font_family", None) or look.math_fontset):
+    sketch = getattr(look, "sketch", None)
+    if look is None or not (getattr(look, "font_family", None) or look.math_fontset or sketch):
         yield
         return
     import matplotlib
-    from matplotlib import font_manager
 
     rc: dict = {}
+    families: list = []
+    if sketch:
+        # read when each artist is made, so it reaches every line, bar and axis of the export
+        rc["path.sketch"] = tuple(float(v) for v in sketch)
     if look.font_family:
-        installed = {f.name for f in font_manager.fontManager.ttflist}
-        families = [name for name in look.font_family if name in installed]
+        families = _installed_families(look.font_family)
         if families:
             rc["font.family"] = families
     if look.math_fontset:
@@ -1411,7 +1417,106 @@ def _look_fonts(engine: object):
         # and no accents or dashes either: those come from STIX inside a $...$ string
         rc["mathtext.fallback"] = "stix"
     with matplotlib.rc_context(rc):
+        if families and families[0] == "cmr10":
+            with _cm_text():
+                yield
+        else:
+            yield
+
+
+#: What matplotlib's Computer Modern (``cmr10``, laid out like TeX's OT1 encoding) draws in
+#: place of these ASCII characters is something else -- ``<`` and ``>`` come out as an
+#: inverted ``!`` and ``?``, ``{`` ``}`` ``|`` as dashes and an accent, ``_`` as a dot, ``\``
+#: as a quote -- so each is typeset as maths instead, where it is the right glyph.
+_OT1_TRAPS = {
+    "<": "<",
+    ">": ">",
+    "{": r"\{",
+    "}": r"\}",
+    "|": "|",
+    "_": r"\_",
+    "\\": r"\backslash",
+}
+
+
+def _cm_safe(text: str) -> str:
+    """``text`` written so that ``cmr10`` draws what it says.
+
+    Plain text (no ``$...$``) with no trap character is left alone: matplotlib falls back
+    glyph by glyph to the next face of ``font.family`` for an accent or a dash. A trap
+    character (:data:`_OT1_TRAPS`) becomes a one-symbol formula, and so does every non-ASCII
+    character of a string that has formulas in it -- the text between two formulas is set
+    in the first face alone, with no fallback, while a formula falls back to STIX.
+    """
+    if not text:
+        return text
+    raw = text
+    dollars = text.count("$") - text.count("\\$")  # matplotlib's own rule for "is maths"
+    is_math = dollars > 0 and dollars % 2 == 0
+    if is_math:
+        # split on unescaped dollars: even pieces are text, odd ones formulas
+        pieces, buf, j = [], [], 0
+        while j < len(raw):
+            if raw.startswith("\\$", j):
+                buf.append("\\$")
+                j += 2
+                continue
+            if raw[j] == "$":
+                pieces.append("".join(buf))
+                buf = []
+            else:
+                buf.append(raw[j])
+            j += 1
+        pieces.append("".join(buf))
+        parts = [(k % 2 == 1, p) for k, p in enumerate(pieces)]
+    else:
+        parts = [(False, raw)]
+    text_chunks = "".join(p for m, p in parts if not m)
+    has_trap = any(c in _OT1_TRAPS for c in text_chunks.replace("\\$", ""))
+    foreign = any(ord(c) > 126 for c in text_chunks)
+    if not has_trap and not (is_math and foreign):
+        return text
+    out = []
+    for in_math, piece in parts:
+        if in_math:
+            out.append(f"${piece}$")
+            continue
+        k = 0
+        while k < len(piece):
+            c = piece[k]
+            if piece.startswith("\\$", k):
+                out.append("\\$")
+                k += 2
+                continue
+            if c == "$":  # a lone dollar of a plain string: literal once the string is maths
+                out.append("\\$")
+            elif c in _OT1_TRAPS:
+                out.append(f"${_OT1_TRAPS[c]}$")
+            elif ord(c) > 126:
+                out.append(f"$\\mathrm{{{c}}}$")
+            else:
+                out.append(c)
+            k += 1
+    return "".join(out)
+
+
+@contextmanager
+def _cm_text():
+    """Every text drawn inside goes through :func:`_cm_safe` first (not usetex text)."""
+    from matplotlib.text import Text
+
+    original = Text._preprocess_math
+
+    def preprocess(self, s):
+        if not self.get_usetex():
+            s = _cm_safe(s)
+        return original(self, s)
+
+    Text._preprocess_math = preprocess
+    try:
         yield
+    finally:
+        Text._preprocess_math = original
 
 
 def _skip_zero_formatter():
@@ -1445,6 +1550,172 @@ def _SkipZero(inner: object) -> object:  # noqa: N802 - reads as the class it bu
     return _skip_zero_formatter()(inner)
 
 
+def _installed_families(names, bold: bool = False) -> list:
+    """The families of ``names`` installed with an upright face of the weight wanted
+    (regular, or bold), in the same order.
+
+    The weight matters because matplotlib reads one face per file, and a system font
+    shipped as a collection (macOS's Helvetica, Menlo, Avenir Next: ``.ttc``) is registered
+    as whichever face comes first -- Avenir Next only as Bold, Helvetica only as Regular. A
+    family picked by name alone would set every label in bold, or quietly draw a bold title
+    regular; picked by weight, the title goes to the first family that really has a bold.
+    """
+    from matplotlib import font_manager
+
+    weights: dict = {}
+    for entry in font_manager.fontManager.ttflist:
+        if entry.style != "normal":
+            continue
+        weight = entry.weight
+        if isinstance(weight, str):
+            weight = font_manager.weight_dict.get(weight, 400)
+        weights.setdefault(entry.name, set()).add(int(weight))
+
+    def fits(name: str) -> bool:
+        found = weights.get(name, ())
+        return any(w >= 600 for w in found) if bold else any(w <= 500 for w in found)
+
+    return [name for name in names if fits(name)]
+
+
+def _apply_look_text(ax: object, look: object, opts: object) -> None:
+    """The look's title (where it sits, its weight, size and face) and its label colour.
+
+    A size or colour the caller set (``title(fontsize=)``, ``tick_params(labelcolor=)``)
+    is theirs and stays.
+    """
+    title = ax.title
+    if look.title_loc == "left":
+        title.set_horizontalalignment("left")
+        title.set_x(0.0)
+    bold = look.title_weight == "bold"
+    if look.title_weight != "normal":
+        title.set_fontweight(look.title_weight)
+    if look.title_size is not None and getattr(opts, "axis_title_fontsize", None) is None:
+        title.set_fontsize(look.title_size)
+    faces = look.title_family or (look.font_family if bold else None)
+    if faces:
+        families = _installed_families(faces, bold=bold)
+        if families:
+            title.set_fontfamily(families)
+    for axis, name in ((ax.xaxis, "x"), (ax.yaxis, "y")):
+        if (
+            look.label_size is not None
+            and getattr(opts, f"axis_{name}label_fontsize", None) is None
+        ):
+            axis.label.set_fontsize(look.label_size)
+        if look.label_color is not None and getattr(opts, f"axis_{name}label_color", None) is None:
+            axis.label.set_color(look.label_color)
+    if look.label_color is not None and getattr(opts, "axis_tick_color", None) is None:
+        ax.tick_params(which="both", labelcolor=look.label_color)
+
+
+def _apply_look_grid(
+    ax: object, look: object, engine: object, linear_x: bool, linear_y: bool
+) -> None:
+    """The look's grid: on by default when the look says so, else only after ``grid(True)``.
+
+    ``grid_visible`` exists only once ``grid()`` was called, so "never said" and
+    ``grid(False)`` are told apart: the first takes the look's default, the second wins.
+    """
+    shown = getattr(engine, "grid_visible", None)
+    if shown is None:
+        shown = look.grid
+    if not shown:
+        ax.grid(False, which="both")
+        return
+    if look.grid_color is None and not look.grid and look.grid_axis == "both":
+        return  # nothing of the look's own: keep the plain grid _finish_axes drew
+    import matplotlib
+
+    color = look.grid_color if look.grid_color is not None else matplotlib.rcParams["grid.color"]
+    width = look.grid_width if look.grid_width is not None else 1.0
+    ax.grid(False, which="both")
+    ax.grid(
+        True,
+        which="major",
+        axis=look.grid_axis,
+        color=color,
+        alpha=look.grid_alpha,
+        linewidth=width,
+        linestyle=look.grid_style,
+    )
+    if look.faded_lines and look.faded_lines > 1:
+        from matplotlib.ticker import AutoMinorLocator
+
+        if linear_x and look.grid_axis in ("both", "x"):
+            ax.xaxis.set_minor_locator(AutoMinorLocator(look.faded_lines))
+        if linear_y and look.grid_axis in ("both", "y"):
+            ax.yaxis.set_minor_locator(AutoMinorLocator(look.faded_lines))
+        ax.grid(
+            True,
+            which="minor",
+            axis=look.grid_axis,
+            color=color,
+            alpha=look.faded_alpha if look.faded_alpha is not None else look.grid_alpha / 4.0,
+            linewidth=width * 0.6 if look.faded_alpha is None else width * 0.5,
+            linestyle=look.grid_style,
+        )
+        ax.tick_params(which="minor", length=0)
+    ax.set_axisbelow(True)
+
+
+def _add_top_rule(ax: object, color: object) -> None:
+    """A short thick coloured rule just above the title, flush with its left end (once per
+    figure). Anchored to the title's own box, so it follows the title wherever layout and
+    the title autosizer put it; above the axes when there is no title."""
+    fig = ax.figure
+    if getattr(fig, "_glplot_top_rule", False):
+        return
+    fig._glplot_top_rule = True
+    from matplotlib.offsetbox import AnnotationBbox, DrawingArea
+    from matplotlib.patches import Rectangle
+
+    width, height = 44.0, 10.0  # points
+    area = DrawingArea(width, height, 0.0, 0.0)
+    area.add_artist(Rectangle((0.0, 0.0), width, height, facecolor=color, edgecolor="none"))
+    anchor = ax.title if ax.title.get_text() else ax
+    box = AnnotationBbox(
+        area,
+        (0.0, 1.0),
+        xycoords=anchor,
+        xybox=(0.0, 12.0),
+        boxcoords="offset points",
+        box_alignment=(0.0, 0.0),
+        frameon=False,
+        pad=0.0,
+        annotation_clip=False,
+    )
+    ax.add_artist(box)
+
+
+def _range_frame(ax: object) -> None:
+    """Tufte's range frame: each axis line runs from its first tick to its last, set a little
+    apart from the data so the frame reads as a scale and not as a box."""
+    for axis, side in ((ax.xaxis, "bottom"), (ax.yaxis, "left")):
+        lo, hi = sorted(axis.get_view_interval())
+        slack = 1e-9 * max(abs(hi - lo), 1e-300)
+        ticks = [t for t in axis.get_majorticklocs() if lo - slack <= t <= hi + slack]
+        if len(ticks) >= 2:
+            ax.spines[side].set_bounds(ticks[0], ticks[-1])
+        ax.spines[side].set_position(("outward", 10))
+
+
+def _apply_look_margins(fig: object, look: object) -> None:
+    """Fixed margins (see ``_build_preview_figure``), moved where the look needs the room:
+    y numbers on the right take the right margin and free the left one; a rule above the
+    title takes a little off the top."""
+    params = fig.subplotpars
+    left, right, top = params.left, params.right, params.top
+    if look.ytick_side == "right":
+        left, right = 0.06, right - 0.08
+    if look.top_rule is not None:
+        top -= 0.04
+    if look.range_frame:
+        left += 0.02
+    fig.subplots_adjust(left=left, right=right, top=top)
+
+
 def _apply_export_look(ax: object, has_3d: bool, engine: object, panel: object = None) -> None:
     """Draw a 2-D axes the way the preset's ``ExportLook`` says: axis lines, tips, grid.
 
@@ -1458,30 +1729,55 @@ def _apply_export_look(ax: object, has_3d: bool, engine: object, panel: object =
         return
     if not ax.axison:
         return
-    if look.tick_label_size is not None:
+    opts = getattr(engine, "options", None)
+    if look.panel_color is not None:
+        ax.set_facecolor(look.panel_color)
+    if look.page_color is not None:
+        ax.figure.set_facecolor(look.page_color)
+    if look.tick_label_size is not None and getattr(opts, "axis_tick_fontsize", None) is None:
         ax.tick_params(which="major", labelsize=look.tick_label_size)
+    _apply_look_text(ax, look, opts)
+    if look.axis_color is not None:
+        for spine in ax.spines.values():
+            spine.set_color(look.axis_color)
+        ax.tick_params(which="both", color=look.axis_color)
+    if look.axis_width is not None:
+        for spine in ax.spines.values():
+            spine.set_linewidth(look.axis_width)
+        ax.tick_params(which="major", width=look.axis_width)
+    if look.tick_length is not None:
+        ax.tick_params(which="major", length=look.tick_length)
+    if look.tick_direction is not None:
+        ax.tick_params(which="both", direction=look.tick_direction)
+    twinned = bool(getattr(ax, "_glplot_twins", ())) or bool(getattr(ax, "_glplot_secondaries", ()))
+    if look.ytick_side == "right" and not twinned:
+        ax.yaxis.tick_right()
+        ax.yaxis.set_label_position("right")
+    if look.ytick_on_rule:
+        # set on the ticks that exist; matplotlib copies a label's alignment from the first
+        # tick to every tick it makes later
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label1.set_verticalalignment("bottom")
+            tick.label2.set_verticalalignment("bottom")
     linear_x = ax.get_xscale() == "linear"
     linear_y = ax.get_yscale() == "linear"
-    if look.grid_color is not None and getattr(engine, "grid_visible", False):
-        width = look.grid_width if look.grid_width is not None else 1.0
-        ax.grid(True, which="major", color=look.grid_color, alpha=look.grid_alpha, linewidth=width)
-        if look.faded_lines and look.faded_lines > 1:
-            from matplotlib.ticker import AutoMinorLocator
-
-            if linear_x:
-                ax.xaxis.set_minor_locator(AutoMinorLocator(look.faded_lines))
-            if linear_y:
-                ax.yaxis.set_minor_locator(AutoMinorLocator(look.faded_lines))
-            ax.grid(
-                True,
-                which="minor",
-                color=look.grid_color,
-                alpha=look.grid_alpha / 4.0,
-                linewidth=width * 0.6,
-            )
-            ax.tick_params(which="minor", length=0)
-        ax.set_axisbelow(True)
-    twinned = bool(getattr(ax, "_glplot_twins", ())) or bool(getattr(ax, "_glplot_secondaries", ()))
+    _apply_look_grid(ax, look, engine, linear_x, linear_y)
+    asked = getattr(engine, "legend_style", None) or {}
+    if not look.legend_frame and ax.get_legend() is not None and "frameon" not in asked:
+        ax.get_legend().get_frame().set_visible(False)
+    if look.top_rule is not None:
+        _add_top_rule(ax, look.top_rule)
+    if look.axes in ("open", "bottom", "none") and not twinned:
+        hidden = {"open": ("top", "right"), "bottom": ("top", "right", "left"), "none": None}
+        for side in hidden[look.axes] or tuple(ax.spines.keys()):
+            ax.spines[side].set_visible(False)
+        if look.axes in ("bottom", "none"):
+            # the grid carries the y values: no marks along an axis line that is not drawn
+            ax.tick_params(axis="y", which="both", length=0)
+        if look.axes == "none":
+            ax.tick_params(axis="x", which="both", length=0)
+    if look.range_frame and look.axes in ("open", "box") and not twinned:
+        _range_frame(ax)
     if look.axes != "cross" or twinned:
         return
 
@@ -1530,6 +1826,24 @@ def _apply_export_look(ax: object, has_3d: bool, engine: object, panel: object =
         ax.yaxis.label.set_verticalalignment("top")
 
 
+def _preset_ink(engine: object) -> object:
+    """The text colour of the style preset the figure was given, or None.
+
+    A preset's ink is chosen against its own page (Solarized's base1, Gruvbox's light1) and
+    is what the live window writes with; the export used to pick plain white or black from
+    the page's luminance instead, so every dark look exported the same text.
+    """
+    key = getattr(engine, "_style_key", "") or ""
+    if not key:
+        return None
+    try:
+        from ..gui.styles import get_style
+
+        return tuple(float(c) for c in get_style(key).ink[:3])
+    except (KeyError, ImportError):
+        return None
+
+
 def _apply_style_chrome(fig: object, ax: object, has_3d: bool, engine: object) -> None:
     """Paint the export with the current style's background, plus contrast-matched ink.
 
@@ -1549,10 +1863,13 @@ def _apply_style_chrome(fig: object, ax: object, has_3d: bool, engine: object) -
     if bg is None:
         return
     bg = tuple(float(c) for c in bg[:3])
-    if bg == (1.0, 1.0, 1.0):
+    look = _export_look(engine)
+    if bg == (1.0, 1.0, 1.0) and look is None:
         return  # the default -- leave the historical white export untouched
     luminance = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]
-    ink = (0.95, 0.96, 0.98) if luminance < 0.5 else (0.05, 0.05, 0.07)
+    ink = _preset_ink(engine)
+    if ink is None:
+        ink = (0.95, 0.96, 0.98) if luminance < 0.5 else (0.05, 0.05, 0.07)
 
     fig.set_facecolor(bg)
     ax.set_facecolor(bg)
@@ -1585,11 +1902,15 @@ def _apply_style_chrome(fig: object, ax: object, has_3d: bool, engine: object) -
             twin_ax.xaxis.label.set_color(ink)
     legend = ax.get_legend()
     if legend is not None:
+        asked = getattr(engine, "legend_style", None) or {}
         frame = legend.get_frame()
-        frame.set_facecolor(bg)
-        frame.set_edgecolor(ink)
-        for text in legend.get_texts():
-            text.set_color(ink)
+        if "facecolor" not in asked:
+            frame.set_facecolor(bg)
+        if "edgecolor" not in asked:
+            frame.set_edgecolor(ink)
+        if "labelcolor" not in asked:
+            for text in legend.get_texts():
+                text.set_color(ink)
 
 
 #: An absolute floor, not tied to AXIS_LABEL_FONTSIZE -- a title that's still too wide
@@ -1809,7 +2130,7 @@ def _build_preview_figure(engine: object, scale: float = 1.0):
                     # `legend()` was called, or a figure of unlabelled-by-intent panels
                     # would sprout legends it never had.
                     if not panel_3d and getattr(engine, "legend_show", False):
-                        _apply_legend(ax)
+                        _apply_legend(ax, engine)
             _apply_style_chrome(fig, ax, panel_3d, engine)
             _apply_export_look(ax, panel_3d, engine, panel)
             for cb in getattr(panel, "colorbars", None) or []:
@@ -1918,6 +2239,9 @@ def _build_preview_figure(engine: object, scale: float = 1.0):
                 bottom=0.13,
                 top=0.90 - (_TWIN_ROOM_Y if room_top else 0.0),
             )
+            look = _export_look(engine)
+            if look is not None and not (room_right or room_top):
+                _apply_look_margins(fig, look)
     suptitle = getattr(engine, "_suptitle", None)
     if suptitle is not None and len(panels) > 1:
         text, style = suptitle

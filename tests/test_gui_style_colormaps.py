@@ -294,7 +294,7 @@ class TestPlotStyleApi:
 
 class TestPresetCatalogue:
     def test_the_gallery_grew_by_the_looks_that_were_asked_for(self):
-        assert styles.STYLE_KEYS[-7:] == (
+        assert styles.STYLE_KEYS[-18:-11] == (
             "aurora",
             "synthwave",
             "sunset",
@@ -303,7 +303,33 @@ class TestPresetCatalogue:
             "candy",
             "3b1b",
         )
-        assert len(styles.STYLES) == 26
+        # creators, newsrooms, chart grammars, editor themes and design systems
+        assert styles.STYLE_KEYS[-11:] == (
+            "kurzgesagt",
+            "economist",
+            "ft",
+            "fivethirtyeight",
+            "ggplot",
+            "tufte",
+            "nord",
+            "catppuccin",
+            "tokyonight",
+            "material",
+            "terminal",
+        )
+        assert len(styles.STYLES) == 37
+
+    def test_the_borrowed_looks_each_have_their_own_ramp(self):
+        for key, ramp in (
+            ("kurzgesagt", "kurzgesagt"),
+            ("ft", "claret"),
+            ("ggplot", "ggblue"),
+            ("nord", "frost"),
+            ("catppuccin", "mocha"),
+            ("tokyonight", "tokyo"),
+            ("terminal", "amber"),
+        ):
+            assert styles.get_style(key).cmap == ramp
 
     def test_dataclass_default_cmap_is_a_safe_fallback(self):
         assert dataclasses.fields(styles.PlotStyle)[0].name == "key"

@@ -36,6 +36,24 @@ EXPECTED_FILES = [
     "27_inset_axes_image.png",
     "29_colorbar_gallery.png",
     "30_low_poly_potential_energy_surface.png",
+    # 31_borrowed_looks.py saves one chart per style preset, then tiles them
+    *(
+        f"{key}.png"
+        for key in (
+            "economist",
+            "ft",
+            "fivethirtyeight",
+            "ggplot",
+            "tufte",
+            "material",
+            "kurzgesagt",
+            "3b1b",
+            "tokyonight",
+            "catppuccin",
+            "terminal",
+            "chalk",
+        )
+    ),
 ]
 
 

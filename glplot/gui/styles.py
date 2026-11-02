@@ -232,32 +232,92 @@ class ExportLook:
     imgui/GL and keep their own look. ``PlotStyle.export_look = None`` means "no opinion",
     so every preset that predates this exports exactly as it did.
 
-    The fields are what a 3Blue1Brown-style explainer needs and matplotlib can draw: a serif
-    face with Computer Modern maths (the LaTeX look of manim's ``Tex``), two axis lines that
-    cross at the origin with a tip on each instead of a box (manim's ``Axes``), and a coloured
-    grid with faded lines between the major ones (manim's ``NumberPlane``).
+    The fields are what a recognisable look is made of beyond its colours, and what matplotlib
+    can draw: the faces (a serif with Computer Modern maths for a manim explainer, a grotesque
+    for a newsroom chart), which axis lines there are (a box, an open L, a baseline, none, or
+    manim's two lines crossing at the origin with tips), which grid lines and in what colour,
+    a plotting panel of its own colour (ggplot2), where the title sits and how heavy it is
+    (newsrooms set it bold and flush left), muted tick labels, a legend without a frame, and
+    the odd signature detail (a coloured rule above the title, Tufte's range frame).
+    Every default is "as before", so a preset states only what makes it itself.
     """
 
     #: ``rcParams["font.family"]`` for every exported text, in order of preference: a glyph a
     #: face lacks (matplotlib's Computer Modern has no accents) falls back to the next one.
+    #: Faces that are not installed are skipped, so a list can name the real face first.
     font_family: Optional[Tuple[str, ...]] = None
     #: ``rcParams["mathtext.fontset"]`` for ``$...$`` text: ``"cm"`` is Computer Modern.
     math_fontset: Optional[str] = None
-    #: ``"box"``: the usual frame. ``"cross"``: only the two axis lines, through the origin
-    #: when it is in view (else along the bottom and left edges), with no box around them.
+    #: Which axis lines are drawn. ``"box"``: the usual frame. ``"open"``: left and bottom
+    #: only. ``"bottom"``: a baseline and nothing else. ``"none"``: no lines at all (the grid
+    #: does the work). ``"cross"``: only the two axis lines, through the origin when it is in
+    #: view (else along the bottom and left edges), as manim's ``Axes`` draws them.
     axes: str = "box"
     #: A triangular tip on the positive end of each axis line (``axes="cross"`` only).
     arrow_tips: bool = False
-    #: The grid, when one is shown (``grid(True)``): colour, opacity and width in points.
+    #: Draw the grid when the caller never said either way; ``grid(True)``/``grid(False)``
+    #: still decide. For a look whose grid *is* the design (FiveThirtyEight, ggplot2).
+    grid: bool = False
+    #: Which grid lines: ``"both"``, ``"y"`` (horizontal lines only, the newsroom way) or
+    #: ``"x"`` (vertical lines only).
+    grid_axis: str = "both"
+    #: The grid, when one is shown: colour, opacity and width in points.
     grid_color: Optional[RGB] = None
     grid_alpha: float = 0.25
     grid_width: Optional[float] = None
+    #: matplotlib line style of the grid: ``"-"``, ``":"``, ``"--"``.
+    grid_style: str = "-"
     #: Faint lines between the major ones: the number of intervals per major step (manim's
     #: ``faded_line_ratio`` is 4), drawn at a quarter of ``grid_alpha``. 0 draws none.
     faded_lines: int = 0
+    #: The faint lines' opacity when it is not a quarter of ``grid_alpha`` (ggplot2's minor
+    #: lines are as white as the major ones, only thinner).
+    faded_alpha: Optional[float] = None
     #: Tick label size in points (the export's own default is 24): manim's numbers are small
     #: next to its titles, which keeps them from crowding the curves they sit beside.
     tick_label_size: Optional[float] = None
+    #: Tick mark length in points; 0 keeps the labels and drops the marks.
+    tick_length: Optional[float] = None
+    #: ``"out"``, ``"in"`` (old printed plates) or ``"inout"``; None keeps matplotlib's.
+    tick_direction: Optional[str] = None
+    #: matplotlib's hand-drawn stroke for every line and outline of the picture, as
+    #: ``(scale, length, randomness)`` -- what ``plt.xkcd()`` uses (1, 100, 2) -- for the looks
+    #: drawn by hand (chalk, marker, pencil, crayon). Deterministic: the same figure wobbles
+    #: the same way every time, so an animation's axes do not boil.
+    sketch: Optional[Tuple[float, float, float]] = None
+    #: Which side the y tick labels sit on: ``"left"`` or ``"right"`` (The Economist).
+    ytick_side: str = "left"
+    #: Each y number sits on its grid rule rather than centred on it (The Economist), which
+    #: also keeps the lowest one clear of the x numbers in the corner.
+    ytick_on_rule: bool = False
+    #: Colour of the tick labels and axis titles, when it is not the ink (a muted grey).
+    label_color: Optional[RGB] = None
+    #: Colour of the axis lines and tick marks, when it is not the ink.
+    axis_color: Optional[RGB] = None
+    #: Width of the axis lines in points.
+    axis_width: Optional[float] = None
+    #: The plotting area's own fill, when it differs from the page (ggplot2's grey panel).
+    panel_color: Optional[RGB] = None
+    #: The figure around the plotting area, when it differs from the preset's background
+    #: (ggplot2: the live page is the grey panel, the exported page around it is white).
+    page_color: Optional[RGB] = None
+    #: ``"center"`` or ``"left"`` (flush with the plotting area's left edge).
+    title_loc: str = "center"
+    #: ``"normal"`` or ``"bold"``.
+    title_weight: str = "normal"
+    #: Title size in points (the export's own default is 40).
+    title_size: Optional[float] = None
+    #: A face for the title alone, in order of preference (a serif headline over sans text).
+    title_family: Optional[Tuple[str, ...]] = None
+    #: Axis title size in points (the export's own default is 30).
+    label_size: Optional[float] = None
+    #: The legend's box; ``False`` sets the entries straight on the page.
+    legend_frame: bool = True
+    #: A short thick rule above the title at the top-left corner of the figure, in this
+    #: colour (the red tag of an Economist chart). ``None`` draws none.
+    top_rule: Optional[RGB] = None
+    #: Tufte's range frame: each axis line spans only from its first to its last tick.
+    range_frame: bool = False
 
 
 @dataclass(frozen=True)
@@ -690,6 +750,198 @@ _MANIM_PALETTE: Tuple[RGBA, ...] = (
 _MANIM_GRID: RGB = (0.161, 0.671, 0.792)
 
 
+def _rgba(value: str) -> RGBA:
+    """``"#RRGGBB"`` as an opaque RGBA tuple, rounded the way the hand-written ones are."""
+    value = value.lstrip("#")
+    return tuple(round(int(value[i : i + 2], 16) / 255.0, 3) for i in (0, 2, 4)) + (1.0,)
+
+
+def _rgb(value: str) -> RGB:
+    return _rgba(value)[:3]
+
+
+def _palette(*values: str) -> Tuple[RGBA, ...]:
+    return tuple(_rgba(v) for v in values)
+
+
+# -- the looks borrowed from people and publications (all unaffiliated tributes) -----------
+
+#: Kurzgesagt's flat, saturated accents on a deep-space blue: sky, a hot pink, sunflower,
+#: teal, violet, orange and lime -- the colours of its birds, planets and cells.
+_KURZGESAGT_PALETTE = _palette(
+    "#4CC9F0", "#FF6B9A", "#FFC93C", "#2EC4B6", "#9B5DE5", "#FF8C42", "#A7E05F"
+)
+
+#: The Economist's published chart colours: its blue first, then cyan, green, yellow, olive,
+#: purple and gold.
+_ECONOMIST_PALETTE = _palette(
+    "#006BA2", "#3EBCD2", "#379A8B", "#EBB434", "#B4BA39", "#9A607F", "#D1B07C"
+)
+
+#: The Financial Times' oxford blue and claret, with teal, mandarin, wasabi, velvet and a
+#: candy pink, all chosen to sit on its salmon paper.
+_FT_PALETTE = _palette("#0F5499", "#990F3D", "#0D7680", "#FF8833", "#96CC28", "#593380", "#FF7FAA")
+
+#: matplotlib's own ``fivethirtyeight`` style cycle, plus its lighter blue. The lead blue is a
+#: shade darker than the original (#008FD5) so a single line on the grey page passes WCAG's
+#: 4.5:1, the floor every preset here is held to.
+_FIVETHIRTYEIGHT_PALETTE = _palette(
+    "#0072B5", "#FC4F30", "#E5AE38", "#6D904F", "#8B8B8B", "#810F7C", "#30A2DA"
+)
+
+#: ggplot2: one series is drawn in black, groups in its evenly spaced hues (the three-group
+#: order first: red, green, blue), then the in-between hues of the six-group wheel.
+_GGPLOT_PALETTE = _palette(
+    "#1A1A1A", "#F8766D", "#00BA38", "#619CFF", "#B79F00", "#00BFC4", "#F564E3"
+)
+
+#: Tufte's ink: black first, one red for the thing that matters, then quiet, earthy greys.
+_TUFTE_PALETTE = _palette(
+    "#1A1A1A", "#B22222", "#4A6B8A", "#8C6D1F", "#5B7F4F", "#7A4E7A", "#8A8A8A"
+)
+
+#: Nord's Frost and Aurora on its Polar Night: frost cyan first, then aurora red, green,
+#: yellow, purple and orange, and the deeper frost blue.
+_NORD_PALETTE = _palette(
+    "#88C0D0", "#BF616A", "#A3BE8C", "#EBCB8B", "#B48EAD", "#D08770", "#5E81AC"
+)
+
+#: Catppuccin Mocha's accents: blue, peach, green, mauve, red, yellow, teal.
+_CATPPUCCIN_PALETTE = _palette(
+    "#89B4FA", "#FAB387", "#A6E3A1", "#CBA6F7", "#F38BA8", "#F9E2AF", "#94E2D5"
+)
+
+#: Tokyo Night's accents: blue, orange, green, magenta, red, cyan, yellow.
+_TOKYONIGHT_PALETTE = _palette(
+    "#7AA2F7", "#FF9E64", "#9ECE6A", "#BB9AF7", "#F7768E", "#7DCFFF", "#E0AF68"
+)
+
+#: Material Design's 600 shades (blue a step darker, 800, so one line passes 4.5:1 on the
+#: grey-50 page): blue, red, green, amber, purple, teal, orange.
+_MATERIAL_PALETTE = _palette(
+    "#1565C0", "#E53935", "#43A047", "#FFB300", "#8E24AA", "#00897B", "#FB8C00"
+)
+
+#: A market-data terminal: amber, up-green, down-red, blue, white, magenta, cyan.
+_TERMINAL_PALETTE = _palette(
+    "#FB8B1E", "#4AF626", "#FF433D", "#3DA5FF", "#E6E6E6", "#FF5FD2", "#0FF0FC"
+)
+
+#: Faces named in order of preference; whatever is not installed is skipped at export time,
+#: and the last entry of each ships with matplotlib, so the list always resolves.
+_SANS_FACES: Tuple[str, ...] = (
+    "Helvetica Neue",
+    "Helvetica",
+    "Arial",
+    "Liberation Sans",
+    "DejaVu Sans",
+)
+_MONO_FACES: Tuple[str, ...] = (
+    "JetBrains Mono",
+    "Fira Code",
+    "SF Mono",
+    "Menlo",
+    "Consolas",
+    "Liberation Mono",
+    "DejaVu Sans Mono",
+)
+
+
+_ROUNDED_FACES: Tuple[str, ...] = (
+    "Nunito",
+    "Varela Round",
+    "Quicksand",
+    "Avenir Next",
+    "Avenir",
+    *_SANS_FACES,
+)
+_HAND_FACES: Tuple[str, ...] = (
+    "Humor Sans",
+    "xkcd Script",
+    "Comic Neue",
+    "Comic Sans MS",
+    "Noteworthy",
+    "Chalkboard SE",
+    "DejaVu Sans",
+)
+
+#: A manuscript figure: an open frame (left and bottom), ticks out, no legend box.
+_JOURNAL_LOOK = ExportLook(
+    font_family=_SANS_FACES,
+    axes="open",
+    axis_width=1.2,
+    tick_length=6.0,
+    tick_direction="out",
+    legend_frame=False,
+)
+
+#: Read from the back of a room: thick open axes, big numbers, a bold title flush left.
+_TALK_LOOK = ExportLook(
+    font_family=_SANS_FACES,
+    axes="open",
+    axis_width=2.4,
+    tick_length=10.0,
+    tick_label_size=28.0,
+    label_size=32.0,
+    title_loc="left",
+    title_weight="bold",
+    title_size=44.0,
+    legend_frame=False,
+)
+
+
+def _screen_look(muted: RGB, grid: Optional[RGB]) -> ExportLook:
+    """A dark screen page: an open frame and numbers in a quieter tone than the data, the
+    preset's own grid colour when the grid is on, the title flush left."""
+    return ExportLook(
+        font_family=_SANS_FACES,
+        axes="open",
+        axis_color=muted,
+        label_color=muted,
+        grid_color=grid,
+        grid_alpha=0.35,
+        tick_length=6.0,
+        title_loc="left",
+        legend_frame=False,
+    )
+
+
+def _hand_look(
+    faces: Tuple[str, ...], sketch: Tuple[float, float, float], width: float, **extra: Any
+) -> ExportLook:
+    """Drawn by hand: a handwriting face, open axes, every stroke wobbling a little."""
+    return ExportLook(
+        font_family=faces,
+        axes="open",
+        axis_width=width,
+        tick_length=8.0,
+        sketch=sketch,
+        title_loc="left",
+        legend_frame=False,
+        **extra,
+    )
+
+
+def _editor_look(muted: RGB, grid: RGB) -> ExportLook:
+    """A code editor theme as a figure: the editor's monospace face, an open frame and a
+    dotted grid in the theme's own comment colour, a bold title flush left."""
+    return ExportLook(
+        font_family=_MONO_FACES,
+        axes="open",
+        axis_color=muted,
+        label_color=muted,
+        grid_color=grid,
+        grid_alpha=0.7,
+        grid_style=":",
+        grid_width=1.2,
+        tick_length=6.0,
+        title_loc="left",
+        title_weight="bold",
+        title_size=34.0,
+        legend_frame=False,
+    )
+
+
 # -- shared 3D decorations -----------------------------------------------------------
 # Named rather than repeated, because these are three *policies* and the presets that share
 # one should visibly share it.
@@ -780,6 +1032,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_TECHNICAL,
+        export_look=_JOURNAL_LOOK,
     ),
     PlotStyle(
         # FOR: a figure that has to work for a reader with a colour-vision deficiency, and
@@ -844,6 +1097,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         # No shaded floor: on a greyscale printer the floor is a flat grey wash that eats
         # the value range the palette is using to keep the series apart.
         axes3d=_AXES3D_TECHNICAL,
+        export_look=_JOURNAL_LOOK,
     ),
     PlotStyle(
         # FOR: a lit room and a projector. Every dimension is pushed one step past what
@@ -880,6 +1134,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_PRESENTATION,
+        export_look=_TALK_LOOK,
     ),
     PlotStyle(
         # FOR: the same room with the lights down, and for a dark slide template. Identical
@@ -918,6 +1173,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_PRESENTATION,
+        export_look=_TALK_LOOK,
     ),
     PlotStyle(
         key="dark",
@@ -939,6 +1195,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_DEFAULT,
+        export_look=_screen_look(muted=_rgb("#9AA3B2"), grid=None),
     ),
     PlotStyle(
         # FOR: the plot you keep open all day beside an editor. Dark is a *page*; this is a
@@ -971,6 +1228,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_DEFAULT,
+        export_look=_editor_look(muted=_rgb("#9DA5B4"), grid=_rgb("#4B5263")),
     ),
     PlotStyle(
         # FOR: a million points, where the answer is the shape of the cloud and not any one
@@ -1050,6 +1308,21 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_TECHNICAL,
+        export_look=ExportLook(
+            font_family=("Osifont", "ISOCPEUR", "Andale Mono", *_MONO_FACES),
+            axes="box",
+            axis_color=_rgb("#CFE3F7"),
+            grid=True,
+            grid_color=_rgb("#9ECCF2"),
+            grid_alpha=0.30,
+            grid_width=1.0,
+            faded_lines=5,
+            label_color=_rgb("#CFE3F7"),
+            tick_length=6.0,
+            tick_direction="in",
+            title_loc="left",
+            legend_frame=False,
+        ),
     ),
     PlotStyle(
         key="minimal",
@@ -1075,6 +1348,19 @@ STYLES: Tuple[PlotStyle, ...] = (
         # the wall grids and the tick numbers and keeps the box, which is the only depth cue
         # a 3D scene has.
         axes3d=_AXES3D_BARE,
+        export_look=ExportLook(
+            font_family=_SANS_FACES,
+            axes="none",
+            grid=True,
+            grid_axis="y",
+            grid_color=_rgb("#D8DEE9"),
+            grid_alpha=1.0,
+            grid_width=1.0,
+            tick_length=0.0,
+            label_color=_rgb("#4C566A"),
+            title_loc="left",
+            legend_frame=False,
+        ),
     ),
     PlotStyle(
         key="chalk",
@@ -1102,6 +1388,21 @@ STYLES: Tuple[PlotStyle, ...] = (
         # Chalk keeps the full box: the whole look is *drawn on a surface*, and the floor
         # and wall grids are what make a 3D scene read as drawn on one rather than floating.
         axes3d=_AXES3D_DEFAULT,
+        export_look=_hand_look(
+            (
+                "Chalkboard SE",
+                "Chalkboard",
+                "Chalkduster",
+                "Comic Neue",
+                "Comic Sans MS",
+                "DejaVu Sans",
+            ),
+            sketch=(1.0, 80.0, 2.0),
+            width=2.2,
+            axis_color=_rgb("#E8E4DA"),
+            label_color=_rgb("#DCD8CC"),
+            title_family=("Chalkduster", "Chalkboard SE", "Comic Sans MS", "DejaVu Sans"),
+        ),
     ),
     PlotStyle(
         # FOR: the whiteboard-sketch look — a quick, bold explanation, the kind drawn in a
@@ -1140,6 +1441,18 @@ STYLES: Tuple[PlotStyle, ...] = (
         # A whiteboard sketch is drawn on a blank board: keep the box for depth, drop the
         # ruled walls and the numbers, exactly as the 2D half drops its grid and frame.
         axes3d=_AXES3D_BARE,
+        export_look=_hand_look(
+            (
+                "Marker Felt",
+                "Permanent Marker",
+                "Chalkboard SE",
+                "Comic Neue",
+                "Comic Sans MS",
+                "DejaVu Sans",
+            ),
+            sketch=(0.8, 120.0, 2.0),
+            width=2.6,
+        ),
     ),
     PlotStyle(
         key="hand",
@@ -1168,6 +1481,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         # The jitter is a 2D transform, so the 3D half of this look is carried entirely by
         # what it leaves out: paper, a bare box, no ruled walls.
         axes3d=_AXES3D_BARE,
+        export_look=_hand_look(_HAND_FACES, sketch=(1.0, 100.0, 2.0), width=2.0),
     ),
     PlotStyle(
         # FOR: the crayon-drawing look — loud, chunky and cheerful. It is Hand-drawn turned
@@ -1215,6 +1529,12 @@ STYLES: Tuple[PlotStyle, ...] = (
         hand_seed=11,
         # Same reasoning as Hand-drawn: paper, a bare box, no ruled walls.
         axes3d=_AXES3D_BARE,
+        export_look=_hand_look(
+            ("Comic Sans MS", "Comic Neue", "Chalkboard SE", "DejaVu Sans"),
+            sketch=(1.6, 70.0, 3.0),
+            width=3.0,
+            title_weight="bold",
+        ),
     ),
     PlotStyle(
         key="neon",
@@ -1239,6 +1559,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=True, threshold=0.50, intensity=0.95, radius_px=10.0, knee=0.55),
         tonemap=TONEMAP_ACES,
         axes3d=_AXES3D_DEFAULT,
+        export_look=_screen_look(muted=_rgb("#8FA8C8"), grid=None),
     ),
     PlotStyle(
         # FOR: a developer who already lives in Solarized — vim, tmux, a terminal — and
@@ -1273,6 +1594,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_DEFAULT,
+        export_look=_editor_look(muted=_rgb("#839496"), grid=_rgb("#586E75")),
     ),
     PlotStyle(
         # FOR: the look this build's audience will recognise on sight — Dracula is one of
@@ -1307,6 +1629,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_DEFAULT,
+        export_look=_editor_look(muted=_rgb("#A0A8CD"), grid=_rgb("#44475A")),
     ),
     PlotStyle(
         # FOR: the "retro groove" look, warm where every other dark preset here is cool —
@@ -1341,6 +1664,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_DEFAULT,
+        export_look=_editor_look(muted=_rgb("#A89984"), grid=_rgb("#504945")),
     ),
     PlotStyle(
         # FOR: the figure that has to stop someone scrolling. A polar-night gradient, light
@@ -1373,6 +1697,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=True, threshold=0.38, intensity=0.95, radius_px=14.0, knee=0.6),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_PRESENTATION,
+        export_look=_screen_look(muted=_rgb("#9FC9D2"), grid=_rgb("#73BFCC")),
     ),
     PlotStyle(
         # FOR: the cover slide, the poster, the figure whose job is atmosphere. Hot magenta
@@ -1405,6 +1730,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=True, threshold=0.50, intensity=0.95, radius_px=15.0, knee=0.5),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_PRESENTATION,
+        export_look=_screen_look(muted=_rgb("#D9A6E6"), grid=_rgb("#F240BF")),
     ),
     PlotStyle(
         # FOR: a warm presentation page that is not a white rectangle. A plum-to-ember
@@ -1437,6 +1763,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_PRESENTATION,
+        export_look=_screen_look(muted=_rgb("#E6BFAE"), grid=_rgb("#FFBFA6")),
     ),
     PlotStyle(
         # FOR: the cool counterpart to Sunset -- deep water fading to teal, with aqua and
@@ -1469,6 +1796,7 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_PRESENTATION,
+        export_look=_screen_look(muted=_rgb("#A6D3E0"), grid=_rgb("#8CD9F2")),
     ),
     PlotStyle(
         # FOR: the figure that should look printed a long time ago -- an essay, a history of
@@ -1503,6 +1831,22 @@ STYLES: Tuple[PlotStyle, ...] = (
         tonemap=TONEMAP_NONE,
         grain=0.08,
         axes3d=_AXES3D_TECHNICAL,
+        export_look=ExportLook(
+            font_family=(
+                "Baskerville",
+                "Iowan Old Style",
+                "Hoefler Text",
+                "Georgia",
+                "Liberation Serif",
+                "DejaVu Serif",
+            ),
+            axes="box",
+            axis_color=(0.19, 0.13, 0.10),
+            axis_width=1.2,
+            tick_length=6.0,
+            tick_direction="in",
+            label_color=_rgb("#4A3A2E"),
+        ),
     ),
     PlotStyle(
         # FOR: a friendly, high-energy page -- a workshop handout, a product dashboard, a
@@ -1538,6 +1882,22 @@ STYLES: Tuple[PlotStyle, ...] = (
         glow=GlowSettings(enabled=False),
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_DEFAULT,
+        export_look=ExportLook(
+            font_family=_ROUNDED_FACES,
+            axes="bottom",
+            axis_color=_rgb("#B98AB8"),
+            axis_width=2.0,
+            grid=True,
+            grid_axis="y",
+            grid_color=_rgb("#F0DDEB"),
+            grid_alpha=1.0,
+            grid_width=1.4,
+            tick_length=0.0,
+            label_color=_rgb("#7A5C86"),
+            title_loc="left",
+            title_weight="bold",
+            legend_frame=False,
+        ),
     ),
     PlotStyle(
         # FOR: the explainer -- an idea built up on screen one step at a time, the way
@@ -1574,10 +1934,11 @@ STYLES: Tuple[PlotStyle, ...] = (
         tonemap=TONEMAP_NONE,
         axes3d=_AXES3D_PRESENTATION,
         export_look=ExportLook(
-            # LaTeX's own text faces when installed; matplotlib's Computer Modern (cmr10) is
-            # left out on purpose: it has no accents, and the text around a $...$ formula is
-            # set in the first face with no fallback, so "café" would lose its accent.
-            font_family=("Latin Modern Roman", "CMU Serif", "DejaVu Serif"),
+            # LaTeX's own text faces when installed, else matplotlib's Computer Modern (cmr10,
+            # shipped with matplotlib, so the LaTeX look is there on every machine). cmr10 has
+            # no accents or dashes and draws < > { } | _ \ as other glyphs; the export writes
+            # those as maths (preview._cm_safe), and DejaVu Serif fills in the rest.
+            font_family=("Latin Modern Roman", "CMU Serif", "cmr10", "DejaVu Serif"),
             math_fontset="cm",
             axes="cross",
             arrow_tips=True,
@@ -1586,6 +1947,500 @@ STYLES: Tuple[PlotStyle, ...] = (
             grid_width=1.2,
             faded_lines=4,
             tick_label_size=18.0,
+        ),
+    ),
+    # ---- looks borrowed from creators, newsrooms and design systems -----------------------
+    # Each is an unaffiliated tribute to a famous look, built from its public colours and
+    # habits; none carries a logo or a name on the picture.
+    PlotStyle(
+        # FOR: the science explainer with a cartoon's warmth, as Kurzgesagt's videos draw
+        # it: flat shapes in saturated sky, pink and sunflower on a deep-space blue, thick
+        # rounded strokes, big markers, rounded type, and nothing on screen that is not the
+        # idea -- no box, a whisper of a grid.
+        #
+        # SACRIFICES: precision and print. Fat strokes hide fine structure and the page is
+        # a screen colour; for a paper, use Journal.
+        key="kurzgesagt",
+        name="Kurzgesagt",
+        description="Flat, vivid colours on deep-space blue, like Kurzgesagt's animations.",
+        background=_rgb("#11163A"),
+        gradient=(_rgb("#0B0F2E"), _rgb("#1D2457")),
+        palette=_KURZGESAGT_PALETTE,
+        ink=(0.957, 0.965, 1.0, 1.0),
+        line_width=3.4,
+        point_size=11.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.10,
+        grid_color=_rgb("#8C93D9"),
+        ticks=TickSettings(show=False, length_px=4.0),
+        colormap_index=6,  # Magma: the nearest GPU ramp to the kurzgesagt one
+        cmap="kurzgesagt",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_BARE,
+        export_look=ExportLook(
+            font_family=(
+                "Nunito",
+                "Varela Round",
+                "Quicksand",
+                "Avenir Next",
+                "Avenir",
+                *_SANS_FACES,
+            ),
+            axes="bottom",
+            axis_color=_rgb("#8C93D9"),
+            axis_width=2.4,
+            grid=True,
+            grid_axis="y",
+            grid_color=_rgb("#8C93D9"),
+            grid_alpha=0.22,
+            grid_width=1.2,
+            tick_length=0.0,
+            label_color=_rgb("#B9BEEA"),
+            title_loc="left",
+            title_weight="bold",
+            title_size=36.0,
+            legend_frame=False,
+        ),
+    ),
+    PlotStyle(
+        # FOR: the chart that has to be read in five seconds by someone who did not ask for
+        # it, the way The Economist sets them: a red tag above a bold title flush left,
+        # horizontal rules only, the values on the right where the eye lands after the
+        # line, a dark baseline and no other frame.
+        #
+        # SACRIFICES: a second y axis and anything vertical -- the look is built for one
+        # quantity over time.
+        key="economist",
+        name="The Economist",
+        description="Newsroom chart: red tag, bold title, rules only, numbers on the right.",
+        background=(1.0, 1.0, 1.0),
+        palette=_ECONOMIST_PALETTE,
+        ink=(0.047, 0.047, 0.047, 1.0),
+        line_width=2.6,
+        point_size=7.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.30,
+        grid_color=_rgb("#B7C6CF"),
+        ticks=TickSettings(show=True, length_px=5.0),
+        colormap_index=0,
+        cmap="Blues",
+        light_bg_mode=True,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_TECHNICAL,
+        export_look=ExportLook(
+            font_family=("Econ Sans", "Milo", *_SANS_FACES),
+            axes="bottom",
+            axis_color=(0.047, 0.047, 0.047),
+            axis_width=1.8,
+            grid=True,
+            grid_axis="y",
+            grid_color=_rgb("#B7C6CF"),
+            grid_alpha=1.0,
+            grid_width=1.2,
+            ytick_side="right",
+            ytick_on_rule=True,
+            tick_length=7.0,
+            label_color=(0.20, 0.20, 0.20),
+            title_loc="left",
+            title_weight="bold",
+            title_size=34.0,
+            legend_frame=False,
+            top_rule=_rgb("#E3120B"),
+        ),
+    ),
+    PlotStyle(
+        # FOR: the markets page. The Financial Times' salmon paper, its oxford blue and
+        # claret, a serif headline over sans-serif numbers, rules across and nothing else.
+        #
+        # SACRIFICES: the page is a colour, so a figure pasted onto white looks like a
+        # clipping (which, for this look, is the point).
+        key="ft",
+        name="Financial Times",
+        description="Salmon paper, oxford blue and claret, serif headline: the FT's charts.",
+        background=_rgb("#FFF1E5"),
+        palette=_FT_PALETTE,
+        ink=(0.200, 0.188, 0.180, 1.0),
+        line_width=2.4,
+        point_size=7.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.30,
+        grid_color=_rgb("#CEC6B9"),
+        ticks=TickSettings(show=True, length_px=5.0),
+        colormap_index=5,  # Ink Fire (White BG): ink on paper
+        cmap="claret",
+        light_bg_mode=True,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_TECHNICAL,
+        export_look=ExportLook(
+            font_family=("Metric", "Metric Web", *_SANS_FACES),
+            title_family=(
+                "Financier Display",
+                "Georgia",
+                "Times New Roman",
+                "Liberation Serif",
+                "DejaVu Serif",
+            ),
+            axes="bottom",
+            axis_color=(0.200, 0.188, 0.180),
+            axis_width=1.4,
+            grid=True,
+            grid_axis="y",
+            grid_color=_rgb("#E3D6C9"),
+            grid_alpha=1.0,
+            grid_width=1.2,
+            tick_length=6.0,
+            label_color=_rgb("#66605C"),
+            title_loc="left",
+            title_size=38.0,
+            legend_frame=False,
+        ),
+    ),
+    PlotStyle(
+        # FOR: the data-journalism look matplotlib itself ships as ``fivethirtyeight``: a
+        # grey page, a heavy grid, thick lines, a bold title flush left and no frame at all.
+        #
+        # SACRIFICES: subtlety. The grid is loud on purpose and the strokes are 4px, so a
+        # dozen series turn into a wall; it is for three or four.
+        key="fivethirtyeight",
+        name="FiveThirtyEight",
+        description="Grey page, bold grid, thick lines: the FiveThirtyEight chart look.",
+        background=_rgb("#F0F0F0"),
+        palette=_FIVETHIRTYEIGHT_PALETTE,
+        ink=(0.133, 0.133, 0.133, 1.0),
+        line_width=4.0,
+        point_size=9.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.35,
+        grid_color=_rgb("#CBCBCB"),
+        ticks=TickSettings(show=False, length_px=4.0),
+        colormap_index=3,
+        cmap="viridis",
+        light_bg_mode=True,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_PRESENTATION,
+        export_look=ExportLook(
+            font_family=("Atlas Grotesk", *_SANS_FACES),
+            axes="none",
+            grid=True,
+            grid_color=_rgb("#CBCBCB"),
+            grid_alpha=1.0,
+            grid_width=1.6,
+            tick_length=0.0,
+            label_color=(0.30, 0.30, 0.30),
+            title_loc="left",
+            title_weight="bold",
+            title_size=38.0,
+            legend_frame=False,
+        ),
+    ),
+    PlotStyle(
+        # FOR: anyone who learnt to plot in R. ggplot2's theme_grey: a grey panel ruled with
+        # white major and fainter minor lines, no frame, grey axis text, black for a single
+        # series and its evenly spaced hues for groups.
+        #
+        # SACRIFICES: a little contrast -- the grey panel lowers it for every colour, which
+        # is why one series is black.
+        key="ggplot",
+        name="ggplot2",
+        description="R's ggplot2: a grey panel ruled in white, evenly spaced hues for groups.",
+        background=_rgb("#EBEBEB"),
+        palette=_GGPLOT_PALETTE,
+        ink=(0.102, 0.102, 0.102, 1.0),
+        line_width=1.8,
+        point_size=7.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.35,
+        grid_color=(1.0, 1.0, 1.0),
+        ticks=TickSettings(show=True, length_px=4.0),
+        colormap_index=0,
+        cmap="ggblue",
+        light_bg_mode=True,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_DEFAULT,
+        export_look=ExportLook(
+            font_family=_SANS_FACES,
+            axes="none",
+            grid=True,
+            grid_color=(1.0, 1.0, 1.0),
+            grid_alpha=1.0,
+            grid_width=1.8,
+            faded_lines=2,
+            faded_alpha=1.0,
+            tick_length=6.0,
+            axis_color=(0.20, 0.20, 0.20),
+            label_color=(0.30, 0.30, 0.30),
+            page_color=(1.0, 1.0, 1.0),
+            title_loc="left",
+            title_size=34.0,
+            legend_frame=False,
+        ),
+    ),
+    PlotStyle(
+        # FOR: the figure as Edward Tufte would print it: ivory paper, a book face, almost
+        # all ink spent on data -- no grid, no box, and a range frame whose axis lines run
+        # only as far as the scale does, set apart from the data.
+        #
+        # SACRIFICES: nothing a reader needs, which is the argument; but a dense plot with
+        # no grid asks for direct labels rather than a legend.
+        key="tufte",
+        name="Tufte",
+        description="Edward Tufte's minimalism: ivory page, book face, range frame, no grid.",
+        background=_rgb("#FFFFF8"),
+        palette=_TUFTE_PALETTE,
+        ink=(0.067, 0.067, 0.067, 1.0),
+        line_width=1.4,
+        point_size=5.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=False,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.10,
+        grid_color=None,
+        ticks=TickSettings(show=True, length_px=6.0),
+        colormap_index=5,
+        cmap="Greys",
+        light_bg_mode=True,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_BARE,
+        export_look=ExportLook(
+            font_family=(
+                "ET Book",
+                "ETBembo",
+                "Palatino",
+                "Palatino Linotype",
+                "Book Antiqua",
+                "TeX Gyre Pagella",
+                "Georgia",
+                "DejaVu Serif",
+            ),
+            axes="open",
+            range_frame=True,
+            axis_width=1.0,
+            tick_length=7.0,
+            label_color=(0.25, 0.25, 0.25),
+            title_loc="left",
+            title_size=34.0,
+            legend_frame=False,
+        ),
+    ),
+    PlotStyle(
+        # FOR: the developer whose editor, terminal and slides are already Nord: its Polar
+        # Night page, Frost and Aurora accents at their published values, the editor's own
+        # monospace face and a dotted grid in the comment colour.
+        #
+        # SACRIFICES: Nord is deliberately low in contrast and chroma; a busy plot wants
+        # outlines or direct labels.
+        key="nord",
+        name="Nord",
+        description="Arctic dark theme: polar-night page, frost and aurora accents.",
+        background=_rgb("#2E3440"),
+        palette=_NORD_PALETTE,
+        ink=_rgba("#ECEFF4"),
+        line_width=2.0,
+        point_size=6.5,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.22,
+        grid_color=_rgb("#4C566A"),
+        colormap_index=8,  # Ocean: the nearest GPU ramp to Frost
+        cmap="frost",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_DEFAULT,
+        export_look=_editor_look(muted=_rgb("#A3ABBA"), grid=_rgb("#4C566A")),
+    ),
+    PlotStyle(
+        # FOR: Catppuccin's audience -- one of the most-ported themes there is. Mocha, the
+        # darkest flavour: a soft mocha page with pastel blue, peach and mauve.
+        #
+        # SACRIFICES: pastels are close in lightness, so greyscale loses them; Print is the
+        # preset for a photocopier.
+        key="catppuccin",
+        name="Catppuccin Mocha",
+        description="Soothing pastel dark theme: blue, peach and mauve on a mocha base.",
+        background=_rgb("#1E1E2E"),
+        palette=_CATPPUCCIN_PALETTE,
+        ink=_rgba("#CDD6F4"),
+        line_width=2.0,
+        point_size=6.5,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.25,
+        grid_color=_rgb("#45475A"),
+        colormap_index=6,
+        cmap="mocha",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_DEFAULT,
+        export_look=_editor_look(muted=_rgb("#A6ADC8"), grid=_rgb("#45475A")),
+    ),
+    PlotStyle(
+        # FOR: Tokyo Night's neon-after-dark palette: a deep indigo page with a soft blue,
+        # orange and green, the theme a large share of editor screenshots now wear.
+        #
+        # SACRIFICES: blue and cyan are neighbours; they are kept first and sixth.
+        key="tokyonight",
+        name="Tokyo Night",
+        description="Deep indigo night with soft neon accents: blue, orange, green, magenta.",
+        background=_rgb("#1A1B26"),
+        palette=_TOKYONIGHT_PALETTE,
+        ink=_rgba("#C0CAF5"),
+        line_width=2.0,
+        point_size=6.5,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.25,
+        grid_color=_rgb("#3B4261"),
+        colormap_index=8,
+        cmap="tokyo",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_DEFAULT,
+        export_look=_editor_look(muted=_rgb("#7982A9"), grid=_rgb("#3B4261")),
+    ),
+    PlotStyle(
+        # FOR: a dashboard or an app screen. Google's Material Design: a grey-50 page, bold
+        # 600 hues, quiet grey labels, hairline rules, no frame but the baseline.
+        #
+        # SACRIFICES: it reads as product UI; in a paper it looks like a screenshot.
+        key="material",
+        name="Material",
+        description="Material Design: grey-50 page, bold primary hues, hairline rules.",
+        background=_rgb("#FAFAFA"),
+        palette=_MATERIAL_PALETTE,
+        ink=_rgba("#212121"),
+        line_width=2.6,
+        point_size=8.0,
+        point_outline=True,
+        point_outline_color=(1.0, 1.0, 1.0, 1.0),
+        point_outline_width=1.0,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=False,
+        show_labels=True,
+        grid_alpha=0.30,
+        grid_color=_rgb("#E0E0E0"),
+        ticks=TickSettings(show=False, length_px=4.0),
+        colormap_index=1,
+        cmap="viridis",
+        light_bg_mode=True,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_PRESENTATION,
+        export_look=ExportLook(
+            font_family=("Roboto", "Google Sans", *_SANS_FACES),
+            axes="bottom",
+            axis_color=_rgb("#9E9E9E"),
+            axis_width=1.2,
+            grid=True,
+            grid_axis="y",
+            grid_color=_rgb("#E0E0E0"),
+            grid_alpha=1.0,
+            grid_width=1.2,
+            tick_length=0.0,
+            label_color=_rgb("#757575"),
+            title_loc="left",
+            title_size=34.0,
+            legend_frame=False,
+        ),
+    ),
+    PlotStyle(
+        # FOR: prices, order books, anything live and financial: a black screen, amber
+        # type and amber lines, green for up and red for down, a dotted grid, the price
+        # scale on the right and one monospace face for everything.
+        #
+        # SACRIFICES: colour-blind readers lose the green/red pair, the classic market
+        # convention's own flaw; a label on each series fixes it.
+        key="terminal",
+        name="Market Terminal",
+        description="Black screen, amber type, green and red: a market-data terminal.",
+        background=_rgb("#050505"),
+        palette=_TERMINAL_PALETTE,
+        ink=_rgba("#FFA028"),
+        line_width=1.8,
+        point_size=5.5,
+        blend_mode=BlendMode.ALPHA,
+        antialiasing=True,
+        global_alpha=1.0,
+        show_grid=True,
+        show_frame=True,
+        show_labels=True,
+        grid_alpha=0.25,
+        grid_color=_rgb("#5A4A30"),
+        ticks=TickSettings(show=True, length_px=4.0),
+        colormap_index=9,  # Hot
+        cmap="amber",
+        light_bg_mode=False,
+        glow=GlowSettings(enabled=False),
+        tonemap=TONEMAP_NONE,
+        axes3d=_AXES3D_TECHNICAL,
+        export_look=ExportLook(
+            font_family=("IBM Plex Mono", *_MONO_FACES),
+            axes="box",
+            axis_color=_rgb("#5A4A30"),
+            grid=True,
+            grid_color=_rgb("#5A4A30"),
+            grid_alpha=0.9,
+            grid_style=":",
+            grid_width=1.0,
+            ytick_side="right",
+            tick_length=5.0,
+            label_color=_rgb("#FFA028"),
+            title_loc="left",
+            title_weight="bold",
+            title_size=32.0,
+            legend_frame=False,
         ),
     ),
 )
@@ -1601,6 +2456,125 @@ _BY_KEY: Dict[str, PlotStyle] = {s.key: s for s in STYLES}
 def get_style(key: str) -> PlotStyle:
     """The preset named ``key``. Raises ``KeyError`` on an unknown key — never guesses."""
     return _BY_KEY[str(key)]
+
+
+#: The presets by the job they do, in the order a reader looks for one. Every key is in
+#: exactly one group (a test holds the registry to it), so a catalogue generated from this --
+#: the MCP tool descriptions, the LLM guide, the styles resource -- is always complete.
+STYLE_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("paper", ("clean", "journal", "colorsafe", "print", "tufte")),
+    ("talks", ("slide", "stage")),
+    ("notebooks and dashboards", ("ggplot", "material", "minimal", "dark", "dense")),
+    ("explainer videos", ("3b1b", "kurzgesagt")),
+    ("newsroom charts", ("economist", "ft", "fivethirtyeight", "terminal")),
+    (
+        "editor themes",
+        ("ide", "solarized", "dracula", "gruvbox", "nord", "catppuccin", "tokyonight"),
+    ),
+    ("drawing board", ("blueprint", "chalk", "marker", "hand", "kids")),
+    ("moods", ("neon", "aurora", "synthwave", "sunset", "ocean", "vintage", "candy")),
+)
+
+#: Other names people use for a look. Keys, names and these are matched ignoring case,
+#: spaces and punctuation (:func:`resolve_style_key`), so "Tokyo Night", "the economist" and
+#: "3Blue1Brown" need no entry here.
+STYLE_ALIASES: Dict[str, str] = {
+    "538": "fivethirtyeight",
+    "manim": "3b1b",
+    "3brown1blue": "3b1b",
+    "financialtimes": "ft",
+    "onedark": "ide",
+    "workstation": "ide",
+    "xkcd": "hand",
+    "sketch": "hand",
+    "chalkboard": "chalk",
+    "whiteboard": "marker",
+    "crayon": "kids",
+    "bloomberg": "terminal",
+    "trading": "terminal",
+    "mocha": "catppuccin",
+    "tokyo": "tokyonight",
+    "r": "ggplot",
+    "seaborn": "ggplot",
+    "googlematerial": "material",
+    "publication": "journal",
+    "paper": "journal",
+    "presentation": "slide",
+    "projector": "slide",
+    "colorblind": "colorsafe",
+    "colourblind": "colorsafe",
+    "colourblindsafe": "colorsafe",
+    "colorblindsafe": "colorsafe",
+    "greyscale": "print",
+    "grayscale": "print",
+}
+
+
+def _fold(name: str) -> str:
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
+def resolve_style_key(name: str) -> Optional[str]:
+    """The preset key ``name`` refers to: a key, a preset's name or a known alias, matched
+    ignoring case, spaces and punctuation -- or None. ``"The Economist"``, ``"538"``,
+    ``"Tokyo Night"`` and ``"manim"`` all resolve; a typo does not (callers suggest instead).
+    """
+    folded = _fold(name)
+    if not folded:
+        return None
+    for style in STYLES:
+        if folded in (_fold(style.key), _fold(style.name)):
+            return style.key
+    if folded.startswith("the") and folded[3:]:
+        stripped = resolve_style_key(folded[3:])
+        if stripped:
+            return stripped
+    alias = STYLE_ALIASES.get(folded)
+    return alias if alias in _BY_KEY else None
+
+
+def style_catalogue(compact: bool = False) -> str:
+    """The presets by group, as text: ``"paper: clean, journal, ..."`` lines, or with each
+    preset's one-line description when ``compact`` is False."""
+    lines = []
+    for group, keys in STYLE_GROUPS:
+        if compact:
+            lines.append(f"{group}: {', '.join(keys)}")
+        else:
+            lines.append(f"{group}:")
+            lines.extend(f"  {k} -- {_BY_KEY[k].description}" for k in keys)
+    return ("; " if compact else "\n").join(lines)
+
+
+def export_summary(style: PlotStyle) -> str:
+    """What an exported picture of ``style`` looks like, in a phrase (for a model telling a
+    user what it just applied); empty when the preset shapes nothing beyond the colours."""
+    look = style.export_look
+    if look is None:
+        return ""
+    axes = {
+        "box": "a framed box",
+        "open": "left and bottom axis lines only",
+        "bottom": "a baseline only",
+        "none": "no axis lines",
+        "cross": "axis lines crossing at the origin with tips",
+    }[look.axes]
+    parts = [axes]
+    if look.range_frame:
+        parts.append("a range frame")
+    if look.grid:
+        parts.append({"y": "horizontal rules", "x": "vertical rules"}.get(look.grid_axis, "a grid"))
+    if look.ytick_side == "right":
+        parts.append("y numbers on the right")
+    if look.title_loc == "left":
+        parts.append(("a bold " if look.title_weight == "bold" else "a ") + "title flush left")
+    if look.top_rule is not None:
+        parts.append("a coloured tag above the title")
+    if look.math_fontset == "cm":
+        parts.append("LaTeX-style text and maths")
+    if look.panel_color is not None or look.page_color is not None:
+        parts.append("a plotting panel of its own colour")
+    return ", ".join(parts)
 
 
 # ----------------------------------------------------------------------------------

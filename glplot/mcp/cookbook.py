@@ -492,6 +492,72 @@ COOKBOOK: Tuple[Recipe, ...] = (
         ),
     ),
     Recipe(
+        "newsroom_chart",
+        "A newsroom chart that tells its story: two series draw in, then the call-out",
+        "A look asked for by name (`style='The Economist'`: red tag, bold title flush left, "
+        "horizontal rules, numbers on the right) and a legend moved off the data "
+        "(`legend_loc`). Fixed limits keep the axes still while the lines `create` themselves; "
+        "the call-out fades in once both are drawn. Any newsroom or editor look works the same "
+        "way: 'ft', 'fivethirtyeight', 'ggplot', 'tufte', 'nord'...",
+        (
+            ("create_figure", {"width": 1000, "height": 600, "style": "The Economist"}),
+            (
+                "add_plot",
+                {
+                    "figure_id": "fig1",
+                    "kind": "line",
+                    "x": list(range(1, 25)),
+                    "y": [35.4, 39.8, 44.5, 46.3, 52.3, 53.6, 54.8, 53.0, 52.5, 47.6, 50.7, 50.2,
+                          49.5, 54.8, 58.7, 59.6, 66.5, 66.7, 67.6, 66.1, 64.6, 63.5, 62.5, 60.5],
+                    "label": "Classic",
+                },
+            ),  # fmt: skip
+            (
+                "add_plot",
+                {
+                    "figure_id": "fig1",
+                    "kind": "line",
+                    "x": list(range(1, 25)),
+                    "y": [28.6, 30.4, 34.4, 39.7, 44.9, 47.1, 46.9, 47.5, 47.7, 49.4, 51.4, 51.6,
+                          55.2, 58.1, 63.8, 62.4, 65.6, 71.1, 74.0, 73.2, 74.7, 72.6, 73.3, 75.7],
+                    "label": "Pro",
+                },
+            ),  # fmt: skip
+            (
+                "set_axes",
+                {
+                    "figure_id": "fig1",
+                    "title": "Pro overtook Classic in month 10",
+                    "xlabel": "month",
+                    "ylabel": "units sold (thousands)",
+                    "xlim": [0, 25],
+                    "ylim": [20, 80],
+                    "legend_loc": "upper left",
+                },
+            ),
+            (
+                "add_annotation",
+                {
+                    "figure_id": "fig1",
+                    "kind": "text",
+                    "text": "Pro overtakes",
+                    "x": 10.6,
+                    "y": 41.0,
+                    "fontsize": 18,
+                },
+            ),
+            _animate(
+                output="newsroom.gif",
+                fps=12,
+                stages=[
+                    {"name": "lines draw", "duration": 2.5, "effects": {"create": ["a1", "a2"]}},
+                    {"name": "call-out", "duration": 0.8, "effects": {"fade_in": "a3"}},
+                    {"name": "hold", "duration": 1.2},
+                ],
+            ),
+        ),
+    ),
+    Recipe(
         "explainer_3b1b",
         "A 3Blue1Brown-style explainer: the derivative is a slope, built up step by step",
         "Stage `effects` play like a manim scene: the curve is drawn (`create`), the title is "

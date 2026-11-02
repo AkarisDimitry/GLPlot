@@ -64,6 +64,34 @@ CUSTOM_COLORMAPS: Dict[str, Tuple[RGB, ...]] = {
     "candy": tuple(
         _hex(c) for c in ("#fff1f7", "#ffb3d1", "#ff6fa6", "#d6308a", "#7d1f8e", "#2c1763")
     ),
+    # Deep space to a sunlit planet, for the Kurzgesagt look: night blue, indigo, violet,
+    # hot pink, orange, pale gold.
+    "kurzgesagt": tuple(
+        _hex(c) for c in ("#11163A", "#33287A", "#7B3FA8", "#E0457B", "#FF9F45", "#FFE29A")
+    ),
+    # Salmon paper down to claret ink, for the Financial Times look (a light-page ramp).
+    "claret": tuple(
+        _hex(c) for c in ("#FFF1E5", "#F2C7AE", "#E0857A", "#B5345A", "#7A0F35", "#3D0A1E")
+    ),
+    # ggplot2's default continuous scale (#132B43 to #56B1F7), carried on to a pale sky so
+    # it spans enough lightness to read.
+    "ggblue": tuple(_hex(c) for c in ("#132B43", "#22496A", "#3A7DB0", "#56B1F7", "#BEE3FF")),
+    # Nord: polar night through the frost blues to snow storm.
+    "frost": tuple(
+        _hex(c) for c in ("#2E3440", "#3B4A63", "#5E81AC", "#81A1C1", "#88C0D0", "#ECEFF4")
+    ),
+    # Catppuccin Mocha: base, surface, mauve, pink, a cream yellow.
+    "mocha": tuple(
+        _hex(c) for c in ("#1E1E2E", "#45475A", "#9C7BD0", "#CBA6F7", "#F5C2E7", "#F9E2AF")
+    ),
+    # Tokyo Night: the night, its indigo and blues, cyan, then near-white.
+    "tokyo": tuple(
+        _hex(c) for c in ("#1A1B26", "#2F3B73", "#4C6BC8", "#7AA2F7", "#7DCFFF", "#E6EEFF")
+    ),
+    # A terminal's amber phosphor: black to amber to a pale glow.
+    "amber": tuple(
+        _hex(c) for c in ("#050505", "#3D1F00", "#8A4B00", "#FB8B1E", "#FFC46B", "#FFF1D6")
+    ),
 }
 
 _registered = False

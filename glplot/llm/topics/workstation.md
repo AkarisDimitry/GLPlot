@@ -8,7 +8,7 @@ advising a user:
 
 * **Data editor** -- a spreadsheet of datasets; plot columns as X/Y/Z, colour, size; derived columns from formulas
   (`a*x+b`) with live parameter sliders; undo history.
-* **Style panel** -- 25 style presets rendered as cards, per-layer plot type and options, colormaps.
+* **Style panel** -- 37 style presets rendered as cards, per-layer plot type and options, colormaps.
 * **Gallery** -- 22 recipes (plot kind + look): pick a card, map your columns, one undoable step.
 * **Math Lab** -- fitting, smoothing, filtering, FFT, histograms, PCA/UMAP and other transforms with confidence
   intervals, run in the background; trained models can be reused.

@@ -895,7 +895,7 @@ class _Script:
                 writer.call("plt.arrow", [a["x"], a["y"], Raw("_dx"), Raw("_dy")], kw)
 
     def op_set_style(self, writer: _Writer, op: Any, a: Dict[str, Any]) -> None:
-        writer.add(f"plt.plot_style({a['preset']!r})")
+        writer.add(f"plt.plot_style({(op.resolved.get('preset') or a['preset'])!r})")
 
     def op_set_axes(self, writer: _Writer, op: Any, a: Dict[str, Any]) -> None:
         panel = a.get("panel", 1)
@@ -917,7 +917,9 @@ class _Script:
                 writer.add(f"{fn}({_spread(a[key])})")
         if a.get("grid") is not None:
             writer.add(f"plt.grid({lit(bool(a['grid']))})")
-        if a.get("legend"):
+        if a.get("legend_loc"):
+            writer.add(f"plt.legend(loc={a['legend_loc']!r})")
+        elif a.get("legend"):
             writer.add("plt.legend()")
         elif a.get("legend") is False:
             writer.add("plt.legend()")

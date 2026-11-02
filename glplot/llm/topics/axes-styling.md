@@ -1,6 +1,6 @@
 # Axes, labels, scales and styling
 
-summary: Limits, scales, ticks, legends, twin axes, colorbars, colormaps and the 25 style presets.
+summary: Limits, scales, ticks, legends, twin axes, colorbars, colormaps and the 37 style presets.
 
 ## Labels, limits, ticks
 
@@ -44,13 +44,23 @@ Draw into the object `twinx()` returns. `twiny()` is the x version; `secondary_x
 ## Style presets
 
 `plt.plot_style("name")` restyles the **whole current figure** (page, palette, line width, grid and
-the colormap that goes with the look); call it before or after plotting. `plt.plot_styles()` returns
-`(key, title, description)` for every preset. The presets:
+the colormap that goes with the look); call it before or after plotting. Anything drawn afterwards
+without a colour takes the preset's palette (`scatter`, `bar`, `hist`, `fill_between` included), and
+reference lines, arrows and text take its ink; `"C0"`..`"C9"` name the preset's own colours. A key, a
+display name or a common alias works: `"economist"`, `"The Economist"`, `"538"`, `"Tokyo Night"`,
+`"manim"`. `plt.plot_styles()` returns `(key, title, description)` for every preset.
+
+When someone asks for a look by a person, publication or theme ("like a 3Blue1Brown video", "an
+Economist chart", "in Catppuccin"), use that preset. Several also shape the saved picture beyond its
+colours -- which axis lines there are, where the title sits, the grid, the faces -- as listed below.
+The presets, by use:
 
 {{styles}}
 
 Effects such as glow, SSAO depth shading and density tinting exist only in the live window; the
-saved file shows the colours, page and lines of the preset.
+saved file shows the page, colours, lines and, where listed, the preset's own axes and type. A face
+that is not installed falls back to the next one named (the last always ships with matplotlib), so a
+look exports everywhere; `3b1b` sets its text in matplotlib's own Computer Modern.
 
 ## Text size, fonts, rcParams
 

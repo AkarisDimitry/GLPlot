@@ -137,11 +137,17 @@ def _categories_list(extra: Sequence[Topic]) -> str:
 
 
 def _styles_list(extra: Sequence[Topic]) -> str:
-    from .. import pyplot
+    from ..gui import styles
 
-    return "\n".join(
-        f"* `{key}` -- {description}" for key, _title, description in pyplot.plot_styles()
-    )
+    lines = []
+    for group, keys in styles.STYLE_GROUPS:
+        lines.append(f"* **{group}**")
+        for key in keys:
+            style = styles.get_style(key)
+            summary = styles.export_summary(style)
+            exported = f" Exports with {summary}." if summary else ""
+            lines.append(f"  * `{key}` ({style.name}) -- {style.description}{exported}")
+    return "\n".join(lines)
 
 
 def _colormaps_list(extra: Sequence[Topic]) -> str:

@@ -211,7 +211,16 @@ def _normalize_rgba(
         base = np.asarray(default, dtype=np.float32)
     elif isinstance(color, str):
         key = color.lower()
-        if key in COLOR_MAP:
+        styled = (
+            _styled_cycle_entry(int(key[1:]))
+            if len(key) >= 2 and key[0] == "c" and key[1:].isdigit()
+            else None
+        )
+        if styled is not None:
+            from matplotlib.colors import to_rgba
+
+            base = np.asarray(to_rgba(styled), dtype=np.float32)
+        elif key in COLOR_MAP:
             base = np.asarray(COLOR_MAP[key], dtype=np.float32)
         else:
             try:
@@ -289,6 +298,47 @@ def _next_cycle_color(plot_obj: GPULinePlot) -> str:
     cycle = getattr(plot_obj, "_prop_cycle_colors", None) or _color_cycle()
     plot_obj._color_cycle_index = (idx + 1) % len(cycle)
     return cycle[idx % len(cycle)]
+
+
+def _styled_default(
+    plot_obj: GPULinePlot, given: Optional[ColorLike], fallback: ColorLike, role: str = "cycle"
+) -> ColorLike:
+    """The colour an artist is drawn in when the caller names none.
+
+    On an unstyled figure, GLPlot's historical default (``fallback``), unchanged. On a figure
+    given a style preset (:func:`plot_style`), the look's own: a data artist takes the next
+    palette colour, as matplotlib's colour cycle does under ``style.use``, and a reference
+    line, arrow or quiver (``role="ink"``) takes the preset's ink, which a black default
+    would make vanish on a dark page. A translucent fallback keeps its alpha, so a
+    ``fill_between`` stays a wash either way.
+    """
+    if given is not None:
+        return given
+    if not getattr(plot_obj, "_style_key", ""):
+        return fallback
+    if role == "ink":
+        ink = _style_ink(plot_obj)
+        return tuple(float(v) for v in ink) if ink is not None else fallback
+    if not getattr(plot_obj, "_prop_cycle_colors", None):
+        return fallback
+    rgba = _normalize_rgba(_next_cycle_color(plot_obj), n=None)
+    alpha = float(fallback[3]) if isinstance(fallback, tuple) and len(fallback) == 4 else 1.0
+    return (float(rgba[0]), float(rgba[1]), float(rgba[2]), alpha)
+
+
+def _styled_cycle_entry(index: int) -> Optional[str]:
+    """``"C<index>"`` on a figure styled by a preset: that preset's palette entry, else None.
+
+    matplotlib's ``"CN"`` names the N-th colour of the active style's cycle; a preset is
+    GLPlot's style, so ``"C1"`` on a Solarized figure is Solarized's second colour, not tab10's.
+    """
+    plot_obj = _CURRENT_PLOT
+    if plot_obj is None or not getattr(plot_obj, "_style_key", ""):
+        return None
+    palette = getattr(plot_obj, "_prop_cycle_colors", None)
+    if not palette:
+        return None
+    return palette[index % len(palette)]
 
 
 def _parse_plot_groups(args: tuple) -> list:
@@ -3115,7 +3165,7 @@ def violinplot(
     *,
     orientation: str = "vertical",
     side: str = "both",
-    color: ColorLike = (0.2, 0.4, 0.8, 0.5),
+    color: Optional[ColorLike] = None,
     facecolor: Optional[ColorLike] = None,
     linecolor: Optional[ColorLike] = None,
     label: Optional[str] = None,
@@ -3207,6 +3257,7 @@ def violinplot(
         "cquantiles": [],
     }
     plot_obj = _get_or_create_plot()
+    color = _styled_default(plot_obj, color, (0.2, 0.4, 0.8, 0.5))
     rgba = list(_normalize_rgba(facecolor if facecolor is not None else color))
     line_source = linecolor if linecolor is not None else color
     line_rgba = tuple(float(v) for v in _normalize_rgba(line_source)[:3]) + (1.0,)
@@ -6407,9 +6458,11 @@ def plot_style(name: Optional[str] = None, *, layers: bool = True, colormap: boo
     :func:`plot_styles` for the keys.
 
     Args:
-        name: A preset key (``"chalk"``, ``"marker"``, ``"hand"``, ``"kids"``, ...) or its
-            display name, case-insensitive. ``None`` applies nothing and returns the key of
-            the last preset this figure was given (``""`` if none).
+        name: A preset key (``"chalk"``, ``"economist"``, ``"3b1b"``, ...), its display name
+            or a common alias (``"The Economist"``, ``"538"``, ``"Tokyo Night"``,
+            ``"manim"``), matched ignoring case, spaces and punctuation. ``None`` applies
+            nothing and returns the key of the last preset this figure was given (``""`` if
+            none).
         layers: When True (default) existing layers take the preset's palette, width and
             point size — except those whose colours carry data, which are never repainted.
             False restyles only the page and leaves every layer's own colour alone.
@@ -6437,19 +6490,11 @@ def plot_style(name: Optional[str] = None, *, layers: bool = True, colormap: boo
     if name is None:
         return str(getattr(plot_obj, "_style_key", "") or "")
 
-    key = str(name).strip()
-    style = None
-    try:
-        style = _styles.get_style(key.lower())
-    except KeyError:
-        low = key.lower()
-        for candidate in _styles.STYLES:
-            if candidate.name.lower() == low:
-                style = candidate
-                break
-    if style is None:
+    resolved = _styles.resolve_style_key(str(name))
+    if resolved is None:
         keys = ", ".join(s.key for s in _styles.STYLES)
         raise ValueError(f"unknown style {name!r}; expected one of {keys}")
+    style = _styles.get_style(resolved)
 
     _styles.apply_style(plot_obj, style, layers=bool(layers), colormaps=bool(colormap))
     if layers:
@@ -6627,7 +6672,8 @@ def _scatter_2d(
         y (array-like): Y coordinates of points. Shape (N,).
         color (str or tuple, optional): Single color for all points. Named
             colors, hex strings, or (r, g, b) / (r, g, b, a) tuples.
-            Ignored if c is provided. Defaults to black.
+            Ignored if c is provided. Defaults to black, or to the style preset's next
+            palette colour on a figure given one (:func:`plot_style`).
         size (float or array-like, optional): Point size in pixels. A scalar sizes
             every marker equally; an array of length N makes size a per-point,
             data-driven dimension (each marker follows its own value). Defaults to 10.0.
@@ -6639,7 +6685,8 @@ def _scatter_2d(
             Note: GLPlot's ``s`` is a pixel size applied element-wise, not matplotlib's
             pt^2 area -- consistent with its scalar ``size``.
         cmap (str, optional): Colormap name ('viridis', 'plasma', 'cool',
-            etc.). Used when c is numeric. Defaults to 'viridis'.
+            etc.). Used when c is numeric. Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         norm (Normalize or str, optional): How ``c`` maps onto the colormap --
             a ``matplotlib.colors.Normalize`` instance, or a scale name
             ('linear', 'log', 'symlog', 'logit'). Replaces the linear
@@ -6733,7 +6780,7 @@ def _scatter_2d(
         # passed through `color=` is a legal, common spelling (an (N, 4) array), and
         # `ndarray or default` raises "truth value ambiguous" on it rather than falling
         # through to the default. The default only applies when no colour was given at all.
-        base = (0.0, 0.0, 0.0, 1.0) if resolved_color is None else resolved_color
+        base = _styled_default(plot_obj, resolved_color, (0.0, 0.0, 0.0, 1.0))
         cols = _normalize_rgba(base, n=len(x_arr))
     if alpha is not None:
         cols[:, 3] *= float(alpha)
@@ -6942,7 +6989,8 @@ def scatter3d(
             :func:`set_box_aspect`'s job -- it changes the picture, not the data.
         c (array-like or str, optional): Per-point colors. If 1D numeric array,
             maps to colormap. If 2D (N, 4), direct RGBA colors. Defaults to None.
-        cmap (str, optional): Colormap name when c is numeric. Defaults to 'viridis'.
+        cmap (str, optional): Colormap name when c is numeric. Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         **kwargs: Additional keyword arguments including:
             color (str): Single color for all points
             s, size (float): Point size
@@ -7249,7 +7297,7 @@ def fill_betweenx(
     step: Optional[str] = None,
     interpolate: bool = False,
     *,
-    color: ColorLike = (0.2, 0.4, 0.8, 0.35),
+    color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     data: Optional[Any] = None,
@@ -7309,6 +7357,8 @@ def fill_betweenx(
     # it with x and y exchanged and a second chance to get the winding wrong.
     verts, indices = _fill_between_geometry(y_arr, x1_arr, x2_arr, where_arr, interpolate, step)
     verts = verts[:, ::-1].copy()  # (y, x) -> (x, y)
+    if facecolor is None:
+        color = _styled_default(_get_or_create_plot(), color, (0.2, 0.4, 0.8, 0.35))
     rgba = list(_normalize_rgba(facecolor if facecolor is not None else color))
     if alpha is not None:
         rgba[3] *= float(alpha)
@@ -7411,7 +7461,7 @@ def fill_between(
     interpolate: bool = False,
     step: Optional[str] = None,
     *,
-    color: ColorLike = (0.2, 0.4, 0.8, 0.35),
+    color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     data: Optional[Any] = None,
@@ -7510,6 +7560,8 @@ def fill_between(
     verts, indices = _fill_between_geometry(
         x_arr, y1_arr, y2_arr, where_arr, bool(interpolate), step
     )
+    if facecolor is None:
+        color = _styled_default(_get_or_create_plot(), color, (0.2, 0.4, 0.8, 0.35))
     rgba = list(_normalize_rgba(facecolor if facecolor is not None else color, n=None))
     if alpha is not None:
         rgba[3] *= float(alpha)
@@ -7632,7 +7684,7 @@ def axhspan(
     xmin: float = 0.0,
     xmax: float = 1.0,
     *,
-    color: ColorLike = (0.2, 0.4, 0.8, 0.35),
+    color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     **kwargs: Any,
@@ -7655,6 +7707,7 @@ def axhspan(
     """
     x0 = _axes_fraction_to_data(_get_or_create_plot(), "x", xmin)
     x1 = _axes_fraction_to_data(_get_or_create_plot(), "x", xmax)
+    color = _styled_default(_get_or_create_plot(), color, (0.2, 0.4, 0.8, 0.35))
     layer = _rect_patch(x0, x1, float(ymin), float(ymax), color, alpha, label)
     layer.metadata.update({"guide": True, "artist": "axhspan"})
     _set_dirty(_get_or_create_plot())
@@ -7667,7 +7720,7 @@ def axvspan(
     ymin: float = 0.0,
     ymax: float = 1.0,
     *,
-    color: ColorLike = (0.2, 0.4, 0.8, 0.35),
+    color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     **kwargs: Any,
@@ -7690,6 +7743,7 @@ def axvspan(
     """
     y0 = _axes_fraction_to_data(_get_or_create_plot(), "y", ymin)
     y1 = _axes_fraction_to_data(_get_or_create_plot(), "y", ymax)
+    color = _styled_default(_get_or_create_plot(), color, (0.2, 0.4, 0.8, 0.35))
     layer = _rect_patch(float(xmin), float(xmax), y0, y1, color, alpha, label)
     layer.metadata.update({"guide": True, "artist": "axvspan"})
     _set_dirty(_get_or_create_plot())
@@ -7763,7 +7817,7 @@ def barh(
     left: Union[float, Sequence[float]] = 0,
     *,
     align: str = "center",
-    color: ColorLike = (0.2, 0.4, 0.8, 1.0),
+    color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     xerr: Optional[ArrayLike] = None,
@@ -7836,6 +7890,7 @@ def barh(
         (-float(height) / 2.0, float(height) / 2.0) if align == "center" else (0.0, float(height))
     )
     lo, hi = min(offsets), max(offsets)
+    color = _styled_default(_get_or_create_plot(), color, (0.2, 0.4, 0.8, 1.0))
     rgba = list(_normalize_rgba(color))
     if alpha is not None:
         rgba[3] *= float(alpha)
@@ -7876,7 +7931,7 @@ def bar(
     bottom: Union[float, Sequence[float]] = 0,
     *,
     align: str = "center",
-    color: ColorLike = (0.2, 0.4, 0.8, 1.0),
+    color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     yerr: Optional[ArrayLike] = None,
@@ -7911,7 +7966,8 @@ def bar(
             'edge' puts the bar's left edge there. A negative ``width`` with
             'edge' aligns the right edge instead, as in matplotlib.
         color (str or tuple, optional): Bar color. Named colors, hex, or RGBA.
-            Defaults to (0.2, 0.4, 0.8, 1.0) (blue).
+            Defaults to (0.2, 0.4, 0.8, 1.0) (blue), or to the style preset's next
+            palette colour on a figure given one (:func:`plot_style`).
         alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
         label (str, optional): Legend label (only first bar labeled for
             efficiency). Defaults to None.
@@ -7983,6 +8039,7 @@ def bar(
     )
     lo, hi = min(offsets), max(offsets)
     patches = []
+    color = _styled_default(_get_or_create_plot(), color, (0.2, 0.4, 0.8, 1.0))
     rgba = list(_normalize_rgba(color, n=None))
     if alpha is not None:
         rgba[3] *= float(alpha)
@@ -8157,7 +8214,7 @@ def hist(
     log: bool = False,
     stacked: bool = False,
     *,
-    color: ColorLike = (0.2, 0.4, 0.8, 1.0),
+    color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     data: Optional[Any] = None,
@@ -8203,7 +8260,8 @@ def hist(
             is linear and has no log-scaled axis, so this is ignored.
         stacked (bool, optional): Accepted for matplotlib parity. Needs multiple
             datasets, which this signature does not take, so it is ignored.
-        color (str or tuple, optional): Bar color. Defaults to blue.
+        color (str or tuple, optional): Bar color. Defaults to blue, or to the style
+            preset's next palette colour on a figure given one (:func:`plot_style`).
         alpha (float, optional): Transparency (0.0-1.0). Defaults to 1.0.
         label (str, optional): Legend label. Defaults to None.
         data (indexable, optional): If given, ``x`` and ``weights`` may be keys
@@ -8239,6 +8297,7 @@ def hist(
     face = facecolor if facecolor is not None else fc
     if face is not None:
         color = face
+    color = _styled_default(_get_or_create_plot(), color, (0.2, 0.4, 0.8, 1.0))
     edgecolor = edgecolor if edgecolor is not None else ec
     linewidth = linewidth if linewidth is not None else lw
     _warn_unsupported(
@@ -8446,7 +8505,8 @@ def hexbin(
             projection is linear; 'log' is ignored.
         extent (tuple, optional): ``(xmin, xmax, ymin, ymax)`` to bin over.
             Defaults to the data's own bounds.
-        cmap (str, optional): Colormap name. Defaults to 'viridis'.
+        cmap (str, optional): Colormap name. Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         norm (Normalize or str, optional): How the values map onto the colormap.
         vmin, vmax (float, optional): Colormap limits. Mutually exclusive with
             ``norm``, as in matplotlib.
@@ -9130,7 +9190,7 @@ def julia(
 
 def imshow(
     X: ArrayLike,
-    cmap: str = "viridis",
+    cmap: Optional[str] = None,
     norm: Optional[Any] = None,
     aspect: Optional[str] = None,
     interpolation: Optional[str] = None,
@@ -9163,7 +9223,8 @@ def imshow(
             matplotlib's own imread() returns for non-PNG formats); float image arrays
             are assumed already normalized to 0-1 (as PNGs come back from imread()).
         cmap (str, optional): Colormap name ('viridis', 'plasma', 'cool',
-            'hot', 'gray', etc.). Defaults to 'viridis'.
+            'hot', 'gray', etc.). Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         norm (Normalize or str, optional): How the values map onto the colormap --
             a `matplotlib.colors.Normalize` or a scale name such as ``'log'``. Replaces
             the linear ``vmin``..``vmax`` ramp, and cannot be combined with them.
@@ -9213,6 +9274,8 @@ def imshow(
 
         >>> gplt.imshow(data, vmin=0.2, vmax=0.8, cmap='plasma')
     """
+    # explicit > set_cmap() > the style preset's colormap > viridis, like scatter(c=)
+    cmap = _resolve_cmap(cmap, "viridis")
     (X,) = _resolve_data_args("imshow", data, X)
     _warn_unsupported(
         "imshow",
@@ -9377,7 +9440,8 @@ def contour(
             explicit level values. Defaults to 10.
         colors (str or tuple, optional): Color specification (currently
             stored in metadata). Defaults to None.
-        cmap (str, optional): Colormap for level colors. Defaults to 'viridis'.
+        cmap (str, optional): Colormap for level colors. Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         norm (Normalize or str, optional): How levels map onto the colormap -- a
             `matplotlib.colors.Normalize` (e.g. `SymLogNorm` for a field that crosses
             zero) or a scale name such as ``'log'``. Replaces the linear ramp across
@@ -9551,7 +9615,7 @@ def contourf(
     Z=None,
     levels=10,
     *,
-    cmap: str = "viridis",
+    cmap: Optional[str] = None,
     norm: Optional[Any] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
@@ -9572,7 +9636,8 @@ def contourf(
             provided separately. Shape (M, N). Defaults to None.
         levels (int or array-like, optional): Number of contour levels or
             explicit level values. Defaults to 10.
-        cmap (str, optional): Colormap for level colors. Defaults to 'viridis'.
+        cmap (str, optional): Colormap for level colors. Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         norm (Normalize or str, optional): How the field maps onto the colormap --
             a `matplotlib.colors.Normalize` or a scale name such as ``'log'``.
             Replaces the linear vmin..vmax ramp.
@@ -9598,6 +9663,8 @@ def contourf(
         >>> Z = X**2 - Y**2
         >>> gplt.contourf(X, Y, Z, levels=15, cmap='RdBu', alpha=0.8)
     """
+    # explicit > set_cmap() > the style preset's colormap > viridis, like scatter(c=)
+    cmap = _resolve_cmap(cmap, "viridis")
     data = kwargs.pop("data", None)
     if data is not None:
         X, Y, Z = _resolve_data_args("contourf", data, X, Y, Z)
@@ -10781,7 +10848,7 @@ def plot_surface(
     Y,
     Z,
     *,
-    cmap: Optional[str] = "viridis",
+    cmap: Optional[str] = None,
     color: Optional[ColorLike] = None,
     elev: Optional[float] = None,
     azim: Optional[float] = None,
@@ -10804,7 +10871,8 @@ def plot_surface(
         X (array-like): 2D array of x-coordinates. Shape (M, N).
         Y (array-like): 2D array of y-coordinates. Shape (M, N).
         Z (array-like): 2D array of z-coordinates (heights). Shape (M, N).
-        cmap (str, optional): Colormap for Z-value coloring. Defaults to 'viridis'.
+        cmap (str, optional): Colormap for Z-value coloring. Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         elev (float, optional): Camera elevation angle in degrees. Defaults to 30.0.
         azim (float, optional): Camera azimuth angle in degrees. Defaults to -60.0.
         scale_z (float, optional): Multiplies the z data before it is drawn.
@@ -10861,6 +10929,8 @@ def plot_surface(
         >>> gplt.plot_surface(X, Y, Z, cmap='hot', elev=45, azim=120,
         ...                   scale_z=1.0, alpha=0.9)
     """
+    # explicit > set_cmap() > the style preset's colormap > viridis, like scatter(c=)
+    cmap = _resolve_cmap(cmap, "viridis")
     xx = _as_float_array(X, name="X")
     yy = _as_float_array(Y, name="Y")
     zz = _as_float_array(Z, name="Z")
@@ -10956,7 +11026,7 @@ def mesh3d(
     *,
     color: ColorLike = "tab:blue",
     c: Optional[Sequence[float]] = None,
-    cmap: str = "viridis",
+    cmap: Optional[str] = None,
     alpha: Optional[float] = None,
     elev: Optional[float] = None,
     azim: Optional[float] = None,
@@ -10970,7 +11040,8 @@ def mesh3d(
             Without it the vertices are drawn as points.
         color (ColorLike, optional): Mesh colour. Defaults to ``'tab:blue'``.
         c (array-like, optional): One value per vertex, mapped through ``cmap`` to colour the mesh.
-        cmap (str, optional): Colormap for ``c``. Defaults to ``'viridis'``.
+        cmap (str, optional): Colormap for ``c``. Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         alpha (float, optional): Opacity, 0-1.
         elev, azim (float, optional): Camera angles in degrees.
         label (str, optional): Legend text.
@@ -10984,6 +11055,8 @@ def mesh3d(
         >>> gplt.mesh3d(verts, faces, c=[0, 1, 2, 3])
 
     """
+    # explicit > set_cmap() > the style preset's colormap > viridis, like scatter(c=)
+    cmap = _resolve_cmap(cmap, "viridis")
     verts = _as_float_array(vertices, ndim=2, name="vertices")
     if verts.shape[1] != 3:
         raise ValueError("vertices must have shape (N, 3)")
@@ -11449,7 +11522,7 @@ def bar3d(
     label: Optional[str] = None,
     shape: str = "box",
     c: Optional[Union[ColorLike, ArrayLike]] = None,
-    cmap: str = "viridis",
+    cmap: Optional[str] = None,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
     gap: float = 0.0,
@@ -11497,7 +11570,8 @@ def bar3d(
             (hexagonal prism). Defaults to 'box'.
         c (array-like or str, optional): Per-bar colors. If 1D numeric,
             maps to colormap. Defaults to None.
-        cmap (str, optional): Colormap name. Defaults to 'viridis'.
+        cmap (str, optional): Colormap name. Defaults to the
+            figure's style colormap (or :func:`set_cmap`'s), else 'viridis'.
         vmin, vmax (float, optional): Colormap normalization. Defaults to None.
         gap (float, optional): Gap between bars (0.0-0.95). Defaults to 0.0.
         edge_color (str or tuple, optional): Edge color for wireframe.
@@ -11532,6 +11606,8 @@ def bar3d(
         >>> gplt.bar3d(x, y, z, 0.7, 0.7, dz, shape='hex', gap=0.1,
         ...             edge_color='white', edge_width=1.5)
     """
+    # explicit > set_cmap() > the style preset's colormap > viridis, like scatter(c=)
+    cmap = _resolve_cmap(cmap, "viridis")
     _warn_unsupported(
         "bar3d",
         {
@@ -11635,7 +11711,7 @@ def arrow(
     width: float = 1.0,
     head_width: float = 0.12,
     head_length: float = 0.18,
-    color: ColorLike = "k",
+    color: Optional[ColorLike] = None,
     alpha: Optional[float] = None,
     label: Optional[str] = None,
     **kwargs,
@@ -11649,7 +11725,8 @@ def arrow(
         dx, dy (float): The displacement to the tip.
         width (float, optional): Shaft line width. Defaults to 1.0.
         head_width, head_length (float, optional): Head size in data units (0.12 and 0.18).
-        color (ColorLike, optional): Arrow colour. Defaults to black.
+        color (ColorLike, optional): Arrow colour. Defaults to black, or to the style preset's
+            ink on a figure given one (:func:`plot_style`).
         alpha (float, optional): Opacity, 0-1.
         label (str, optional): Legend text.
 
@@ -11660,6 +11737,7 @@ def arrow(
         >>> gplt.arrow(0, 0, 1, 1, color="tab:red")
 
     """
+    color = _styled_default(_get_or_create_plot(), color, "k", role="ink")
     rgba = list(_normalize_rgba(color, n=None))
     if alpha is not None:
         rgba[3] *= float(alpha)
@@ -12031,7 +12109,7 @@ def quiver(
     u: ArrayLike,
     v: ArrayLike,
     *,
-    color: ColorLike = "k",
+    color: Optional[ColorLike] = None,
     scale: float = 1.0,
     width: float = 1.0,
     head_width: float = 0.08,
@@ -12051,7 +12129,7 @@ def quiver(
         u (array-like): X-components of vectors. Shape (N,).
         v (array-like): Y-components of vectors. Shape (N,).
         color (str or tuple, optional): Arrow color. Named color or RGBA.
-            Defaults to black.
+            Defaults to black, or to the style preset's ink on a figure given one.
         scale (float, optional): Scaling factor for arrow magnitudes.
             Larger values make arrows longer. Defaults to 1.0.
         width (float, optional): Arrow shaft line width in pixels. Defaults to 1.0.
@@ -12098,6 +12176,7 @@ def quiver(
     v_arr = _as_float_array(v, name="v").ravel()
     if not (len(x_arr) == len(y_arr) == len(u_arr) == len(v_arr)):
         raise ValueError("x, y, u, and v must have the same size")
+    color = _styled_default(_get_or_create_plot(), color, "k", role="ink")
     rgba = tuple(_normalize_rgba(color, n=None))
     N = len(x_arr)
     artists = []
@@ -12366,7 +12445,7 @@ def hlines(
     y,
     xmin,
     xmax,
-    colors: ColorLike = "k",
+    colors: Optional[ColorLike] = None,
     linestyles: str = "-",
     label: Optional[str] = None,
     linewidth: float = 1.0,
@@ -12377,7 +12456,8 @@ def hlines(
     Args:
         y (float or array-like): Heights; one segment each.
         xmin, xmax (float or array-like): Ends of the segments (a scalar applies to all).
-        colors (ColorLike, optional): Colour. Defaults to black.
+        colors (ColorLike, optional): Colour. Defaults to black, or to the style preset's ink on a
+            figure given one (:func:`plot_style`).
         linestyles (str, optional): ``'-'``, ``'--'``, ``'-.'`` or ``':'``.
         label (str, optional): Legend text.
         linewidth (float, optional): Width. Defaults to 1.0.
@@ -12395,6 +12475,7 @@ def hlines(
     y_arr = np.atleast_1d(_as_float_array(y, name="y"))
     xmin_arr = np.broadcast_to(np.asarray(xmin, dtype=np.float32), y_arr.shape)
     xmax_arr = np.broadcast_to(np.asarray(xmax, dtype=np.float32), y_arr.shape)
+    colors = _styled_default(_get_or_create_plot(), colors, "k", role="ink")
     artists = []
     for idx, (yy, x0, x1) in enumerate(zip(y_arr, xmin_arr, xmax_arr)):
         artists.extend(
@@ -12415,7 +12496,7 @@ def vlines(
     x,
     ymin,
     ymax,
-    colors: ColorLike = "k",
+    colors: Optional[ColorLike] = None,
     linestyles: str = "-",
     label: Optional[str] = None,
     linewidth: float = 1.0,
@@ -12441,6 +12522,7 @@ def vlines(
     x_arr = np.atleast_1d(_as_float_array(x, name="x"))
     ymin_arr = np.broadcast_to(np.asarray(ymin, dtype=np.float32), x_arr.shape)
     ymax_arr = np.broadcast_to(np.asarray(ymax, dtype=np.float32), x_arr.shape)
+    colors = _styled_default(_get_or_create_plot(), colors, "k", role="ink")
     artists = []
     for idx, (xx, y0, y1) in enumerate(zip(x_arr, ymin_arr, ymax_arr)):
         artists.extend(
@@ -12461,7 +12543,7 @@ def axhline(
     y: float = 0.0,
     xmin: float = 0.0,
     xmax: float = 1.0,
-    color: ColorLike = "k",
+    color: Optional[ColorLike] = None,
     linestyle: str = "-",
     linewidth: float = 1.0,
     label: Optional[str] = None,
@@ -12475,7 +12557,8 @@ def axhline(
     Args:
         y (float, optional): Height of the line. Defaults to 0.
         xmin, xmax (float, optional): Start and end as fractions of the x view (0 and 1).
-        color (ColorLike, optional): Line colour. Defaults to black.
+        color (ColorLike, optional): Line colour. Defaults to black, or to the style preset's ink
+            on a figure given one (:func:`plot_style`).
         linestyle (str, optional): ``'-'``, ``'--'``, ``'-.'`` or ``':'``.
         linewidth (float, optional): Width. Defaults to 1.0.
         label (str, optional): Legend text.
@@ -12501,7 +12584,7 @@ def axvline(
     x: float = 0.0,
     ymin: float = 0.0,
     ymax: float = 1.0,
-    color: ColorLike = "k",
+    color: Optional[ColorLike] = None,
     linestyle: str = "-",
     linewidth: float = 1.0,
     label: Optional[str] = None,
@@ -14553,6 +14636,49 @@ def thetagrids(*args: Any, **kwargs: Any):
     return [], []
 
 
+#: The ``legend()`` keywords the export hands to matplotlib's own ``ax.legend``.
+_LEGEND_EXPORT_KEYWORDS = frozenset(
+    {
+        "loc",
+        "ncols",
+        "ncol",
+        "frameon",
+        "fontsize",
+        "title",
+        "title_fontsize",
+        "framealpha",
+        "facecolor",
+        "edgecolor",
+        "bbox_to_anchor",
+        "borderaxespad",
+        "labelspacing",
+        "handlelength",
+        "columnspacing",
+        "markerscale",
+        "labelcolor",
+        "alignment",
+        "shadow",
+        "fancybox",
+        "reverse",
+    }
+)
+
+#: matplotlib's numeric legend locations.
+_LEGEND_LOC_CODES = {
+    0: "best",
+    1: "upper right",
+    2: "upper left",
+    3: "lower left",
+    4: "lower right",
+    5: "right",
+    6: "center left",
+    7: "center right",
+    8: "lower center",
+    9: "upper center",
+    10: "center",
+}
+
+
 def legend(*args, max_items: Optional[int] = None, **kwargs):
     """Display a legend showing labeled layers.
 
@@ -14565,7 +14691,14 @@ def legend(*args, max_items: Optional[int] = None, **kwargs):
         max_items (int, optional): Maximum number of legend items to show.
             If there are more unique labels than this, shows top N and adds
             a "+N more" entry. Defaults to None (show all).
-        **kwargs: Reserved for future keyword arguments.
+        **kwargs: matplotlib's legend keywords. ``loc`` places it, live and in the export
+            (``"best"`` and the four corners live; any matplotlib location, also as its
+            number, in saved images); ``ncols``/``ncol``, ``frameon``, ``fontsize``,
+            ``title``, ``title_fontsize``, ``framealpha``, ``facecolor``, ``edgecolor``,
+            ``bbox_to_anchor``, ``borderaxespad``, ``labelspacing``, ``handlelength``,
+            ``columnspacing``, ``markerscale``, ``labelcolor``, ``alignment``, ``shadow``,
+            ``fancybox`` and ``reverse`` are drawn in saved images and animations. Others
+            warn.
 
     Returns:
         list: List of legend labels displayed.
@@ -14597,6 +14730,21 @@ def legend(*args, max_items: Optional[int] = None, **kwargs):
         shown.append(f"+{len(labels) - int(max_items)} more layers")
         labels = shown
     plot.legend_labels = labels
+    # matplotlib's keywords: kept for the export, and the placement handed to the live
+    # overlay too. They were documented as "reserved" and silently dropped, so a
+    # `legend(loc="upper left")` moved nothing anywhere.
+    style = {k: kwargs.pop(k) for k in list(kwargs) if k in _LEGEND_EXPORT_KEYWORDS}
+    if "ncol" in style:
+        style["ncols"] = style.pop("ncol")
+    _warn_unsupported("legend", kwargs)
+    loc = style.get("loc")
+    if isinstance(loc, (int, np.integer)) and not isinstance(loc, bool):
+        style["loc"] = loc = _LEGEND_LOC_CODES.get(int(loc), "best")
+    if isinstance(loc, str):
+        from .renderers.legend import LEGEND_LOCATIONS
+
+        plot.options.legend_loc = loc if loc in LEGEND_LOCATIONS else "best"
+    plot.legend_style = style
     # Turn the live overlay on. Until this line existed, `legend()` assigned
     # `legend_labels` and stopped -- nothing in renderers/ or managers/ read it, so this
     # call drew exactly nothing in the window and only ever showed up in an exported PNG

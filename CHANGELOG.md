@@ -127,8 +127,46 @@ for public releases.
 - `plt.text(layout_text=...)`: a text being written letter by letter stays where its letters sit in the
   whole text instead of re-centring every frame.
 - Gallery animation 18: the unit circle drawing a sine wave, in the 3Blue1Brown style, built play by play.
+- **Eleven looks borrowed from famous designs** (37 presets in all, each with a GL gallery card):
+  `kurzgesagt`, `economist`, `ft` (Financial Times), `fivethirtyeight`, `ggplot` (ggplot2), `tufte`,
+  `nord`, `catppuccin` (Mocha), `tokyonight`, `material` and `terminal` (a market-data screen), from their
+  public colours and habits, with seven new colormaps to match (`kurzgesagt`, `claret`, `ggblue`, `frost`,
+  `mocha`, `tokyo`, `amber`). Unaffiliated tributes: nothing on the picture names them.
+- **Presets shape saved images, not only their colours.** `ExportLook` grew the furniture a recognisable
+  look is made of: axis lines (`box`, `open`, `bottom`, `none`, `cross`), a grid that is on by default and on
+  one axis only (`grid(False)` still wins), a plotting panel and page of their own colour, the title flush
+  left / bold / in its own face, muted tick labels, y numbers on the right and on their rules, ticks in or out, a legend
+  without a frame, a coloured tag above the title, Tufte's range frame, and matplotlib's hand-drawn stroke
+  (`sketch`, deterministic so animations do not boil). Every preset but `clean`, `colorsafe` and `dense`
+  now has one: `journal`/`print` open frames, `slide`/`stage` big type, the editor themes in a monospace
+  face with a dotted grid, `blueprint` on graph paper, `chalk`/`marker`/`hand`/`kids` drawn by hand in a
+  handwriting face, `vintage` in Baskerville with ticks inside. A face that is not installed falls back
+  to the next named, ending with one matplotlib ships.
+- Style names: `plot_style()`, MCP `create_figure(style=)` and `set_style` take a key, a display name or
+  an alias (`"The Economist"`, `"538"`, `"Tokyo Night"`, `"manim"`), ignoring case and punctuation.
+  `STYLE_GROUPS` sorts the presets by use (paper, talks, dashboards, explainer videos, newsroom charts,
+  editor themes, drawing board, moods); the MCP tool descriptions, the `glplot://styles` resource (now
+  with use, page, aliases and how the export looks) and the LLM guide are generated from it, and a model is
+  told what a preset will look like when it applies one.
+- MCP `set_axes(legend_loc=...)` moves the legend off the data (and the exported script says
+  `plt.legend(loc=...)`); the cookbook's `newsroom_chart` recipe asks for a look by name, moves the
+  legend and draws two series in before the call-out. Gallery example 31 exports one chart under twelve
+  presets and tiles them.
 
 ### Changed
+
+- **A styled figure colours everything it draws.** On a figure given a preset, `scatter`, `bar`, `barh`,
+  `hist`, `fill_between`, `fill_betweenx`, `axhspan`, `axvspan` and `violinplot` take the preset's next
+  palette colour when none is named (they were black or a fixed blue -- black dots on a dark page), and
+  `axhline`/`axvline`/`hlines`/`vlines`/`arrow`/`quiver` its ink; `"C0"`..`"C9"` name the preset's colours.
+  An unstyled figure keeps GLPlot's defaults. `imshow`, `contourf`, `plot_surface`, `mesh3d` and `bar3d`
+  now follow `set_cmap()` and the preset's colormap like `scatter(c=)` (they always drew viridis).
+- Exported text is written in the preset's ink (Solarized's base1, Gruvbox's light1) instead of plain
+  white or black. A face is chosen by the weight it really has: macOS registers a font collection as one
+  face, so Avenir Next was bold everywhere and Helvetica could not set a bold title.
+- `3b1b` text is set in matplotlib's own Computer Modern (cmr10) when no LaTeX face is installed, so the
+  LaTeX look is there on every machine; the characters cmr10 draws as other glyphs (`< > { } | _ \`) and
+  accents beside a formula are written as one-symbol formulas.
 
 - `plt.plot_style()` now also sets the palette and line width of what is drawn *after* it (it only
   restyled what was already there, so `plot_style()` then `plot()` drew matplotlib's default cycle), and
@@ -145,6 +183,10 @@ for public releases.
 
 ### Fixed
 
+- `legend(loc=...)` and the rest of matplotlib's legend keywords were documented as "reserved" and
+  dropped, so the legend never moved: `loc` (also as a number) now places it in saved images and, for
+  `best` and the four corners, in the live window; `ncols`, `frameon`, `fontsize`, `title`,
+  `bbox_to_anchor` and the others are drawn in the export, and an unknown keyword warns.
 - An opaque `fill_between` / area exported a hairline diagonal across every quad (the antialiasing gap
   between its two triangles, with the page showing through, worst at animation resolutions); a fill whose
   outline is one loop is now exported as that single polygon, and any other is stroked in its own colour. `legend().remove()` / `set_visible(False)` now also hide the legend of an exported image, and the

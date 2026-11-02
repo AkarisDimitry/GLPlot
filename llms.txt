@@ -18,7 +18,7 @@ Install: `pip install glplot` (add `"glplot[mcp]"` for the official MCP SDK). Im
 - `overview`: What GLPlot is, how a script uses it, and where to look next. Read this first.
 - `quickstart`: The smallest correct scripts for the common cases, and the habits that avoid the usual failures.
 - `choosing-a-plot`: A cheat sheet from what you want to show to the function that does it, with the full category list.
-- `axes-styling`: Limits, scales, ticks, legends, twin axes, colorbars, colormaps and the 25 style presets.
+- `axes-styling`: Limits, scales, ticks, legends, twin axes, colorbars, colormaps and the 37 style presets.
 - `three-d`: 3-D scatter, surfaces, bars, volumes and vector fields; the camera; what differs from mplot3d.
 - `animation`: FuncAnimation and ArtistAnimation, saving GIF/MP4 headless, live playback, the rules that keep both consistent, and how an MCP client animates (the animate tool).
 - `controls`: Sliders, buttons and interact() that put widgets in a Controls panel beside the plot.
