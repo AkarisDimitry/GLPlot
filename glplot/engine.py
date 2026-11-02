@@ -1766,6 +1766,13 @@ class GPULinePlot:
         scale_y = getattr(self.options, "axis_scale_y", "linear")
         params_x = getattr(self.options, "axis_scale_params_x", None)
         params_y = getattr(self.options, "axis_scale_params_y", None)
+        # A log axis cannot start at a non-positive raw minimum (a bar's baseline, a zero
+        # count): start it at the smallest positive value instead, as matplotlib does, rather
+        # than one decade under the top -- which hid every bar more than ten times smaller.
+        if scale_x == "log" and xmin <= 0.0:
+            xmin = self.renderer_manager.get_positive_min(layers, 0) or xmin
+        if scale_y == "log" and ymin <= 0.0:
+            ymin = self.renderer_manager.get_positive_min(layers, 1) or ymin
         if scale_x != "linear":
             xmin, xmax = _finite_log_bounds(
                 *_scale_forward(np.array([xmin, xmax]), scale_x, params_x)

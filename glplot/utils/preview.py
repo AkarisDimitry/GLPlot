@@ -1394,21 +1394,21 @@ def _look_fonts(engine: object):
     out of the list (matplotlib would log a warning for each on every frame).
     """
     look = _export_look(engine)
-    sketch = getattr(look, "sketch", None)
-    if look is None or not (getattr(look, "font_family", None) or look.math_fontset or sketch):
+    if look is None or not (getattr(look, "font_family", None) or look.math_fontset):
         yield
         return
     import matplotlib
 
     rc: dict = {}
     families: list = []
-    if sketch:
-        # read when each artist is made, so it reaches every line, bar and axis of the export
-        rc["path.sketch"] = tuple(float(v) for v in sketch)
     if look.font_family:
         families = _installed_families(look.font_family)
         if families:
             rc["font.family"] = families
+            if not _has_glyph(families[0], "\N{MINUS SIGN}"):
+                # tick labels write negatives with U+2212, which a handwriting face such as
+                # Chalkboard lacks (a box where the minus should be): use the hyphen instead
+                rc["axes.unicode_minus"] = False
     if look.math_fontset:
         rc["mathtext.fontset"] = look.math_fontset
         # Computer Modern has no Unicode minus: tick labels are typeset as maths instead, in
@@ -1416,9 +1416,14 @@ def _look_fonts(engine: object):
         rc["axes.formatter.use_mathtext"] = True
         # and no accents or dashes either: those come from STIX inside a $...$ string
         rc["mathtext.fallback"] = "stix"
+    rewrite = None
+    if families and families[0] == "cmr10":
+        rewrite = _cm_safe
+    elif families and not _has_glyph(families[0], "\N{MINUS SIGN}"):
+        rewrite = _minus_safe
     with matplotlib.rc_context(rc):
-        if families and families[0] == "cmr10":
-            with _cm_text():
+        if rewrite is not None:
+            with _rewritten_text(rewrite):
                 yield
         else:
             yield
@@ -1439,6 +1444,43 @@ _OT1_TRAPS = {
 }
 
 
+def _split_math(text: str) -> Tuple[bool, list]:
+    """``(has formulas, [(is_formula, piece), ...])`` by matplotlib's own rule: an even,
+    non-zero number of unescaped ``$`` makes the string maths; ``\\$`` is a literal dollar."""
+    dollars = text.count("$") - text.count("\\$")
+    if not (dollars > 0 and dollars % 2 == 0):
+        return False, [(False, text)]
+    pieces, buf, j = [], [], 0
+    while j < len(text):
+        if text.startswith("\\$", j):
+            buf.append("\\$")
+            j += 2
+            continue
+        if text[j] == "$":
+            pieces.append("".join(buf))
+            buf = []
+        else:
+            buf.append(text[j])
+        j += 1
+    pieces.append("".join(buf))
+    return True, [(k % 2 == 1, p) for k, p in enumerate(pieces)]
+
+
+def _minus_safe(text: str) -> str:
+    """Formulas whose minus a face without U+2212 can draw: inside ``$...$`` (the log and
+    logit tick labels, ``$\\mathdefault{10^{-3}}$``) ``\\mathdefault`` sets the sign in the
+    text face, with no fallback; ``\\mathrm{-}`` takes it from the maths fonts instead."""
+    if "-" not in text:
+        return text
+    is_math, parts = _split_math(text)
+    if not is_math:
+        return text
+    return "".join(
+        f"${piece.replace('-', chr(92) + 'mathrm{-}')}$" if formula else piece
+        for formula, piece in parts
+    )
+
+
 def _cm_safe(text: str) -> str:
     """``text`` written so that ``cmr10`` draws what it says.
 
@@ -1450,27 +1492,7 @@ def _cm_safe(text: str) -> str:
     """
     if not text:
         return text
-    raw = text
-    dollars = text.count("$") - text.count("\\$")  # matplotlib's own rule for "is maths"
-    is_math = dollars > 0 and dollars % 2 == 0
-    if is_math:
-        # split on unescaped dollars: even pieces are text, odd ones formulas
-        pieces, buf, j = [], [], 0
-        while j < len(raw):
-            if raw.startswith("\\$", j):
-                buf.append("\\$")
-                j += 2
-                continue
-            if raw[j] == "$":
-                pieces.append("".join(buf))
-                buf = []
-            else:
-                buf.append(raw[j])
-            j += 1
-        pieces.append("".join(buf))
-        parts = [(k % 2 == 1, p) for k, p in enumerate(pieces)]
-    else:
-        parts = [(False, raw)]
+    is_math, parts = _split_math(text)
     text_chunks = "".join(p for m, p in parts if not m)
     has_trap = any(c in _OT1_TRAPS for c in text_chunks.replace("\\$", ""))
     foreign = any(ord(c) > 126 for c in text_chunks)
@@ -1501,15 +1523,15 @@ def _cm_safe(text: str) -> str:
 
 
 @contextmanager
-def _cm_text():
-    """Every text drawn inside goes through :func:`_cm_safe` first (not usetex text)."""
+def _rewritten_text(rewrite):
+    """Every text drawn inside goes through ``rewrite`` first (not usetex text)."""
     from matplotlib.text import Text
 
     original = Text._preprocess_math
 
     def preprocess(self, s):
         if not self.get_usetex():
-            s = _cm_safe(s)
+            s = rewrite(s)
         return original(self, s)
 
     Text._preprocess_math = preprocess
@@ -1576,6 +1598,19 @@ def _installed_families(names, bold: bool = False) -> list:
         return any(w >= 600 for w in found) if bold else any(w <= 500 for w in found)
 
     return [name for name in names if fits(name)]
+
+
+def _has_glyph(family: str, char: str) -> bool:
+    """Whether the face matplotlib picks for ``family`` draws ``char``."""
+    from matplotlib import font_manager, ft2font
+
+    try:
+        path = font_manager.findfont(
+            font_manager.FontProperties(family=family), fallback_to_default=False
+        )
+        return ft2font.FT2Font(path).get_char_index(ord(char)) != 0
+    except (ValueError, RuntimeError, OSError):
+        return True
 
 
 def _apply_look_text(ax: object, look: object, opts: object) -> None:
@@ -1701,6 +1736,45 @@ def _range_frame(ax: object) -> None:
         ax.spines[side].set_position(("outward", 10))
 
 
+#: Above this many data vertices the hand-drawn stroke is kept to the frame: matplotlib
+#: sketches a path point by point, and on a 10,000-line figure that more than doubled the save.
+SKETCH_DATA_BUDGET = 100_000
+
+
+def _vertex_count(ax: object) -> int:
+    total = 0
+    for line in ax.lines:
+        total += len(line.get_xdata())
+    for collection in ax.collections:
+        try:
+            total += sum(len(p.vertices) for p in collection.get_paths())
+        except (AttributeError, TypeError):
+            continue
+        if total > SKETCH_DATA_BUDGET:
+            break
+    return total + 4 * len(ax.patches)
+
+
+def _apply_sketch(ax: object, sketch: object) -> None:
+    """The hand-drawn stroke (``ExportLook.sketch``): always on the frame -- axis lines, ticks,
+    grid, legend box -- and on the data too unless there is too much of it to wobble cheaply
+    (:data:`SKETCH_DATA_BUDGET`). Deterministic, so an animation's axes do not boil."""
+    params = tuple(float(v) for v in sketch)
+    for spine in ax.spines.values():
+        spine.set_sketch_params(*params)
+    # matplotlib copies a tick's sketch to every tick it makes later
+    for axis in (ax.xaxis, ax.yaxis):
+        for tick in axis.get_major_ticks() + axis.get_minor_ticks():
+            for line in (tick.tick1line, tick.tick2line, tick.gridline):
+                line.set_sketch_params(*params)
+    legend = ax.get_legend()
+    if legend is not None:
+        legend.get_frame().set_sketch_params(*params)
+    if _vertex_count(ax) <= SKETCH_DATA_BUDGET:
+        for artist in list(ax.lines) + list(ax.collections) + list(ax.patches):
+            artist.set_sketch_params(*params)
+
+
 def _apply_look_margins(fig: object, look: object) -> None:
     """Fixed margins (see ``_build_preview_figure``), moved where the look needs the room:
     y numbers on the right take the right margin and free the left one; a rule above the
@@ -1778,6 +1852,8 @@ def _apply_export_look(ax: object, has_3d: bool, engine: object, panel: object =
             ax.tick_params(axis="x", which="both", length=0)
     if look.range_frame and look.axes in ("open", "box") and not twinned:
         _range_frame(ax)
+    if look.sketch:
+        _apply_sketch(ax, look.sketch)
     if look.axes != "cross" or twinned:
         return
 
@@ -1824,6 +1900,28 @@ def _apply_export_look(ax: object, has_3d: bool, engine: object, panel: object =
         ax.yaxis.label.set_rotation(0)
         ax.yaxis.label.set_horizontalalignment("left")
         ax.yaxis.label.set_verticalalignment("top")
+
+
+def _paint_gradient(fig: object, top: object, bottom: object) -> None:
+    """A vertical gradient from ``top`` to ``bottom`` behind everything in ``fig`` (once).
+
+    A ``BboxImage`` on the figure's own box rather than an extra axes: it scales with the
+    save's dpi, stays out of ``fig.axes`` (which the review and the MCP read panel by panel)
+    and out of a tight bounding box.
+    """
+    if getattr(fig, "_glplot_gradient", False):
+        return
+    fig._glplot_gradient = True
+    from matplotlib.image import BboxImage
+
+    ramp = np.linspace(0.0, 1.0, 256)[:, None, None]
+    top_rgb = np.asarray(tuple(top)[:3], dtype=float)[None, None, :]
+    bottom_rgb = np.asarray(tuple(bottom)[:3], dtype=float)[None, None, :]
+    pixels = top_rgb * (1.0 - ramp) + bottom_rgb * ramp  # row 0 is the top of the image
+    image = BboxImage(fig.bbox, interpolation="bilinear", origin="upper", zorder=-100)
+    image.set_data(pixels)
+    image.set_in_layout(False)
+    fig.add_artist(image)
 
 
 def _preset_ink(engine: object) -> object:
@@ -1873,6 +1971,12 @@ def _apply_style_chrome(fig: object, ax: object, has_3d: bool, engine: object) -
 
     fig.set_facecolor(bg)
     ax.set_facecolor(bg)
+    gradient = getattr(visual, "gradient_background", None)
+    if gradient is not None and getattr(gradient, "enabled", False):
+        # the page the live window paints (aurora, synthwave, sunset, ocean, kurzgesagt...):
+        # behind the whole figure, seen through the plotting area
+        _paint_gradient(fig, gradient.top_color, gradient.bottom_color)
+        ax.set_facecolor("none")
     ax.tick_params(colors=ink)
     ax.xaxis.label.set_color(ink)
     ax.yaxis.label.set_color(ink)
@@ -1945,15 +2049,29 @@ def _autosize_title(fig: object, ax: object, min_fontsize: float = TITLE_MIN_FON
     # though its total width alone looked like it fit. Comparing the actual left/right
     # edges to the figure's own bounds (not just total width against a budget) is what
     # catches that case.
+    # One draw places everything; after it, a smaller font moves only the title's own box
+    # (the axes have fixed margins), so it is re-measured with the same renderer instead of
+    # redrawing the whole figure per step -- which cost a full render of every artist each
+    # time, the slowest part of exporting a big figure, or every frame of an animation, with
+    # a long title.
+    renderer = fig.canvas.get_renderer()
+    fig_height_px = fig.get_size_inches()[1] * fig.dpi
+    shrunk = False
     for _ in range(20):
-        renderer = fig.canvas.get_renderer()
         bbox = title.get_window_extent(renderer=renderer)
-        if (
-            bbox.x0 >= margin_px and bbox.x1 <= fig_width_px - margin_px
-        ) or title.get_fontsize() <= min_fontsize:
+        # across, and off the top: a face with tall ascenders (a handwriting or display face
+        # a style preset sets) can poke out above the figure at a size that fits across
+        fits = (
+            bbox.x0 >= margin_px
+            and bbox.x1 <= fig_width_px - margin_px
+            and bbox.y1 <= fig_height_px - 0.5 * margin_px
+        )
+        if fits or title.get_fontsize() <= min_fontsize:
             break
         title.set_fontsize(max(title.get_fontsize() * 0.9, min_fontsize))
-        fig.canvas.draw()
+        shrunk = True
+    if shrunk:
+        fig.canvas.draw()  # once, so whatever reads the figure next sees the final layout
 
 
 def _reapply_pinned_limits(ax: object, has_3d: bool, engine: object) -> None:

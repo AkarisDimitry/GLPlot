@@ -539,3 +539,126 @@ class TestPromptsAndInstructions:
         text = build_instructions()
         assert "37 presets" in text and "'The Economist'" in text
         assert f"{len(styles.STYLE_KEYS)} presets" in text, "the count is the registry's"
+
+
+class TestExportCost:
+    def test_a_big_figure_keeps_the_hand_drawn_frame_but_not_on_its_data(self):
+        plot = gplt.figure(figsize=(6, 4))
+        gplt.plot_style("chalk")
+        x = np.linspace(0, 1, preview.SKETCH_DATA_BUDGET + 10)
+        gplt.plot(x, x)
+        ax = finished(plot)["ax"]
+        assert ax.spines["bottom"].get_sketch_params() is not None
+        assert ax.lines[0].get_sketch_params() is None
+
+    def test_a_long_title_is_fitted_without_redrawing_the_figure_per_step(self, monkeypatch):
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        draws = []
+        real = FigureCanvasAgg.draw
+        monkeypatch.setattr(FigureCanvasAgg, "draw", lambda self: draws.append(1) or real(self))
+        plot = gplt.figure(figsize=(4, 3))
+        gplt.plot([0, 1], [0, 1])
+        gplt.title("A title far too long to fit across a figure this narrow, at any size " * 2)
+        render_preview_bytes(plot, 1.0)
+        assert len(draws) <= 3, "one to place, one after fitting, one to save"
+
+
+class TestGradientPages:
+    def test_a_gradient_preset_exports_its_gradient_behind_the_figure(self):
+        from matplotlib.image import BboxImage
+
+        seen = finished(chart("synthwave"))
+        fig, ax = seen["fig"], seen["ax"]
+        images = [a for a in fig.artists if isinstance(a, BboxImage)]
+        assert len(images) == 1 and not images[0].get_in_layout()
+        top, bottom = styles.get_style("synthwave").gradient
+        pixels = images[0].get_array()
+        assert np.allclose(pixels[0, 0], top, atol=1e-6)
+        assert np.allclose(pixels[-1, 0], bottom, atol=1e-6)
+        assert ax.get_facecolor()[3] == 0.0, "seen through the plotting area"
+        assert len(fig.axes) == 1, "no extra axes for the review or the MCP to trip over"
+
+    def test_a_flat_page_has_none(self):
+        from matplotlib.image import BboxImage
+
+        fig = finished(chart("economist"))["fig"]
+        assert not [a for a in fig.artists if isinstance(a, BboxImage)]
+
+
+class TestTextInABox:
+    def test_text_in_a_light_box_on_a_dark_style_is_dark(self):
+        gplt.figure()
+        gplt.plot_style("neon")
+        gplt.text(0, 0, "note", bbox=dict(facecolor="lightyellow"))
+        assert tuple(gplt.gcf().scene.layers[-1].style.color[:3]) == (0.0, 0.0, 0.0)
+
+    def test_the_ink_stays_when_it_reads_on_the_box(self):
+        gplt.figure()
+        gplt.plot_style("neon")
+        gplt.text(0, 0, "note", bbox=dict(facecolor="black"))
+        ink = tuple(styles.get_style("neon").ink[:3])
+        assert tuple(gplt.gcf().scene.layers[-1].style.color[:3]) == pytest.approx(ink)
+
+    def test_an_explicit_colour_still_wins(self):
+        gplt.figure()
+        gplt.plot_style("neon")
+        gplt.text(0, 0, "note", color="red", bbox=dict(facecolor="lightyellow"))
+        assert tuple(gplt.gcf().scene.layers[-1].style.color[:3]) == (1.0, 0.0, 0.0)
+
+
+# ======================================================================================
+# log axes the gallery found broken
+# ======================================================================================
+
+
+def exported_ylim(plot):
+    seen = {}
+    render_preview_bytes(plot, 1.0, inspect=lambda fig: seen.update(y=fig.axes[0].get_ylim()))
+    return seen["y"]
+
+
+class TestLogAxes:
+    def test_a_log_bar_chart_shows_its_smallest_bar(self):
+        plot = gplt.figure()
+        gplt.bar([1, 2, 3], [2e-2, 1e-3, 1e-5])
+        gplt.yscale("log")
+        low, high = exported_ylim(plot)
+        assert low < 1e-5 < 2e-2 < high, "the axis used to start a decade under the top bar"
+        plot.autoscale()  # the live camera too
+        assert 10 ** plot.get_ylim()[0] < 1e-5
+
+    def test_a_scale_does_not_freeze_the_view(self):
+        plot = gplt.figure()
+        gplt.plot([1, 2, 3], [1e-2, 1e-1, 1.0])
+        gplt.yscale("log")
+        gplt.plot([1, 3], [1e-6, 1e-6])  # drawn after the scale, still in view
+        assert exported_ylim(plot)[0] < 1e-6
+
+    def test_limits_set_before_a_scale_survive_it(self):
+        plot = gplt.figure()
+        gplt.plot([1, 2, 3], [1, 10, 100])
+        gplt.ylim(5, 50)
+        gplt.yscale("log")
+        assert exported_ylim(plot) == pytest.approx((5, 50))
+
+    def test_a_handwriting_face_without_a_minus_sign_still_writes_one(self):
+        from glplot.utils.preview import _minus_safe
+
+        assert _minus_safe(r"$\mathdefault{10^{-3}}$") == r"$\mathdefault{10^{\mathrm{-}3}}$"
+        assert _minus_safe("well-known") == "well-known", "text outside maths keeps its hyphen"
+        plot = gplt.figure(figsize=(5, 3))
+        gplt.plot_style("chalk")
+        gplt.plot([0, 1, 2], [1e-3, 1e-2, 1e-1])
+        gplt.yscale("log")
+        import logging
+
+        records = []
+        handler = logging.Handler()
+        handler.emit = records.append
+        logging.getLogger("matplotlib.mathtext").addHandler(handler)
+        try:
+            render_preview_bytes(plot, 1.0)
+        finally:
+            logging.getLogger("matplotlib.mathtext").removeHandler(handler)
+        assert not [r for r in records if "glyph" in r.getMessage()]

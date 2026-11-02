@@ -186,10 +186,10 @@ plt.xticks(mdates.date2num(tick_dt), [d.strftime("%H:%M") for d in tick_dt])
 # visible axes box, whatever the axis limits end up being -- a small enough offset to
 # stay within the default 5% autoscale margin keeps it next to the point it's labeling.
 #
-# `legend()` always renders "upper right" in this headless export (it has no
-# `loc=` of its own to move it, unlike matplotlib), so the annotation is
-# anchored down and to the left of the peak rather than above it -- next to
-# what it is labeling without the two boxes colliding.
+# The legend sits at its default "upper right", so the annotation is anchored
+# down and to the left of the peak rather than above it -- next to what it is
+# labeling without the two boxes colliding. Its text takes a colour that reads on
+# the light-yellow box (not the neon page's white ink).
 plt.text(
     peak_x - datetime.timedelta(hours=2.5),
     peak_y - 2.2,

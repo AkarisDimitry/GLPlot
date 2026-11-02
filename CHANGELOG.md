@@ -165,6 +165,8 @@ for public releases.
   `axhline`/`axvline`/`hlines`/`vlines`/`arrow`/`quiver` its ink; `"C0"`..`"C9"` name the preset's colours.
   An unstyled figure keeps GLPlot's defaults. `imshow`, `contourf`, `plot_surface`, `mesh3d` and `bar3d`
   now follow `set_cmap()` and the preset's colormap like `scatter(c=)` (they always drew viridis).
+- A preset's gradient page (aurora, synthwave, sunset, ocean, kurzgesagt) is exported as a gradient
+  behind the whole figure, as the live window paints it (it was flat).
 - Exported text is written in the preset's ink (Solarized's base1, Gruvbox's light1) instead of plain
   white or black. A face is chosen by the weight it really has: macOS registers a font collection as one
   face, so Avenir Next was bold everywhere and Helvetica could not set a bold title.
@@ -187,6 +189,21 @@ for public releases.
 
 ### Fixed
 
+- **A log bar chart showed only its top decade** (gallery 24 drew one spike out of 1,500 bars): a log
+  axis whose data reach zero -- a bar's baseline -- started one decade under the top instead of at the
+  smallest positive value, live and in the export. And `xscale()`/`yscale()` no longer freeze the view:
+  the camera is re-fitted for the window, but an axis nobody pinned keeps following the data (what is
+  drawn afterwards, and the export), and limits set before the scale change are kept, as in matplotlib.
+- Text in a box (`text(bbox=dict(facecolor=...))`) on a styled figure takes a colour that reads on the
+  box: white ink on a light-yellow note was invisible (gallery 21).
+- A face without a Unicode minus (Chalkboard, Marker Felt, Computer Modern) drew a box for every
+  negative tick label and log/logit exponent; the sign is now taken from the maths fonts. A title in a
+  face with tall ascenders no longer pokes out of the top of the figure.
+- Exporting a figure with a long title redrew the whole figure up to 20 times while the title was
+  shrunk to fit (every frame of an animation too); the title is now re-measured without redrawing.
+  Gallery example 01 (10,072 lines) saves in 42 s instead of 64 s. The hand-drawn stroke of the
+  sketch looks is kept to the frame above 100,000 data vertices, where it would more than double
+  the save.
 - `legend(loc=...)` and the rest of matplotlib's legend keywords were documented as "reserved" and
   dropped, so the legend never moved: `loc` (also as a number) now places it in saved images and, for
   `best` and the four corners, in the live window; `ncols`, `frameon`, `fontsize`, `title`,

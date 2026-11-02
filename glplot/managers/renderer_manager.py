@@ -303,3 +303,29 @@ class RendererManager:
             ymin, ymax = 0.0, 1.0
 
         return (xmin, xmax, ymin, ymax)
+
+    def get_positive_min(self, layers: List[BaseLayer], axis: int) -> Optional[float]:
+        """The smallest positive coordinate along ``axis`` (0 = x, 1 = y) of the layers
+        :meth:`get_bounds` counts, or None: where a log axis has to start when the data
+        reach zero -- a bar's baseline -- and the raw minimum has no logarithm."""
+        best = float("inf")
+        for layer in layers:
+            if not layer.style.visible:
+                continue
+            if layer.layer_type in ["semantic_line", "semantic_span", "text"]:
+                continue
+            if layer.metadata.get("twin_axis") == ("y" if axis == 1 else "x"):
+                continue
+            data = getattr(layer, "pts", None)
+            if data is None:
+                data = getattr(layer, "vertices", None)
+            if data is None:
+                continue
+            values = np.asarray(data, dtype=float)
+            if values.ndim != 2 or values.shape[1] <= axis or not values.size:
+                continue
+            column = values[:, axis] + float(layer.translation[axis])
+            column = column[np.isfinite(column) & (column > 0.0)]
+            if column.size:
+                best = min(best, float(column.min()))
+        return best if best < float("inf") else None

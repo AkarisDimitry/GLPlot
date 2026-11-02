@@ -292,6 +292,30 @@ def _style_ink(plot_obj: GPULinePlot) -> Optional[tuple]:
         return None
 
 
+def _ink_for(face: ColorLike, preferred: Optional[tuple]) -> tuple:
+    """Text colour for text drawn on ``face``: ``preferred`` (a preset's ink) if it reads
+    there (WCAG 4.5:1), else whichever of near-black and white reads better."""
+
+    def luminance(rgb) -> float:
+        def channel(v: float) -> float:
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+        return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2])
+
+    def contrast(a, b) -> float:
+        la, lb = luminance(a), luminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+    try:
+        back = tuple(float(v) for v in _normalize_rgba(face, n=None)[:3])
+    except ValueError:
+        return preferred
+    if preferred is not None and contrast(tuple(preferred)[:3], back) >= 4.5:
+        return preferred
+    dark, light = (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0, 1.0)
+    return dark if contrast(dark[:3], back) >= contrast(light[:3], back) else light
+
+
 def _next_cycle_color(plot_obj: GPULinePlot) -> str:
     idx = getattr(plot_obj, "_color_cycle_index", 0)
     # ``ax.set_prop_cycle(color=[...])`` wins over the rcParams cycle for this figure.
@@ -2691,6 +2715,19 @@ def _set_scale(func: str, axis: str, value: str, **kwargs: Any) -> None:
     if name not in _SCALE_NAMES:
         raise ValueError(f"unsupported scale: {value!r}. Expected one of {_SCALE_NAMES}.")
     if name in _REAL_SCALE_NAMES:
+        panel = getattr(plot, "active_panel", None)
+        flags = (
+            bool(getattr(panel, "view_pinned", False)),
+            bool(getattr(panel, "pinned_x", False)),
+            bool(getattr(panel, "pinned_y", False)),
+            getattr(plot, "_needs_initial_autoscale", True),
+        )
+        # what the caller chose, in data units under the old scale, so it survives the change
+        chosen = {
+            f"{a}lim": _data_view(plot, a)
+            for a, pinned in (("x", flags[0] or flags[1]), ("y", flags[0] or flags[2]))
+            if pinned and panel is not None
+        }
         setattr(plot.options, f"axis_scale_{axis}", name)
         setattr(plot.options, f"axis_scale_params_{axis}", dict(kwargs))
         # Every layer's GPU buffer was built for the old scale; force a re-upload under the
@@ -2703,6 +2740,16 @@ def _set_scale(func: str, axis: str, value: str, **kwargs: Any) -> None:
             if hasattr(layer, "_image_gl"):
                 layer._image_gl = None
         plot.autoscale()
+        if chosen:
+            # limits the caller set stay where they were, now drawn on the new scale (an end
+            # a log axis cannot show is ignored with a warning, as matplotlib does)
+            _set_data_view(plot, **chosen)
+        if panel is not None:
+            # The camera is re-fitted for the window, but a scale is not a choice of limits:
+            # as in matplotlib, an axis nobody pinned keeps following the data -- what is
+            # drawn after it, and the export, which otherwise froze the fit made right here.
+            panel.view_pinned, panel.pinned_x, panel.pinned_y = flags[:3]
+            plot._needs_initial_autoscale = flags[3]
     else:
         _warn_unsupported(
             func,
@@ -13497,8 +13544,12 @@ def text(
     # distinguishable from "explicitly 12pt black" long enough for `fontdict` to fill it.
     if color is None:
         # On a figure given a preset, unset text is the preset's ink (white on a dark page),
-        # as the preset made the text already there; black otherwise.
+        # as the preset made the text already there; black otherwise. Text in a box is read
+        # against the box, not the page: white ink in a light-yellow note box is invisible.
         color = _style_ink(plot_obj)
+        face = (bbox or {}).get("facecolor", (bbox or {}).get("fc"))
+        if face is not None and str(face).lower() != "none":
+            color = _ink_for(face, color)
     rgba = _normalize_rgba(color if color is not None else (0.0, 0.0, 0.0, 1.0), n=None)
     # A single date (`text(datetime.date(...), y, ...)`, the natural way to annotate a
     # point on a date-axis plot) needs the same date->number conversion `plot()`/
