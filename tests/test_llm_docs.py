@@ -411,7 +411,11 @@ class TestObjectsTheGuidesDescribe:
 
         for name in ("pause", "resume", "to_jshtml", "save"):
             assert hasattr(animation.Animation, name), name
-        assert {"pillow", "ffmpeg"} <= set(animation.writers.list())
+        # the writers the guides name are registered; list() is what is *usable* here, and a
+        # CI runner without ffmpeg has none (it is an external program, not a dependency)
+        assert {"pillow", "ffmpeg"} <= set(animation.writers._registered)
+        assert "pillow" in animation.writers.list()
+        assert ("ffmpeg" in animation.writers.list()) == animation.writers.is_available("ffmpeg")
 
     def test_artist_setters(self):
         from glplot.core.layers import PolylineLayer, ScatterLayer
