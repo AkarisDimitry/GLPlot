@@ -92,7 +92,11 @@ def _right_hand_side(
         out = []
         for code, label in zip(codes, names):
             try:
-                value = eval(code, {"__builtins__": {}}, scope)  # nosec B307 - validated AST
+                # numpy's overflow warnings stay off: a warning raised inside an eval with no
+                # builtins needs ``__import__`` on Python 3.13 and surfaced as a KeyError; a
+                # blow-up is caught below from the non-finite values instead
+                with np.errstate(all="ignore"):
+                    value = eval(code, {"__builtins__": {}}, scope)  # nosec B307 - validated AST
             except (ArithmeticError, ValueError, TypeError) as exc:
                 raise McpError(
                     f"d{label}/dt failed at t={t:.6g}: {type(exc).__name__}: {exc}"
