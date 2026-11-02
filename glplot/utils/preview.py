@@ -421,6 +421,18 @@ def _finish_twin_axes(ax2: object, letter: str, state: object) -> None:
         (ax2.set_ylabel if letter == "y" else ax2.set_xlabel)(state.label, **label_style)
 
 
+def _segment_runs(segments: np.ndarray) -> list:
+    """``(N, 2, D)`` segments as polylines: consecutive segments that share an end point are
+    joined, so a curve stored segment by segment comes back as one ``(M, D)`` array."""
+    if len(segments) == 0:
+        return []
+    breaks = np.flatnonzero(np.any(segments[1:, 0] != segments[:-1, 1], axis=1)) + 1
+    runs = []
+    for chunk in np.split(segments, breaks):
+        runs.append(np.vstack([chunk[:, 0], chunk[-1:, 1]]))
+    return runs
+
+
 def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> None:
     """Draw one panel's layers into ``ax``.
 
@@ -488,11 +500,15 @@ def _draw_layers(ax: object, layers, has_3d: bool, engine: object = None) -> Non
             # a plain Line3D always lands under a surface; a zorder above anything it
             # assigns is what puts the line on top here too.
             overlay = not getattr(layer.style, "depth_test", True)
-            for idx, seg in enumerate(verts):
+            # The layer holds segments (pairs of points); a 3-D curve is a run of segments
+            # that each start where the last ended. One ``plot`` per run, as matplotlib draws
+            # a 3-D line -- not one per segment, which made a 1,600-point trajectory 1,600
+            # artists per frame and an animation of it minutes long.
+            for idx, run in enumerate(_segment_runs(verts)):
                 (line,) = ax.plot(
-                    seg[:, 0],
-                    seg[:, 1],
-                    seg[:, 2],
+                    run[:, 0],
+                    run[:, 1],
+                    run[:, 2],
                     color=color,
                     linewidth=line_width,
                     label=_legend_label(layer) if idx == 0 else None,

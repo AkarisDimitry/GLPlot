@@ -193,6 +193,9 @@ for public releases.
 
 ### Fixed
 
+- A 3-D line was exported as one matplotlib artist per segment: a 1,600-point trajectory was 1,599
+  `plot` calls per frame, so the cookbook's Lorenz animation took 20 s (and timed out on the Windows
+  CI). Joined segments are now one line, as matplotlib draws a 3-D curve -- 7x faster, same picture.
 - **A log bar chart showed only its top decade** (gallery 24 drew one spike out of 1,500 bars): a log
   axis whose data reach zero -- a bar's baseline -- started one decade under the top instead of at the
   smallest positive value, live and in the export. And `xscale()`/`yscale()` no longer freeze the view:
