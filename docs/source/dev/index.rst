@@ -222,15 +222,24 @@ Related Documentation
 Citation and Credits
 --------------------
 
-If you use GLPlot in your research, please cite:
+If you use GLPlot in your research, please cite the paper:
+
+    Lombardi, J. M., Riccius, F., Holland, J., & Ducci, G. (2026). *GLPlot: GPU-accelerated
+    interactive scientific visualization with a Matplotlib-like interface.* ChemRxiv.
+    `doi:10.26434/chemrxiv.15007777/v1 <https://doi.org/10.26434/chemrxiv.15007777/v1>`_
 
 ::
 
-    @software{glplot2026,
-      title={GLPlot: High-Performance GPU-Accelerated Plotting Library for Python},
-      author={Lombardi, Juan Manuel},
-      year={2026},
-      url={https://github.com/AkarisDimitry/GLPlot}
+    @article{lombardi2026glplot,
+      title   = {{GLPlot}: {GPU}-accelerated interactive scientific visualization with a
+                 {Matplotlib}-like interface},
+      author  = {Lombardi, Juan Manuel and Riccius, Felix and Holland, Julian and Ducci, Gianmarco},
+      journal = {ChemRxiv},
+      year    = {2026},
+      doi     = {10.26434/chemrxiv.15007777/v1},
+      url     = {https://doi.org/10.26434/chemrxiv.15007777/v1},
+      note    = {Preprint}
     }
 
+Felix Riccius, Julian Holland and Gianmarco Ducci contributed equally.
 See `CITATION.cff <../../CITATION.cff>`_ for more formats.
