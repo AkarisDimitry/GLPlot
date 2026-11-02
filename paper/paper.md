@@ -42,7 +42,7 @@ Interactive visualization is part of the scientific reasoning process: researche
 
 Here, we propose `GLPlot`, an open-source Python plotting package that exposes a familiar `pyplot`-style interface while using an OpenGL rendering engine in the backend. It supports the common two- and three-dimensional scientific plot types. A more dedicated `plot_lines` interface represents large families of straight lines by their slope and intercept coefficients and expands their visible geometry analytically on the GPU.
 
-The rendering engine combines event-driven updates, shader-based geometry generation, stable viewport transforms, density accumulation, adaptive level of detail, and GPU picking behind that interface, so large datasets can be explored without touching OpenGL. This paper describes version 0.3.0, which also provides an interactive workstation, headless export of figures and animations, and a Model Context Protocol (MCP) server [@mcp] through which AI agents build, inspect, and animate figures.
+The rendering engine combines event-driven updates, shader-based geometry generation, stable viewport transforms, density accumulation, adaptive level of detail, and GPU picking behind that interface, so large datasets can be explored without touching OpenGL. This paper describes version 0.3.0, which adds a Model Context Protocol (MCP) server [@mcp] through which AI agents build, inspect, and animate figures, an interactive workstation, and headless export of figures and animations.
 
 # Statement of need
 
@@ -62,13 +62,13 @@ Analyses are increasingly carried out by AI agents built on large language model
 
 Scientific visualization tools span a range of abstraction levels and rendering strategies; general-purpose plotting libraries, browser-based libraries [@bokeh; @plotly], VTK-based applications [@schroeder2006vtk; @ramachandran2011mayavi; @ahrens2005paraview], GPU frameworks, and aggregation systems answer different needs and complement rather than replace one another.
 
-Matplotlib is the reference plotting library of scientific Python, with static, animated, and interactive figures and extensive layout, annotation, and backend systems [@hunter2007matplotlib]. Its artist-based architecture coordinates geometry construction, coordinate transforms, and redraws largely on the CPU, so performance deteriorates for very large numbers of primitives: dense line families, large point clouds, trajectory ensembles, and three-dimensional scenes updated interactively.
+Matplotlib is the reference plotting library of scientific Python [@hunter2007matplotlib]. Its artist-based architecture coordinates geometry, transforms, and redraws largely on the CPU, so performance deteriorates for very many primitives: dense line families, large point clouds, and interactive three-dimensional scenes.
 
-VisPy offers high-performance OpenGL visualization, from buffers and shaders up to scene graphs and reusable visuals [@vispy]. This flexibility suits custom applications, but specialized behavior often requires working with graphics concepts or writing custom visuals, a substantial burden for routine plotting; fastplotlib makes a similar trade with a modern GPU API [@fastplotlib].
+VisPy offers high-performance OpenGL visualization from buffers and shaders up to scene graphs [@vispy], and fastplotlib a similar model on a modern GPU API [@fastplotlib]; both suit custom applications but ask users to work with graphics concepts.
 
-Datashader rasterizes and aggregates data into the display's pixel grid [@datashader], which preserves the distribution of severely overplotted data; the aggregate representation, however, does not keep individual lines, points, or surfaces as persistent objects that can be selected or styled.
+Datashader aggregates data into the display's pixel grid [@datashader], preserving distributions but not individual, selectable objects.
 
-PyQtGraph targets responsive desktop graphics for instrumentation and rapidly updated signals [@pyqtgraph], with fast two-dimensional application development rather than shader-side primitive generation or GPU selection in three dimensions as its focus.
+PyQtGraph targets responsive desktop graphics for instrumentation [@pyqtgraph].
 
 `GLPlot` sits between these approaches. Contributing these capabilities to an existing package would have meant changing its core rendering model, so `GLPlot` keeps a procedural interface close to Matplotlib's `pyplot` and builds a GPU-resident architecture underneath it, for workloads in which many geometric objects must remain individually represented, interactive, and identifiable without a custom graphics pipeline.
 
@@ -106,13 +106,17 @@ For a line family $y_i(x) = a_i x + b_i$, `GLPlot` uploads $(a_i, b_i)$ as insta
 
 ## Density, interaction, and level of detail
 
-Dense, overlapping geometry is accumulated additively into a floating-point framebuffer, log-normalized to the display range, and optionally tone-mapped in the style of @reinhard2002photographic to preserve contrast. During rapid pan or zoom a cached offscreen image is reprojected and an exact redraw follows when interaction stops. Level of detail is chosen from estimated fill-rate cost (viewport size, line width, projected length) rather than primitive count, deterministically per instance, so a static view does not flicker. Object selection uses a deferred integer picking pass: selectable primitives write an encoded identifier to an integer framebuffer, and a click resolves to a layer and element index from a single-pixel readback, independent of scene size.
+Dense, overlapping geometry is accumulated additively into a floating-point framebuffer, log-normalized to the display range, and optionally tone-mapped in the style of @reinhard2002photographic to preserve contrast. During rapid pan or zoom a cached offscreen image is reprojected and an exact redraw follows when interaction stops. Level of detail is chosen from estimated fill-rate cost (viewport size, line width, projected length) rather than primitive count, deterministically per instance, so a static view does not flicker. Selection uses an integer picking pass: primitives write an identifier to an integer framebuffer, and a click resolves from a single-pixel readback, independent of scene size.
 
-## Workstation, export, and the MCP server
+## The MCP server for AI agents
 
-Three further layers reuse the same scene model. `python -m glplot` opens a workstation, built with Dear ImGui [@imgui], for editing layers, data, styles, and multi-panel layouts live with undo history, with native controls (sliders, buttons) and a gallery of recipes that map a user's columns onto designed plots. A headless export path rebuilds any figure through Matplotlib for publication output, including animations written as GIF or video, and style presets that set palettes, fonts, and axes. The MCP server (`glplot-mcp`) exposes typed plotting tools to AI agents: each render returns an image with a review of provable problems, no arbitrary code is executed, and file access is confined to directories the user chooses (\autoref{fig:mcp}).
+`glplot-mcp` serves GLPlot to AI agents over the Model Context Protocol (\autoref{fig:mcp}). An agent works through typed tools rather than generated code: it creates figures and datasets, plots, applies style presets by name, animates in stages, cuts scenes into a video, and exports the equivalent Python script. Every render returns the image with a deterministic review of provable problems (a missing label, overlapping ticks, a colour lost against the page), each paired with the call that fixes it, so the agent sees and corrects its own output. Knowledge tools (`get_guide`, `search_api`, `get_api_doc`, `get_example`) serve the documentation installed with the package, so the agent learns the API instead of guessing it from Matplotlib. No arbitrary code runs, inputs are checked against schemas and resource limits, and file access is confined to directories the user chooses, so the server can be connected to an agent safely. It works after a plain `pip install`, and `glplot-mcp config` writes the settings for clients such as Claude Code, Cursor, VS Code, and Codex.
 
-![(a) An AI agent calls typed tools; GLPlot renders headlessly and returns the image with a review (real server output shown). (b) Four scenes of an explainer video built only through MCP tool calls.\label{fig:mcp}](mcp.png)
+![The MCP loop an AI agent runs for a figure (left) and what the same session can deliver (right). The review in step 7 is the server's real output.\label{fig:mcp}](mcp.png)
+
+## Workstation and export
+
+`python -m glplot` opens a workstation, built with Dear ImGui [@imgui], for editing layers, data, styles, and layouts live, with undo history and native controls; a headless path rebuilds any figure through Matplotlib for publication output and for animations written as GIF or video.
 
 # Research impact statement
 
