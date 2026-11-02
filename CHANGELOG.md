@@ -160,6 +160,9 @@ for public releases.
 
 ### Changed
 
+- Citation: the GLPlot paper (ChemRxiv, doi:10.26434/chemrxiv.15007777/v1) is the preferred citation in
+  `CITATION.cff`, so GitHub's "Cite this repository" gives it in APA and BibTeX; the README and the docs
+  cite it too (they had a placeholder Zenodo DOI and a one-author entry), with a paper badge.
 - **A styled figure colours everything it draws.** On a figure given a preset, `scatter`, `bar`, `barh`,
   `hist`, `fill_between`, `fill_betweenx`, `axhspan`, `axvspan` and `violinplot` take the preset's next
   palette colour when none is named (they were black or a fixed blue -- black dots on a dark page), and

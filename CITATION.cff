@@ -1,53 +1,85 @@
 cff-version: 1.2.0
-title: GLPlot - High-Performance GPU-Accelerated Plotting Library for Python
+title: "GLPlot: GPU-accelerated interactive scientific visualization with a Matplotlib-like interface"
 message: >-
-  If you use GLPlot in your research, please cite it as below. Felix Riccius, Julian
-  Holland and Gianmarco Ducci contributed equally to this work.
+  If you use GLPlot in your research, please cite the GLPlot paper below (the "preferred
+  citation"); to point at the exact software version you used, cite this repository as well.
+  Felix Riccius, Julian Holland and Gianmarco Ducci contributed equally to this work.
 type: software
+version: 0.2.0
+date-released: 2026-10-24
+license: MIT
 authors:
   - family-names: Lombardi
     given-names: Juan Manuel
     email: lombardi@fhi.mpg.de
-    affiliation: "Fritz Haber Institute of the Max Planck Society"
+    affiliation: Fritz Haber Institute of the Max Planck Society
     orcid: "https://orcid.org/0009-0002-3961-1426"
   - family-names: Riccius
     given-names: Felix
+    affiliation: Fritz Haber Institute of the Max Planck Society
     orcid: "https://orcid.org/0000-0002-1331-4469"
   - family-names: Holland
     given-names: Julian
+    affiliation: Fritz Haber Institute of the Max Planck Society
     orcid: "https://orcid.org/0000-0003-0134-1790"
   - family-names: Ducci
     given-names: Gianmarco
+    affiliation: Fritz Haber Institute of the Max Planck Society
+repository-code: "https://github.com/AkarisDimitry/GLPlot"
+url: "https://github.com/AkarisDimitry/GLPlot"
 identifiers:
+  - type: doi
+    value: 10.26434/chemrxiv.15007777/v1
+    description: The GLPlot paper (ChemRxiv preprint)
   - type: url
     value: "https://github.com/AkarisDimitry/GLPlot"
+    description: Source code on GitHub
   - type: url
     value: "https://gitlab.mpcdf.mpg.de/jmlombardi/glplot"
+    description: Mirror on the MPCDF GitLab
   - type: url
     value: "https://github.com/AkarisDimitry/GLPlot/blob/main/README.md"
     description: Documentation
-repository-code: "https://github.com/AkarisDimitry/GLPlot"
-repository: "https://github.com/AkarisDimitry/GLPlot"
-url: "https://github.com/AkarisDimitry/GLPlot"
-abstract: |
-  GLPlot is a high-performance, GPU-accelerated plotting library for Python that provides a
-  Matplotlib-compatible API with OpenGL/GLFW backend support. It efficiently handles millions
-  of geometric primitives through instanced rendering and advanced density visualization techniques,
-  enabling interactive scientific visualization at scale.
-
-  Features include viewport-relative center projection for extreme zoom precision, HDR density
-  accumulation for overlapping elements, and complete 2D/3D support with SSAO for enhanced depth
-  perception. All visualizations maintain 60fps+ performance regardless of dataset size.
+abstract: >-
+  GLPlot is a Python plotting library with a Matplotlib-like interface that renders on the GPU
+  through OpenGL, so figures with millions of points, dense line families and large 3-D scenes
+  stay interactive. It adds GPU density rendering for overplotted data, an interactive
+  workstation for editing figures and data live, headless export of images, GIFs and videos
+  with style presets, and a Model Context Protocol server through which a language model can
+  build, inspect and animate figures.
 keywords:
-  - plotting
-  - visualization
+  - scientific visualization
+  - interactive plotting
   - GPU acceleration
   - OpenGL
-  - scientific computing
-  - Python
-  - GLSL
-  - high-performance computing
+  - Matplotlib
   - data visualization
-license: MIT
-version: 0.2.0
-date-released: 2026-10-24
+  - animation
+  - Python
+preferred-citation:
+  type: article
+  title: "GLPlot: GPU-accelerated interactive scientific visualization with a Matplotlib-like interface"
+  authors:
+    - family-names: Lombardi
+      given-names: Juan Manuel
+      affiliation: Fritz Haber Institute of the Max Planck Society
+      orcid: "https://orcid.org/0009-0002-3961-1426"
+    - family-names: Riccius
+      given-names: Felix
+      affiliation: Fritz Haber Institute of the Max Planck Society
+      orcid: "https://orcid.org/0000-0002-1331-4469"
+    - family-names: Holland
+      given-names: Julian
+      affiliation: Fritz Haber Institute of the Max Planck Society
+      orcid: "https://orcid.org/0000-0003-0134-1790"
+    - family-names: Ducci
+      given-names: Gianmarco
+      affiliation: Fritz Haber Institute of the Max Planck Society
+  journal: ChemRxiv
+  publisher:
+    name: American Chemical Society (ACS)
+  year: 2026
+  month: 8
+  doi: 10.26434/chemrxiv.15007777/v1
+  url: "https://chemrxiv.org/doi/full/10.26434/chemrxiv.15007777/v1"
+  status: preprint

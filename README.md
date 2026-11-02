@@ -5,6 +5,7 @@
 [![Build](https://github.com/AkarisDimitry/GLPlot/workflows/Build/badge.svg)](https://github.com/AkarisDimitry/GLPlot/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/Python-3.11+-blue.svg)](pyproject.toml)
+[![Paper: ChemRxiv](https://img.shields.io/badge/Paper-ChemRxiv-1f6feb.svg)](https://doi.org/10.26434/chemrxiv.15007777/v1)
 
 GLPlot is a Python plotting library with a Matplotlib-like API that renders on the GPU
 through OpenGL instead of the CPU. Plots that make Matplotlib chug — millions of points,
@@ -664,17 +665,28 @@ for GPU/environment diagnostics.
 
 ## Citation
 
+If GLPlot helps your research, please cite the paper:
+
+> Lombardi, J. M., Riccius, F., Holland, J., & Ducci, G. (2026). *GLPlot: GPU-accelerated
+> interactive scientific visualization with a Matplotlib-like interface.* ChemRxiv.
+> [doi:10.26434/chemrxiv.15007777/v1](https://doi.org/10.26434/chemrxiv.15007777/v1)
+
 ```bibtex
-@software{lombardi2026glplot,
-  title={GLPlot: High-Performance GPU-Accelerated Plotting Library for Python},
-  author={Lombardi, Juan Manuel and Riccius, Felix and Holland, Julian and Ducci, Gianmarco},
-  year={2026},
-  url={https://github.com/AkarisDimitry/GLPlot},
-  doi={10.5281/zenodo.PLACEHOLDER}
+@article{lombardi2026glplot,
+  title   = {{GLPlot}: {GPU}-accelerated interactive scientific visualization with a
+             {Matplotlib}-like interface},
+  author  = {Lombardi, Juan Manuel and Riccius, Felix and Holland, Julian and Ducci, Gianmarco},
+  journal = {ChemRxiv},
+  year    = {2026},
+  doi     = {10.26434/chemrxiv.15007777/v1},
+  url     = {https://doi.org/10.26434/chemrxiv.15007777/v1},
+  note    = {Preprint}
 }
 ```
 
-See [CITATION.cff](CITATION.cff) for other formats.
+Felix Riccius, Julian Holland and Gianmarco Ducci contributed equally. GitHub's **Cite this
+repository** button (from [CITATION.cff](CITATION.cff)) gives the same reference in APA and
+BibTeX, and the software version you used.
 
 ## License
 
