@@ -256,8 +256,15 @@ def _server_command(roots: Sequence[str], python: Optional[str] = None) -> Tuple
     return python or sys.executable, args
 
 
+def _on_windows() -> bool:
+    """Whether this is Windows. A function, so a test can pretend otherwise: patching
+    ``os.name`` itself changes it for the whole process, and on Windows ``pathlib`` then builds
+    every ``Path()`` as a ``PosixPath`` and fails -- pytest's own reporting included."""
+    return os.name == "nt"
+
+
 def _shell_join(parts: Sequence[str]) -> str:
-    if os.name == "nt":
+    if _on_windows():
         return subprocess.list2cmdline(list(parts))
     return " ".join(shlex.quote(p) for p in parts)
 
@@ -266,7 +273,7 @@ def _claude_desktop_path() -> Path:
     home = Path.home()
     if sys.platform == "darwin":
         return home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-    if os.name == "nt":
+    if _on_windows():
         return (
             Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
             / "Claude"
