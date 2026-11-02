@@ -47,10 +47,10 @@ from ..gui.datasets import Column, DataSet
 from ..gui.expressions import ExpressionError, evaluate_2d
 from ..pyplot import MatplotlibCompatWarning
 from ..utils.preview import render_preview_bytes
-from . import animator, choreography, dynamics, motion, video
+from . import animator, choreography, dynamics, motion
 from . import script as scripting
 from . import simulate as simulation
-from . import textdata
+from . import textdata, video
 from .review import review_figure
 from .state import (
     DEFAULT_LIMITS,
