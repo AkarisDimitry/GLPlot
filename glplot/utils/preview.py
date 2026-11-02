@@ -2057,6 +2057,18 @@ def _autosize_title(fig: object, ax: object, min_fontsize: float = TITLE_MIN_FON
     renderer = fig.canvas.get_renderer()
     fig_height_px = fig.get_size_inches()[1] * fig.dpi
     shrunk = False
+    # A title too tall for the room above the axes (a display face with tall ascenders, a big
+    # title on a small figure) lowers the axes' top edge rather than shrinking: measured at the
+    # size asked for, which is the same on every frame of an animation, so the box never moves.
+    # Only a lone axes -- a grid or a colorbar is laid out around the axes' current place.
+    top_room = fig_height_px - 0.5 * margin_px
+    overflow = title.get_window_extent(renderer=renderer).y1 - top_room
+    if overflow > 0 and len(fig.axes) == 1 and not hasattr(ax, "get_zlim"):
+        box = ax.get_position()
+        top = box.y1 - overflow / fig_height_px
+        if top - box.y0 > 0.6 * box.height:
+            ax.set_position([box.x0, box.y0, box.width, top - box.y0])
+            shrunk = True
     for _ in range(20):
         bbox = title.get_window_extent(renderer=renderer)
         # across, and off the top: a face with tall ascenders (a handwriting or display face

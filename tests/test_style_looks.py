@@ -662,3 +662,39 @@ class TestLogAxes:
         finally:
             logging.getLogger("matplotlib.mathtext").removeHandler(handler)
         assert not [r for r in records if "glyph" in r.getMessage()]
+
+
+def test_describe_figure_says_which_look_a_figure_wears():
+    from glplot.mcp.toolbox import Toolbox
+
+    box = Toolbox()
+    try:
+        styled = box.create_figure(style="Tokyo Night").data["figure_id"]
+        plain = box.create_figure().data["figure_id"]
+        data = box.describe_figure(styled).data
+        assert data["style"]["key"] == "tokyonight" and data["style"]["name"] == "Tokyo Night"
+        assert "title flush left" in data["style"]["export"]
+        assert "style" not in box.describe_figure(plain).data
+        listing = {f["figure_id"]: f for f in box.describe_figure().data["figures"]}
+        assert listing[styled]["style"] == "tokyonight" and "style" not in listing[plain]
+    finally:
+        box.close_all()
+
+
+def test_a_tall_title_makes_room_instead_of_poking_out():
+    plot = gplt.figure(figsize=(5, 3))
+    gplt.plot_style("chalk")
+    gplt.plot([0, 1], [0, 1])
+    gplt.title("Short")
+    seen = {}
+
+    def inspect(fig):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        seen["top"] = fig.axes[0].title.get_window_extent(renderer).y1
+        seen["height"] = fig.get_size_inches()[1] * fig.dpi
+        seen["size"] = fig.axes[0].title.get_fontsize()
+
+    render_preview_bytes(plot, 1.0, inspect=inspect)
+    assert seen["top"] <= seen["height"], "inside the figure"
+    assert seen["size"] == pytest.approx(40.0), "a title that fits across keeps its size"

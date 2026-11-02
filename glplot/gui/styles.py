@@ -935,6 +935,10 @@ def _editor_look(muted: RGB, grid: RGB) -> ExportLook:
         grid_style=":",
         grid_width=1.2,
         tick_length=6.0,
+        # a monospace face is a fifth wider than DejaVu Sans: the export's 24/30 pt numbers
+        # and axis titles would run off a small figure
+        tick_label_size=20.0,
+        label_size=25.0,
         title_loc="left",
         title_weight="bold",
         title_size=34.0,
@@ -1320,6 +1324,8 @@ STYLES: Tuple[PlotStyle, ...] = (
             label_color=_rgb("#CFE3F7"),
             tick_length=6.0,
             tick_direction="in",
+            tick_label_size=20.0,
+            label_size=25.0,
             title_loc="left",
             legend_frame=False,
         ),
@@ -2436,6 +2442,8 @@ STYLES: Tuple[PlotStyle, ...] = (
             grid_width=1.0,
             ytick_side="right",
             tick_length=5.0,
+            tick_label_size=20.0,
+            label_size=25.0,
             label_color=_rgb("#FFA028"),
             title_loc="left",
             title_weight="bold",

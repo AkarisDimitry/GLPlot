@@ -155,7 +155,8 @@ for public releases.
 - MCP prompt `restyle_like` ("make this figure look like The Economist"); `publication_figure` now picks
   the look by venue (paper, talk, article, dashboard, video) and the server's instructions tell a model
   that a look is one argument and to leave `color=` to the style. The review flags a series, bar or
-  text drawn in a colour the page swallows (`invisible_on_page`), with the fix.
+  text drawn in a colour the page swallows (`invisible_on_page`), with the fix. `describe_figure` says
+  which look a figure wears and what it does to a saved image.
 
 ### Changed
 
@@ -198,7 +199,9 @@ for public releases.
   box: white ink on a light-yellow note was invisible (gallery 21).
 - A face without a Unicode minus (Chalkboard, Marker Felt, Computer Modern) drew a box for every
   negative tick label and log/logit exponent; the sign is now taken from the maths fonts. A title in a
-  face with tall ascenders no longer pokes out of the top of the figure.
+  face with tall ascenders no longer pokes out of the top of the figure: a lone axes makes room by
+  lowering its top edge (measured at the size asked for, so an animation's box never moves). The
+  monospace looks use smaller numbers and axis titles, which ran off small figures.
 - Exporting a figure with a long title redrew the whole figure up to 20 times while the title was
   shrunk to fit (every frame of an animation too); the title is now re-measured without redrawing.
   Gallery example 01 (10,072 lines) saves in 42 s instead of 64 s. The hand-drawn stroke of the

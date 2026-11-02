@@ -787,6 +787,7 @@ class Toolbox:
                     "projection": f.projection,
                     "panels": f.panels,
                     "artists": len(f.artists),
+                    **({"style": f.plot._style_key} if getattr(f.plot, "_style_key", "") else {}),
                 }
                 for f in self._figures.values()
             ]
@@ -812,6 +813,15 @@ class Toolbox:
             "artists": artists,
             "panels": view,
         }
+        key = getattr(entry.plot, "_style_key", "") or ""
+        if key:
+            # the look it wears, and what that does to a saved image -- a model picking a figure
+            # back up should not restyle it by accident, or fight the style with color=
+            data["style"] = {
+                "key": key,
+                "name": styles.get_style(key).name,
+                "export": styles.export_summary(styles.get_style(key)) or "colours, page and lines",
+            }
         if entry.controls:
             data["controls"] = [c.describe() for c in entry.controls.values()]
         if entry.bindings:
